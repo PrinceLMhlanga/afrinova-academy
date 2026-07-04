@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://afrinova-academy.com/sitemap.xml
