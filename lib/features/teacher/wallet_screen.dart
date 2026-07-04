@@ -124,7 +124,7 @@ class _WalletScreenState extends State<WalletScreen> {
                           SizedBox(width: 10),
                           Expanded(
                             child: Text(
-                              'You earn 80% of each student payment. Earnings become available for payout every Monday.',
+                              'You earn 70% of each student payment. Earnings become available for payout every Monday.',
                               style: TextStyle(fontSize: 12, color: Color(0xFF1A237E), height: 1.4),
                             ),
                           ),
