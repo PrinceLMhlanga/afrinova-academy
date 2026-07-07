@@ -120,7 +120,7 @@ class _TeacherClassesScreenState extends State<TeacherClassesScreen> {
       const SizedBox(width: 10),
       Expanded(
         child: Text(
-          '${_myLevels.length} class(es) assigned • Select to manage subjects & topics',
+          '${_myLevels.length} class(es) assigned • Select to manage subjects, topics and content',
           style: const TextStyle(fontSize: 12, color: Color(0xFF1A237E)),
         ),
       ),
