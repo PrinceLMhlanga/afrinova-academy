@@ -293,19 +293,57 @@ class _TopicManagerScreenState extends State<TopicManagerScreen> {
                                 subtitle: topicDesc.isNotEmpty
                                     ? Text(topicDesc, style: const TextStyle(fontSize: 12, color: Colors.grey))
                                     : null,
-                                trailing: Row(
-  mainAxisSize: MainAxisSize.min,
-  children: [
-    // ✅ Upload Lesson button
-    IconButton(
-      icon: Icon(Icons.upload_file, size: 18, color: widget.subjectColor),
-      onPressed: () {
+                                trailing: PopupMenuButton<String>(
+  icon: const Icon(Icons.more_vert, color: Colors.grey),
+  padding: EdgeInsets.zero,
+  itemBuilder: (ctx) => [
+    const PopupMenuItem(
+      value: 'lesson',
+      child: ListTile(
+        leading: Icon(Icons.upload_file, color: Color(0xFF1A237E)),
+        title: Text('Upload Lesson', style: TextStyle(fontSize: 14)),
+        dense: true,
+        contentPadding: EdgeInsets.zero,
+      ),
+    ),
+    const PopupMenuItem(
+      value: 'resource',
+      child: ListTile(
+        leading: Icon(Icons.attach_file, color: Color(0xFF1A237E)),
+        title: Text('Upload Resource', style: TextStyle(fontSize: 14)),
+        dense: true,
+        contentPadding: EdgeInsets.zero,
+      ),
+    ),
+    const PopupMenuItem(
+      value: 'edit',
+      child: ListTile(
+        leading: Icon(Icons.edit_outlined, color: Colors.grey),
+        title: Text('Edit', style: TextStyle(fontSize: 14)),
+        dense: true,
+        contentPadding: EdgeInsets.zero,
+      ),
+    ),
+    const PopupMenuDivider(),
+    PopupMenuItem(
+      value: 'delete',
+      child: const ListTile(
+        leading: Icon(Icons.delete_outline, color: Colors.red),
+        title: Text('Delete', style: TextStyle(fontSize: 14, color: Colors.red)),
+        dense: true,
+        contentPadding: EdgeInsets.zero,
+      ),
+    ),
+  ],
+  onSelected: (action) {
+    switch (action) {
+      case 'lesson':
         Navigator.push(
           context,
           MaterialPageRoute(
             builder: (_) => UploadLessonScreen(
               preSelectedLevelId: widget.levelId,
-              preSelectedLevelName: widget.levelName,  // ✅ Actual level name
+              preSelectedLevelName: widget.levelName,
               preSelectedSubjectId: widget.subjectId,
               preSelectedSubjectName: widget.subjectName,
               preSelectedTopicId: topic['id'] as String,
@@ -313,46 +351,30 @@ class _TopicManagerScreenState extends State<TopicManagerScreen> {
             ),
           ),
         ).then((_) => _loadTopics());
-      },
-      tooltip: 'Upload Lesson',
-    ),
-    // Add this next to the lesson upload button
-IconButton(
-  icon: Icon(Icons.attach_file, size: 20, color: widget.subjectColor),
-  onPressed: () {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => UploadResourceScreen(
-          preSelectedLevelId: widget.levelId,
-          preSelectedLevelName: widget.levelName,
-          preSelectedSubjectId: widget.subjectId,
-          preSelectedSubjectName: widget.subjectName,
-          preSelectedTopicId: topic['id'] as String,
-          preSelectedTopicName: topic['name'] ?? '',
-        ),
-      ),
-    ).then((_) => _loadTopics());
+        break;
+      case 'resource':
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => UploadResourceScreen(
+              preSelectedLevelId: widget.levelId,
+              preSelectedLevelName: widget.levelName,
+              preSelectedSubjectId: widget.subjectId,
+              preSelectedSubjectName: widget.subjectName,
+              preSelectedTopicId: topic['id'] as String,
+              preSelectedTopicName: topic['name'] ?? '',
+            ),
+          ),
+        ).then((_) => _loadTopics());
+        break;
+      case 'edit':
+        _editTopic(topic);
+        break;
+      case 'delete':
+        _deleteTopic(topic['id'] as String);
+        break;
+    }
   },
-  tooltip: 'Upload Resource',
-),
-    // Edit button
-    IconButton(
-      icon: Icon(Icons.edit_outlined, size: 20, color: Colors.grey.shade600),
-      onPressed: () => _editTopic(topic),
-      tooltip: 'Edit',
-    ),
-    // Delete button
-    IconButton(
-      icon: const Icon(Icons.delete_outline, size: 20, color: Colors.red),
-      onPressed: () => _deleteTopic(topic['id'] as String),
-      tooltip: 'Delete',
-    ),
-    ReorderableDragStartListener(
-      index: index,
-      child: const Icon(Icons.drag_handle, color: Colors.grey, size: 20),
-    ),
-  ],
 ),
                               ),
                             );
