@@ -1,3 +1,4 @@
+import 'package:afrinova_academy/features/admin/approve_teachers_screen.dart';
 import 'package:flutter/material.dart';
 import '../teacher/teacher_dashboard.dart';
 import 'settlements_screen.dart';
@@ -19,6 +20,13 @@ class AdminDashboard extends StatelessWidget {
       userRole: 'admin',
       onLogout: onLogout,
       extraActions: [
+        _AdminAction(
+          icon: Icons.verified_user_rounded,
+          title: 'Approve Teacher Requests',
+          subtitle: 'View and approve teacher enrollment requests',
+          color: const Color(0xFF4CAF50),
+          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ApproveTeachersScreen())),
+        ),
         _AdminAction(
           icon: Icons.account_balance_wallet_rounded,
           title: 'Teacher Settlements',

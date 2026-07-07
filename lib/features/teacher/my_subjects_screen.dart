@@ -1,166 +1,251 @@
 import 'package:flutter/material.dart';
-import '../../core/teacher_service.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/auth_service.dart';
 import 'topic_manager_screen.dart';
-import 'add_subject_screen.dart';
 
-class MySubjectsScreen extends StatefulWidget {
-  const MySubjectsScreen({super.key});
+class TeacherLevelSubjectsScreen extends StatefulWidget {
+  final String levelId;
+  final String levelName;
+
+  const TeacherLevelSubjectsScreen({
+    super.key,
+    required this.levelId,
+    required this.levelName,
+  });
 
   @override
-  State<MySubjectsScreen> createState() => _MySubjectsScreenState();
+  State<TeacherLevelSubjectsScreen> createState() => _TeacherLevelSubjectsScreenState();
 }
 
-class _MySubjectsScreenState extends State<MySubjectsScreen> {
-  final TeacherService _teacherService = TeacherService();
+class _TeacherLevelSubjectsScreenState extends State<TeacherLevelSubjectsScreen> {
   final AuthService _authService = AuthService();
-
-  List<Map<String, dynamic>> _allSubjects = [];
-  List<Map<String, dynamic>> _mySubjects = [];
+  List<Map<String, dynamic>> _subjects = [];
+  Map<String, int> _topicCounts = {};
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _loadData();
+    _loadSubjects();
   }
 
-  Future<void> _loadData() async {
+  Future<void> _loadSubjects() async {
     try {
       final userId = _authService.currentUserId;
       if (userId == null) return;
 
-      final allSubjects = await _teacherService.getAllSubjects();
-      final mySubjects = await _teacherService.getMySubjects(userId);
+      // Get teacher's subjects for this specific level
+      final response = await Supabase.instance.client
+          .from('teacher_subjects')
+          .select('subject_id, subjects!inner(name, description, color_hex, icon_name)')
+          .eq('teacher_id', userId)
+          .eq('level_id', widget.levelId)
+          .order('name', referencedTable: 'subjects');
+
+      // Count topics per subject
+      final topicCounts = <String, int>{};
+      for (final row in response) {
+        final subjectId = row['subject_id'] as String;
+        final count = await Supabase.instance.client
+            .from('teacher_topics')
+            .select('id')
+            .eq('teacher_id', userId)
+            .eq('subject_id', subjectId)
+            .eq('level_id', widget.levelId)
+            .count(CountOption.exact);
+        
+        topicCounts[subjectId] = count.count ?? 0;
+      }
 
       if (mounted) {
         setState(() {
-          _allSubjects = allSubjects;
-          _mySubjects = mySubjects;
+          _subjects = List<Map<String, dynamic>>.from(response);
+          _topicCounts = topicCounts;
           _isLoading = false;
         });
       }
     } catch (e) {
+      debugPrint('Error loading subjects: $e');
       if (mounted) setState(() => _isLoading = false);
     }
-  }
-
-  bool _isMySubject(String subjectId) {
-    return _mySubjects.any((s) => s['subject_id'] == subjectId);
-  }
-
-  Future<void> _toggleSubject(Map<String, dynamic> subject) async {
-    final userId = _authService.currentUserId;
-    if (userId == null) return;
-
-    final subjectId = subject['id'] as String;
-
-    if (_isMySubject(subjectId)) {
-      await _teacherService.removeSubject(userId, subjectId);
-    } else {
-      await _teacherService.addSubject(userId, subjectId);
-    }
-    _loadData();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-  title: const Text('My Subjects'),
-  backgroundColor: const Color(0xFF1A237E),
-  foregroundColor: Colors.white,
-  actions: [
-    IconButton(
-      icon: const Icon(Icons.add),
-      tooltip: 'Add Custom Subject',
-      onPressed: () async {
-        final result = await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const AddSubjectScreen()),
-        );
-        if (result == true) _loadData();
-      },
-    ),
-  ],
-),
+        title: Text('${widget.levelName} Subjects'),
+        backgroundColor: const Color(0xFF1A237E),
+        foregroundColor: Colors.white,
+      ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: Color(0xFF1A237E)))
-          : ListView(
-              padding: const EdgeInsets.all(20),
-              children: [
-                const Text(
-                  'Select the subjects you teach',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF1A237E)),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${_mySubjects.length} subject(s) selected',
-                  style: const TextStyle(fontSize: 13, color: Colors.grey),
-                ),
-                const SizedBox(height: 20),
-                ..._allSubjects.map((subject) {
-                  final isSelected = _isMySubject(subject['id'] as String);
-                  final color = Color(
-                    int.parse(
-                      'FF${(subject['color_hex'] as String? ?? '1A237E').replaceAll('#', '')}',
-                      radix: 16,
+          : _subjects.isEmpty
+              ? _buildEmptyState()
+              : ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    // Header
+                    Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1A237E).withOpacity(0.05),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: const Color(0xFF1A237E).withOpacity(0.1)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.book_rounded, color: Color(0xFF1A237E), size: 20),
+                          const SizedBox(width: 10),
+                          Text(
+                            '${_subjects.length} subject(s) assigned for ${widget.levelName}',
+                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF1A237E)),
+                          ),
+                        ],
+                      ),
                     ),
-                  );
+                    const SizedBox(height: 16),
 
-                  return Card(
-                    margin: const EdgeInsets.only(bottom: 10),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                    child: ListTile(
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      leading: Container(
-                        width: 48, height: 48,
-                        decoration: BoxDecoration(
-                          color: isSelected ? color.withOpacity(0.1) : Colors.grey.shade100,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Icon(
-                          _getSubjectIcon(subject['icon_name'] as String?),
-                          color: isSelected ? color : Colors.grey,
-                        ),
-                      ),
-                      title: Text(
-                        subject['name'] ?? '',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          color: isSelected ? color : Colors.black87,
-                        ),
-                      ),
-                      subtitle: Text(
-                        subject['description'] ?? '',
-                        style: const TextStyle(fontSize: 12, color: Colors.grey),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      trailing: Switch(
-                        value: isSelected,
-                        onChanged: (_) => _toggleSubject(subject),
-                        activeColor: color,
-                      ),
-                      onTap: isSelected
-                          ? () {
+                    // Subject cards
+                    ..._subjects.map((row) {
+                      final subject = row['subjects'] as Map<String, dynamic>;
+                      final subjectId = row['subject_id'] as String;
+                      final subjectName = subject['name'] as String;
+                      final color = Color(
+                        int.parse('FF${(subject['color_hex'] as String? ?? '1A237E').replaceAll('#', '')}', radix: 16),
+                      );
+                      final topicCount = _topicCounts[subjectId] ?? 0;
+
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        child: Material(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          elevation: 1,
+                          shadowColor: color.withOpacity(0.2),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(16),
+                            onTap: () {
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
                                   builder: (_) => TopicManagerScreen(
-                                    subjectId: subject['id'] as String,
-                                    subjectName: subject['name'] as String,
+                                    subjectId: subjectId,
+                                    subjectName: subjectName,
                                     subjectColor: color,
+                                    levelId: widget.levelId,
+                                    levelName: widget.levelName,
                                   ),
                                 ),
-                              );
-                            }
-                          : null,
-                    ),
-                  );
-                }),
-              ],
+                              ).then((_) => _loadSubjects());
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: color.withOpacity(0.15)),
+                              ),
+                              child: Row(
+                                children: [
+                                  // Subject icon
+                                  Container(
+                                    width: 50,
+                                    height: 50,
+                                    decoration: BoxDecoration(
+                                      color: color.withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Icon(
+                                      _getSubjectIcon(subject['icon_name'] as String?),
+                                      color: color,
+                                      size: 24,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 14),
+                                  
+                                  // Subject info
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          subjectName,
+                                          style: TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.bold,
+                                            color: color,
+                                          ),
+                                        ),
+                                        if (subject['description'] != null && (subject['description'] as String).isNotEmpty)
+                                          Text(
+                                            subject['description'],
+                                            style: const TextStyle(fontSize: 12, color: Colors.grey),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        const SizedBox(height: 6),
+                                        Row(
+                                          children: [
+                                            Icon(Icons.topic_rounded, size: 14, color: Colors.grey.shade400),
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              '$topicCount topic(s)',
+                                              style: TextStyle(fontSize: 12, color: Colors.grey.shade600, fontWeight: FontWeight.w500),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  
+                                  // Arrow
+                                  Container(
+                                    width: 34,
+                                    height: 34,
+                                    decoration: BoxDecoration(
+                                      color: color.withOpacity(0.1),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: Icon(Icons.chevron_right, color: color, size: 18),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    }),
+                  ],
+                ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(40),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 100,
+              height: 100,
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A237E).withOpacity(0.05),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.book_outlined, size: 48, color: Color(0xFF1A237E)),
             ),
+            const SizedBox(height: 24),
+            const Text('No subjects assigned',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1A237E))),
+            const SizedBox(height: 8),
+            Text('No subjects are assigned for ${widget.levelName}.\nContact admin if you need changes.',
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 13, color: Colors.grey)),
+          ],
+        ),
+      ),
     );
   }
 
@@ -170,6 +255,11 @@ class _MySubjectsScreenState extends State<MySubjectsScreen> {
       case 'science': return Icons.science;
       case 'nature': return Icons.eco;
       case 'computer': return Icons.computer;
+      case 'menu_book': return Icons.menu_book;
+      case 'history_edu': return Icons.history_edu;
+      case 'public': return Icons.public;
+      case 'business': return Icons.business;
+      case 'language': return Icons.language;
       default: return Icons.school;
     }
   }

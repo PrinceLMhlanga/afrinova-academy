@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../core/auth_service.dart';
+import 'teacher_application_screen.dart';
 import '../home/home_screen.dart';
 
 class SignupScreen extends StatefulWidget {
@@ -12,9 +13,11 @@ class SignupScreen extends StatefulWidget {
 class _SignupScreenState extends State<SignupScreen> {
   final _formKey = GlobalKey<FormState>();
   final _authService = AuthService();
+
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _confirmPasswordController = TextEditingController();
   String _selectedRole = 'student';
   bool _isLoading = false;
 
@@ -24,7 +27,7 @@ class _SignupScreenState extends State<SignupScreen> {
     setState(() => _isLoading = true);
 
     try {
-      await _authService.signUp(
+      final response = await _authService.signUp(
         email: _emailController.text.trim(),
         password: _passwordController.text.trim(),
         fullName: _nameController.text.trim(),
@@ -32,11 +35,25 @@ class _SignupScreenState extends State<SignupScreen> {
       );
 
       if (mounted) {
-        Navigator.pushAndRemoveUntil(
-          context,
-          MaterialPageRoute(builder: (_) => HomeScreen()),
-          (route) => false,
-        );
+        if (_selectedRole == 'teacher') {
+          // ✅ Use response.user?.id
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) => TeacherApplicationScreen(
+                userId: response.user?.id ?? '',  // ✅ Fixed
+                userEmail: _emailController.text.trim(),
+                userName: _nameController.text.trim(),
+              ),
+            ),
+          );
+        } else {
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (_) => HomeScreen()),
+            (route) => false,
+          );
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -57,6 +74,7 @@ class _SignupScreenState extends State<SignupScreen> {
     _nameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
+    _confirmPasswordController.dispose();
     super.dispose();
   }
 
@@ -85,24 +103,26 @@ class _SignupScreenState extends State<SignupScreen> {
                   ),
                 ),
                 const SizedBox(height: 8),
-                const Text(
-                  'Create your AfriNova Academy account',
-                  style: TextStyle(fontSize: 16, color: Colors.grey),
+                Text(
+                  _selectedRole == 'teacher'
+                      ? 'Create your teacher account'
+                      : 'Create your student account',
+                  style: const TextStyle(fontSize: 16, color: Colors.grey),
                 ),
                 const SizedBox(height: 32),
+                
                 // Full Name
                 TextFormField(
                   controller: _nameController,
                   decoration: InputDecoration(
                     labelText: 'Full Name',
                     prefixIcon: const Icon(Icons.person_outline),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                   ),
                   validator: (v) => v!.isEmpty ? 'Enter your full name' : null,
                 ),
                 const SizedBox(height: 16),
+                
                 // Email
                 TextFormField(
                   controller: _emailController,
@@ -110,9 +130,7 @@ class _SignupScreenState extends State<SignupScreen> {
                   decoration: InputDecoration(
                     labelText: 'Email',
                     prefixIcon: const Icon(Icons.email_outlined),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                   ),
                   validator: (v) {
                     if (v!.isEmpty) return 'Enter your email';
@@ -121,6 +139,7 @@ class _SignupScreenState extends State<SignupScreen> {
                   },
                 ),
                 const SizedBox(height: 16),
+                
                 // Password
                 TextFormField(
                   controller: _passwordController,
@@ -128,9 +147,7 @@ class _SignupScreenState extends State<SignupScreen> {
                   decoration: InputDecoration(
                     labelText: 'Password',
                     prefixIcon: const Icon(Icons.lock_outline),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                   ),
                   validator: (v) {
                     if (v!.isEmpty) return 'Enter a password';
@@ -139,6 +156,23 @@ class _SignupScreenState extends State<SignupScreen> {
                   },
                 ),
                 const SizedBox(height: 16),
+                
+                // Confirm Password
+                TextFormField(
+                  controller: _confirmPasswordController,
+                  obscureText: true,
+                  decoration: InputDecoration(
+                    labelText: 'Confirm Password',
+                    prefixIcon: const Icon(Icons.lock_outline),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  validator: (v) {
+                    if (v != _passwordController.text) return 'Passwords do not match';
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 24),
+                
                 // Role Selection
                 const Text(
                   'I am a:',
@@ -151,6 +185,7 @@ class _SignupScreenState extends State<SignupScreen> {
                       child: _RoleCard(
                         icon: Icons.school,
                         label: 'Student',
+                        subtitle: 'Learn from teachers',
                         isSelected: _selectedRole == 'student',
                         onTap: () => setState(() => _selectedRole = 'student'),
                       ),
@@ -160,13 +195,40 @@ class _SignupScreenState extends State<SignupScreen> {
                       child: _RoleCard(
                         icon: Icons.person,
                         label: 'Teacher',
+                        subtitle: 'Teach & earn',
                         isSelected: _selectedRole == 'teacher',
                         onTap: () => setState(() => _selectedRole = 'teacher'),
                       ),
                     ),
                   ],
                 ),
+                
+                if (_selectedRole == 'teacher') ...[
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.amber.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.amber.shade200),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.info_outline, color: Colors.amber, size: 20),
+                        SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'Teacher accounts require approval. You will fill in your details after signing up.',
+                            style: TextStyle(fontSize: 12, color: Colors.amber),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                
                 const SizedBox(height: 32),
+                
                 // Signup Button
                 SizedBox(
                   width: double.infinity,
@@ -176,19 +238,23 @@ class _SignupScreenState extends State<SignupScreen> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF1A237E),
                       foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                     ),
                     child: _isLoading
                         ? const CircularProgressIndicator(color: Colors.white)
                         : const Text(
                             'Create Account',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w600,
-                            ),
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
                           ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                
+                // Login link
+                Center(
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Already have an account? Log in'),
                   ),
                 ),
               ],
@@ -203,12 +269,14 @@ class _SignupScreenState extends State<SignupScreen> {
 class _RoleCard extends StatelessWidget {
   final IconData icon;
   final String label;
+  final String subtitle;
   final bool isSelected;
   final VoidCallback onTap;
 
   const _RoleCard({
     required this.icon,
     required this.label,
+    required this.subtitle,
     required this.isSelected,
     required this.onTap,
   });
@@ -218,10 +286,10 @@ class _RoleCard extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 20),
+        padding: const EdgeInsets.symmetric(vertical: 24),
         decoration: BoxDecoration(
           color: isSelected ? const Color(0xFF1A237E) : Colors.grey.shade100,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(14),
           border: Border.all(
             color: isSelected ? const Color(0xFF1A237E) : Colors.grey.shade300,
             width: 2,
@@ -229,19 +297,18 @@ class _RoleCard extends StatelessWidget {
         ),
         child: Column(
           children: [
-            Icon(
-              icon,
-              color: isSelected ? Colors.white : Colors.grey.shade600,
-              size: 32,
-            ),
+            Icon(icon, color: isSelected ? Colors.white : Colors.grey.shade600, size: 36),
             const SizedBox(height: 8),
-            Text(
-              label,
-              style: TextStyle(
-                color: isSelected ? Colors.white : Colors.grey.shade600,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
+            Text(label, style: TextStyle(
+              color: isSelected ? Colors.white : Colors.grey.shade600,
+              fontWeight: FontWeight.bold,
+              fontSize: 16,
+            )),
+            const SizedBox(height: 4),
+            Text(subtitle, style: TextStyle(
+              color: isSelected ? Colors.white70 : Colors.grey,
+              fontSize: 11,
+            )),
           ],
         ),
       ),

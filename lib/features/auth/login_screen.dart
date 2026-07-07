@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../core/auth_service.dart';
 import '../home/home_screen.dart';
+import 'pending_approval_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -27,12 +28,44 @@ class _LoginScreenState extends State<LoginScreen> {
         password: _passwordController.text.trim(),
       );
 
+      // ✅ Check if user is approved
+      final profile = await _authService.getProfile();
+      
       if (mounted) {
-        Navigator.pushAndRemoveUntil(
-          context,
-          MaterialPageRoute(builder: (_) => HomeScreen()),
-          (route) => false,
-        );
+        if (profile != null && profile['role'] == 'teacher') {
+          final approvalStatus = profile['approval_status'] as String?;
+          
+          if (approvalStatus == 'pending') {
+            // Show pending approval screen
+            Navigator.pushAndRemoveUntil(
+              context,
+              MaterialPageRoute(builder: (_) => const PendingApprovalScreen()),
+              (route) => false,
+            );
+          } else if (approvalStatus == 'rejected') {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Your application was rejected. Please contact support.'),
+                backgroundColor: Colors.red,
+              ),
+            );
+            await _authService.signOut();
+          } else {
+            // Approved - go to home
+            Navigator.pushAndRemoveUntil(
+              context,
+              MaterialPageRoute(builder: (_) => HomeScreen()),
+              (route) => false,
+            );
+          }
+        } else {
+          // Student or admin - go straight to home
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (_) => HomeScreen()),
+            (route) => false,
+          );
+        }
       }
     } catch (e) {
       if (mounted) {

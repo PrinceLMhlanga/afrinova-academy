@@ -9,7 +9,7 @@ import 'my_exams_screen.dart';
 import 'upload_resource_screen.dart';
 import 'my_uploads_screen.dart';
 import 'upload_lesson_screen.dart';
-import 'my_subjects_screen.dart';
+
 import 'enrollment_requests_screen.dart';
 import 'my_students_screen.dart';
 import 'go_live_screen.dart';
@@ -19,6 +19,7 @@ import 'manage_papers_screen.dart';
 import 'student_performance_screen.dart';
 import 'wallet_screen.dart';
 import 'payout_account_screen.dart';
+import 'my_classes_screen.dart';
 
 class TeacherDashboard extends StatefulWidget {
   final String userName;
@@ -106,6 +107,61 @@ class _TeacherDashboardState extends State<TeacherDashboard>
       if (mounted) setState(() => _isLoading = false);
     }
   }
+
+  String _getGreeting() {
+  final hour = DateTime.now().hour;
+  if (hour < 12) {
+    return '☀️ Good Morning,';
+  } else if (hour < 17) {
+    return '🌤️ Good Afternoon,';
+  } else {
+    return '🌙 Good Evening,';
+  }
+}
+
+String _getFormattedDate() {
+  final now = DateTime.now();
+  final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  final days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  return '${days[now.weekday - 1]}, ${now.day} ${months[now.month - 1]} ${now.year}';
+}
+
+String _getDailyQuote() {
+  final quotes = [
+    'Education is the most powerful weapon which you can use to change the world.',
+    'The beautiful thing about learning is that no one can take it away from you.',
+    'Teaching is the profession that teaches all other professions.',
+    'A teacher affects eternity; he can never tell where his influence stops.',
+    'The art of teaching is the art of assisting discovery.',
+    'Education is not the filling of a pail, but the lighting of a fire.',
+    'The best teachers are those who show you where to look but don\'t tell you what to see.',
+    'Every student can learn, just not on the same day, or in the same way.',
+    'Teaching is the greatest act of optimism.',
+    'What the teacher is, is more important than what he teaches.',
+  ];
+  
+  // Use the day of year to pick a consistent quote for the day
+  final dayOfYear = DateTime.now().difference(DateTime(DateTime.now().year, 1, 1)).inDays;
+  return quotes[dayOfYear % quotes.length];
+}
+
+String _getQuoteAuthor() {
+  final authors = [
+    '— Nelson Mandela',
+    '— B.B. King',
+    '— Unknown',
+    '— Henry Adams',
+    '— Mark Van Doren',
+    '— W.B. Yeats',
+    '— Alexandra K. Trenfor',
+    '— George Evans',
+    '— Colleen Wilcox',
+    '— Karl Menninger',
+  ];
+  
+  final dayOfYear = DateTime.now().difference(DateTime(DateTime.now().year, 1, 1)).inDays;
+  return authors[dayOfYear % authors.length];
+}
 
   @override
   Widget build(BuildContext context) {
@@ -290,133 +346,159 @@ class _TeacherDashboardState extends State<TeacherDashboard>
               sliver: SliverList(
                 delegate: SliverChildListDelegate([
                   // Welcome Card
-                  FadeTransition(
-                    opacity: _animationController,
-                    child: SlideTransition(
-                      position: Tween<Offset>(
-                        begin: const Offset(0, 0.1),
-                        end: Offset.zero,
-                      ).animate(CurvedAnimation(
-                        parent: _animationController,
-                        curve: Curves.easeOut,
-                      )),
-                      child: Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(24),
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: [
-                              Color(0xFF1A237E),
-                              Color(0xFF283593),
-                              Color(0xFF3949AB),
-                            ],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
-                          borderRadius: BorderRadius.circular(24),
-                          boxShadow: [
-                            BoxShadow(
-                              color: const Color(0xFF1A237E).withOpacity(0.3),
-                              blurRadius: 20,
-                              offset: const Offset(0, 8),
-                            ),
-                          ],
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.all(8),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.2),
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: const Icon(
-                                    Icons.waving_hand,
-                                    color: Colors.white,
-                                    size: 28,
-                                  ),
-                                ),
-                                const Spacer(),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 4,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.2),
-                                    borderRadius: BorderRadius.circular(20),
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(
-                                        Icons.verified_rounded,
-                                        size: 14,
-                                        color: Colors.white.withOpacity(0.8),
-                                      ),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        widget.userRole == 'admin'
-                                            ? 'Administrator'
-                                            : 'Teacher',
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w500,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 16),
-                            const Text(
-                              'Welcome back,',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.white70,
-                                fontWeight: FontWeight.w400,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              widget.userName,
-                              style: const TextStyle(
-                                fontSize: 28,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                                letterSpacing: 0.5,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Row(
-                              children: [
-                                Icon(
-                                  Icons.auto_awesome_rounded,
-                                  size: 16,
-                                  color: Colors.white.withOpacity(0.7),
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  'Manage your classes and students',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    color: Colors.white.withOpacity(0.7),
-                                    fontWeight: FontWeight.w400,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
+FadeTransition(
+  opacity: _animationController,
+  child: SlideTransition(
+    position: Tween<Offset>(
+      begin: const Offset(0, 0.1),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(
+      parent: _animationController,
+      curve: Curves.easeOut,
+    )),
+    child: Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [
+            Color(0xFF1A237E),
+            Color(0xFF283593),
+            Color(0xFF3949AB),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF1A237E).withOpacity(0.3),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Top row: Role badge + Date
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.verified_rounded,
+                      size: 14,
+                      color: Colors.white.withOpacity(0.8),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      widget.userRole == 'admin'
+                          ? 'Administrator'
+                          : 'Teacher',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
-                  ),
-
+                  ],
+                ),
+              ),
+              const Spacer(),
+              Text(
+                _getFormattedDate(),
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.6),
+                  fontSize: 11,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          
+          // Dynamic greeting
+          Text(
+            _getGreeting(),
+            style: const TextStyle(
+              fontSize: 16,
+              color: Colors.white70,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 4),
+          
+          // User name
+          Text(
+            widget.userName,
+            style: const TextStyle(
+              fontSize: 28,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+              letterSpacing: 0.5,
+            ),
+          ),
+          const SizedBox(height: 16),
+          
+          // Divider
+          Container(
+            height: 1,
+            color: Colors.white.withOpacity(0.15),
+          ),
+          const SizedBox(height: 16),
+          
+          // Quote of the day
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                Icons.format_quote_rounded,
+                size: 24,
+                color: Colors.white.withOpacity(0.4),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _getDailyQuote(),
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.white.withOpacity(0.8),
+                        fontStyle: FontStyle.italic,
+                        height: 1.4,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _getQuoteAuthor(),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.white.withOpacity(0.5),
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    ),
+  ),
+),
                   const SizedBox(height: 24),
 
                   // Stats Cards
@@ -607,20 +689,20 @@ _AnimatedActionTile(
                         const SizedBox(height: 8),
 
                         _AnimatedActionTile(
-                          icon: Icons.book_outlined,
-                          title: 'My Subjects & Topics',
-                          subtitle: 'Manage the subjects and topics you teach',
-                          color: const Color(0xFF1A237E),
-                          index: 4,
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => const MySubjectsScreen(),
-                              ),
-                            );
-                          },
-                        ),
+  icon: Icons.class_rounded,
+  title: 'My Classes',
+  subtitle: 'Manage subjects & topics by class level',
+  color: Colors.blue,
+  index: 4,
+  onTap: () {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const TeacherClassesScreen(),  // ✅ Goes to classes first
+      ),
+    );
+  },
+),
                         const SizedBox(height: 8),
 
                         _AnimatedActionTile(

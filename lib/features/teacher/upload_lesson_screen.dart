@@ -4,16 +4,32 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/subject_service.dart';
 import '../../core/auth_service.dart';
 import '../../core/teacher_service.dart';
 
-// Conditional import — web recorder only loaded on web
 import 'web_recorder_stub.dart'
     if (dart.library.html) 'web_recorder_screen.dart' as recorder;
 
 class UploadLessonScreen extends StatefulWidget {
-  const UploadLessonScreen({super.key});
+  // ✅ Pre-selected values from Topic Manager
+  final String? preSelectedLevelId;
+  final String? preSelectedLevelName;
+  final String? preSelectedSubjectId;
+  final String? preSelectedSubjectName;
+  final String? preSelectedTopicId;
+  final String? preSelectedTopicName;
+
+  const UploadLessonScreen({
+    super.key,
+    this.preSelectedLevelId,
+    this.preSelectedLevelName,
+    this.preSelectedSubjectId,
+    this.preSelectedSubjectName,
+    this.preSelectedTopicId,
+    this.preSelectedTopicName,
+  });
 
   @override
   State<UploadLessonScreen> createState() => _UploadLessonScreenState();
@@ -21,7 +37,6 @@ class UploadLessonScreen extends StatefulWidget {
 
 class _UploadLessonScreenState extends State<UploadLessonScreen> {
   final _formKey = GlobalKey<FormState>();
-  final SubjectService _subjectService = SubjectService();
   final AuthService _authService = AuthService();
   final TeacherService _teacherService = TeacherService();
   final ImagePicker _imagePicker = ImagePicker();
@@ -31,18 +46,26 @@ class _UploadLessonScreenState extends State<UploadLessonScreen> {
   final _videoUrlController = TextEditingController();
   final _durationController = TextEditingController();
 
+  // Level
+  List<Map<String, dynamic>> _levels = [];
+  String? _selectedLevelId;
+  String? _selectedLevelName;
+
+  // Subject
   List<Map<String, dynamic>> _subjects = [];
-  List<Map<String, dynamic>> _topics = [];
-  String? _selectedSubjectName;
   String? _selectedSubjectId;
-  String? _selectedTeacherTopicId;
+  String? _selectedSubjectName;
+
+  // Topic
+  List<Map<String, dynamic>> _topics = [];
+  String? _selectedTopicId;
+
   bool _isPremium = false;
   bool _isSaving = false;
   double _uploadProgress = 0;
   String _uploadStatus = '';
 
   PlatformFile? _selectedFile;
-  XFile? _recordedVideo;
   Uint8List? _recordedVideoBytes;
   String _recordedFileName = '';
   String _videoSource = 'none';
@@ -50,41 +73,102 @@ class _UploadLessonScreenState extends State<UploadLessonScreen> {
   @override
   void initState() {
     super.initState();
-    _loadSubjects();
+    _loadLevels();
+    
+    // ✅ Pre-select values if coming from Topic Manager
+    if (widget.preSelectedLevelId != null) {
+      _selectedLevelId = widget.preSelectedLevelId;
+      _selectedLevelName = widget.preSelectedLevelName;
+      _selectedSubjectId = widget.preSelectedSubjectId;
+      _selectedSubjectName = widget.preSelectedSubjectName;
+      _selectedTopicId = widget.preSelectedTopicId;
+      // Load subjects for this level
+      _loadSubjectsForLevel(widget.preSelectedLevelId!);
+      // Load topics for this subject+level
+      if (widget.preSelectedSubjectId != null) {
+        _loadTopicsForSubject(widget.preSelectedSubjectId!);
+      }
+    }
   }
 
-  Future<void> _loadSubjects() async {
-  try {
-    final userId = _authService.currentUserId;
-    if (userId == null) return;
-
-    // Only load subjects the teacher has selected
-    final mySubjects = await _teacherService.getMySubjects(userId);
-    
-    // Extract subject data from the join
-    final subjects = mySubjects
-        .where((s) => s['subjects'] != null)
-        .map((s) => s['subjects'] as Map<String, dynamic>)
-        .toList();
-
-    if (mounted) setState(() => _subjects = subjects);
-  } catch (_) {}
-}
-
-  Future<void> _loadTopicsForSubject(String subjectId) async {
+  Future<void> _loadLevels() async {
     try {
       final userId = _authService.currentUserId;
       if (userId == null) return;
 
-      final topics = await _teacherService.getMyTopics(userId, subjectId);
+      final response = await Supabase.instance.client
+          .from('teacher_levels')
+          .select('level_id, levels!inner(name, description)')
+          .eq('teacher_id', userId)
+          .order('display_order', referencedTable: 'levels', ascending: true);
 
       if (mounted) {
         setState(() {
-          _topics = topics;
-          _selectedTeacherTopicId = null;
+          _levels = List<Map<String, dynamic>>.from(response);
         });
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Error loading levels: $e');
+    }
+  }
+
+  Future<void> _loadSubjectsForLevel(String levelId) async {
+    try {
+      final userId = _authService.currentUserId;
+      if (userId == null) return;
+
+      final response = await Supabase.instance.client
+          .from('teacher_subjects')
+          .select('subject_id, subjects!inner(name, color_hex, icon_name)')
+          .eq('teacher_id', userId)
+          .eq('level_id', levelId)
+          .order('name', referencedTable: 'subjects', ascending: true);
+
+      if (mounted) {
+        setState(() {
+          _subjects = List<Map<String, dynamic>>.from(response);
+          _topics = [];
+          _selectedTopicId = null;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading subjects: $e');
+    }
+  }
+
+ Future<void> _loadTopicsForSubject(String subjectId) async {
+    try {
+      final userId = _authService.currentUserId;
+      if (userId == null) return;
+
+      // ✅ Use Map<String, Object> instead of Map<String, dynamic>
+      final filters = <String, Object>{
+        'teacher_id': userId,
+        'subject_id': subjectId,
+      };
+      
+      final levelId = _selectedLevelId;
+      if (levelId != null) {
+        filters['level_id'] = levelId;
+      }
+
+      final response = await Supabase.instance.client
+          .from('teacher_topics')
+          .select()
+          .match(filters)
+          .order('display_order', ascending: true);
+
+      if (mounted) {
+        setState(() {
+          _topics = List<Map<String, dynamic>>.from(response);
+          if (widget.preSelectedTopicId == null) {
+            _selectedTopicId = null;
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading topics: $e');
+    }
   }
 
   Future<void> _pickVideoFile() async {
@@ -97,14 +181,12 @@ class _UploadLessonScreenState extends State<UploadLessonScreen> {
       setState(() {
         _selectedFile = result.files.first;
         _videoSource = 'file';
-        _recordedVideo = null;
         _recordedVideoBytes = null;
         _videoUrlController.clear();
       });
     }
   }
 
-  // ===== RECORD VIDEO — PLATFORM AWARE =====
   Future<void> _recordVideo() async {
     if (kIsWeb) {
       final result = await recorder.openWebRecorder(context);
@@ -149,7 +231,6 @@ class _UploadLessonScreenState extends State<UploadLessonScreen> {
     _showDesktopRecordingGuide();
   }
 
-  // ===== DESKTOP GUIDE =====
   void _showDesktopRecordingGuide() {
     showModalBottomSheet(
       context: context,
@@ -217,14 +298,14 @@ class _UploadLessonScreenState extends State<UploadLessonScreen> {
     );
   }
 
-  // ===== SAVE =====
   String _sanitizeFileName(String name) {
     return name.replaceAll(RegExp(r'[\[\]\(\)\{\}\#\?\&\%\~\|\^\<\>\:\;]'), '_').replaceAll(RegExp(r'\s+'), '_');
   }
 
   Future<void> _saveLesson() async {
     if (!_formKey.currentState!.validate()) return;
-    if (_selectedTeacherTopicId == null) {
+    final topicId = _selectedTopicId ?? widget.preSelectedTopicId;
+    if (topicId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please select a topic'), backgroundColor: Colors.red),
       );
@@ -251,16 +332,21 @@ class _UploadLessonScreenState extends State<UploadLessonScreen> {
       final durationMin = int.tryParse(_durationController.text);
 
       if (_videoSource == 'url') {
-        await _subjectService.createLessonWithTeacherTopic(
-          teacherTopicId: _selectedTeacherTopicId!,
-          teacherId: userId,
-          title: title,
-          description: description,
-          videoUrl: _videoUrlController.text.trim(),
-          durationMinutes: durationMin,
-          isPremium: _isPremium,
-        );
+        // Save with video URL
+        await Supabase.instance.client.from('lessons').insert({
+          'teacher_topic_id': topicId,
+          'teacher_id': userId,
+          'title': title,
+          'description': description,
+          'video_url': _videoUrlController.text.trim(),
+          'duration_minutes': durationMin,
+          'is_premium': _isPremium,
+          'level_id': _selectedLevelId ?? null,
+          'is_published': true,
+          
+        });
       } else {
+        // Upload video file
         List<int> videoBytes;
         String fileName;
 
@@ -284,19 +370,40 @@ class _UploadLessonScreenState extends State<UploadLessonScreen> {
 
         setState(() {
           _uploadStatus = 'Uploading ${(videoBytes.length / (1024 * 1024)).toStringAsFixed(1)} MB...';
-          _uploadProgress = 0.1;
+          _uploadProgress = 0.3;
         });
 
-        await _subjectService.createLessonWithVideoFileTeacherTopic(
-          teacherTopicId: _selectedTeacherTopicId!,
-          teacherId: userId,
-          title: title,
-          description: description,
-          videoBytes: videoBytes,
-          fileName: fileName,
-          durationMinutes: durationMin,
-          isPremium: _isPremium,
-        );
+        // Upload to Supabase Storage
+        final storagePath = 'lessons/${userId}/${DateTime.now().millisecondsSinceEpoch}_$fileName';
+        
+        await Supabase.instance.client
+    .storage
+    .from('lessons')
+    .uploadBinary(storagePath, Uint8List.fromList(videoBytes));
+
+        setState(() => _uploadProgress = 0.7);
+
+        // Get public URL
+        final videoUrl = Supabase.instance.client
+            .storage
+            .from('lessons')
+            .getPublicUrl(storagePath);
+
+        setState(() => _uploadProgress = 0.9);
+
+        // Save lesson record
+        await Supabase.instance.client.from('lessons').insert({
+          'teacher_topic_id': topicId,
+          'teacher_id': userId,
+          'title': title,
+          'description': description,
+          'video_url': videoUrl,
+          'duration_minutes': durationMin,
+          'is_premium': _isPremium,
+          'level_id': _selectedLevelId,
+          'is_published': true,
+          
+        });
 
         setState(() => _uploadProgress = 1.0);
       }
@@ -314,7 +421,11 @@ class _UploadLessonScreenState extends State<UploadLessonScreen> {
         );
       }
     } finally {
-      if (mounted) setState(() { _isSaving = false; _uploadProgress = 0; _uploadStatus = ''; });
+      if (mounted) setState(() { 
+        _isSaving = false; 
+        _uploadProgress = 0; 
+        _uploadStatus = ''; 
+      });
     }
   }
 
@@ -327,7 +438,6 @@ class _UploadLessonScreenState extends State<UploadLessonScreen> {
     super.dispose();
   }
 
-  // ===== BUILD =====
   String get _recordSubtitle {
     if (kIsWeb) return '🎥 Record using your laptop camera';
     if (Platform.isAndroid || Platform.isIOS) return '📱 Record using your phone camera';
@@ -336,157 +446,178 @@ class _UploadLessonScreenState extends State<UploadLessonScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isFromTopicManager = widget.preSelectedTopicId != null;
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Upload New Lesson'),
+        title: Text(isFromTopicManager ? 'Upload to ${widget.preSelectedTopicName}' : 'Upload New Lesson'),
         backgroundColor: const Color(0xFF1A237E),
         foregroundColor: Colors.white,
       ),
-      body: _buildForm(),
-    );
-  }
-
-  Widget _buildForm() {
-    return Form(
-      key: _formKey,
-      child: ListView(
-        padding: const EdgeInsets.all(20),
-        children: [
-          const Text('Video Source', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1A237E))),
-          const SizedBox(height: 12),
-
-          _VideoSourceCard(icon: Icons.folder_open, title: 'Upload from Device', subtitle: 'Select a video file', isSelected: _videoSource == 'file', onTap: _pickVideoFile),
-          const SizedBox(height: 8),
-          _VideoSourceCard(icon: Icons.videocam, title: 'Record Video', subtitle: _recordSubtitle, isSelected: _videoSource == 'record', onTap: _recordVideo),
-          const SizedBox(height: 8),
-          _VideoSourceCard(icon: Icons.link, title: 'Video URL', subtitle: 'Paste a link from YouTube, etc.', isSelected: _videoSource == 'url', onTap: () => setState(() { _videoSource = 'url'; _selectedFile = null; _recordedVideoBytes = null; })),
-
-          if (_selectedFile != null)
-            _SelectedFileInfo(name: _selectedFile!.name, size: '${(_selectedFile!.size / (1024 * 1024)).toStringAsFixed(1)} MB'),
-          if (_recordedVideoBytes != null)
-            _SelectedFileInfo(name: _recordedFileName, size: '${(_recordedVideoBytes!.length / (1024 * 1024)).toStringAsFixed(1)} MB'),
-
-          if (_videoSource == 'url') ...[
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _videoUrlController,
-              keyboardType: TextInputType.url,
-              decoration: InputDecoration(labelText: 'Video URL', hintText: 'https://...', prefixIcon: const Icon(Icons.link), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
-              validator: (v) => _videoSource == 'url' && (v == null || v.isEmpty) ? 'Enter video URL' : null,
-            ),
-          ],
-
-          const SizedBox(height: 24),
-          const Text('Lesson Details', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1A237E))),
-          const SizedBox(height: 12),
-
-          TextFormField(controller: _titleController, decoration: InputDecoration(labelText: 'Lesson Title', hintText: 'e.g., Introduction to Mechanics', prefixIcon: const Icon(Icons.title), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))), validator: (v) => v!.isEmpty ? 'Enter lesson title' : null),
-          const SizedBox(height: 16),
-          TextFormField(controller: _descriptionController, maxLines: 3, decoration: InputDecoration(labelText: 'Description', hintText: 'What will students learn?', prefixIcon: const Icon(Icons.description), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)))),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(child: TextFormField(controller: _durationController, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: 'Duration (min)', hintText: 'e.g., 45', prefixIcon: const Icon(Icons.timer_outlined), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))))),
-              const SizedBox(width: 12),
-              Expanded(child: SwitchListTile(title: const Text('Premium', style: TextStyle(fontSize: 14)), subtitle: const Text('Exclusive content', style: TextStyle(fontSize: 11)), value: _isPremium, onChanged: (v) => setState(() => _isPremium = v), activeColor: const Color(0xFFFF9800), contentPadding: EdgeInsets.zero)),
-            ],
-          ),
-          const SizedBox(height: 16),
-
-          // Subject Dropdown
-          DropdownButtonFormField<String>(
-            value: _selectedSubjectName,
-            decoration: InputDecoration(
-              labelText: 'Subject',
-              prefixIcon: const Icon(Icons.book),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-            items: _subjects.map<DropdownMenuItem<String>>((s) {
-              return DropdownMenuItem<String>(
-                value: s['name'] as String?,
-                child: Text(s['name'] ?? ''),
-              );
-            }).toList(),
-            onChanged: (value) {
-              setState(() {
-                _selectedSubjectName = value;
-                _topics = [];
-                _selectedTeacherTopicId = null;
-              });
-              if (value != null) {
-                final subject = _subjects.firstWhere(
-                  (s) => s['name'] == value,
-                  orElse: () => {'id': ''},
-                );
-                _selectedSubjectId = subject['id'] as String?;
-                if (_selectedSubjectId != null) {
-                  _loadTopicsForSubject(_selectedSubjectId!);
-                }
-              }
-            },
-            validator: (v) => v == null ? 'Select a subject' : null,
-          ),
-          const SizedBox(height: 16),
-
-          // Topic Dropdown (from teacher_topics)
-          if (_topics.isNotEmpty)
-            DropdownButtonFormField<String>(
-              value: _selectedTeacherTopicId,
-              decoration: InputDecoration(
-                labelText: 'Topic',
-                prefixIcon: const Icon(Icons.topic),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-              items: _topics.map<DropdownMenuItem<String>>((t) {
-                return DropdownMenuItem<String>(
-                  value: t['id'] as String?,
-                  child: Text(t['name'] ?? ''),
-                );
-              }).toList(),
-              onChanged: (value) => setState(() => _selectedTeacherTopicId = value),
-              validator: (v) => v == null ? 'Select a topic' : null,
-            ),
-
-          if (_topics.isEmpty && _selectedSubjectName != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 12),
-              child: Container(
-                padding: const EdgeInsets.all(12),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(20),
+          children: [
+            // ✅ Level, Subject, Topic chain
+            if (isFromTopicManager)
+              // Show pre-selected path as read-only
+              Container(
+                padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: Colors.orange.shade50,
-                  borderRadius: BorderRadius.circular(10),
+                  color: const Color(0xFF1A237E).withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF1A237E).withOpacity(0.1)),
                 ),
-                child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Icon(Icons.info_outline, color: Colors.orange, size: 18),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'No topics found for $_selectedSubjectName. Add topics in "My Subjects & Topics" first.',
-                        style: const TextStyle(fontSize: 12, color: Colors.orange),
-                      ),
-                    ),
+                    const Text('Uploading to:', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: Colors.grey)),
+                    const SizedBox(height: 4),
+                    Text('${widget.preSelectedLevelName} → ${widget.preSelectedSubjectName} → ${widget.preSelectedTopicName}',
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Color(0xFF1A237E))),
                   ],
                 ),
+              )
+            else ...[
+              // Level dropdown
+              DropdownButtonFormField<String>(
+                value: _selectedLevelId,
+                decoration: InputDecoration(
+                  labelText: 'Class Level',
+                  prefixIcon: const Icon(Icons.school_rounded),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                items: _levels.map((row) {
+                  final level = row['levels'] as Map<String, dynamic>;
+                  return DropdownMenuItem<String>(
+                    value: row['level_id'] as String,
+                    child: Text(level['name'] ?? ''),
+                  );
+                }).toList(),
+                onChanged: (value) {
+                  setState(() {
+                    _selectedLevelId = value;
+                    _selectedLevelName = _levels
+                        .firstWhere((l) => l['level_id'] == value)['levels']['name'];
+                    _subjects = [];
+                    _selectedSubjectId = null;
+                    _topics = [];
+                    _selectedTopicId = null;
+                  });
+                  if (value != null) _loadSubjectsForLevel(value);
+                },
+                validator: (v) => v == null ? 'Select a class' : null,
               ),
+              const SizedBox(height: 16),
+
+              // Subject dropdown
+              DropdownButtonFormField<String>(
+                value: _selectedSubjectId,
+                decoration: InputDecoration(
+                  labelText: 'Subject',
+                  prefixIcon: const Icon(Icons.book_rounded),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                items: _subjects.map((row) {
+                  final subject = row['subjects'] as Map<String, dynamic>;
+                  return DropdownMenuItem<String>(
+                    value: row['subject_id'] as String,
+                    child: Text(subject['name'] ?? ''),
+                  );
+                }).toList(),
+                onChanged: _subjects.isEmpty ? null : (value) {
+                  setState(() {
+                    _selectedSubjectId = value;
+                    _selectedSubjectName = _subjects
+                        .firstWhere((s) => s['subject_id'] == value)['subjects']['name'];
+                    _topics = [];
+                    _selectedTopicId = null;
+                  });
+                  if (value != null) _loadTopicsForSubject(value);
+                },
+                validator: (v) => v == null ? 'Select a subject' : null,
+              ),
+              const SizedBox(height: 16),
+
+              // Topic dropdown
+              if (_topics.isNotEmpty)
+                DropdownButtonFormField<String>(
+                  value: _selectedTopicId,
+                  decoration: InputDecoration(
+                    labelText: 'Topic',
+                    prefixIcon: const Icon(Icons.topic_rounded),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  items: _topics.map((t) {
+                    return DropdownMenuItem<String>(
+                      value: t['id'] as String,
+                      child: Text(t['name'] ?? ''),
+                    );
+                  }).toList(),
+                  onChanged: (value) => setState(() => _selectedTopicId = value),
+                  validator: (v) => v == null ? 'Select a topic' : null,
+                ),
+            ],
+
+            const SizedBox(height: 24),
+            const Text('Video Source', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1A237E))),
+            const SizedBox(height: 12),
+
+            _VideoSourceCard(icon: Icons.folder_open, title: 'Upload from Device', subtitle: 'Select a video file', isSelected: _videoSource == 'file', onTap: _pickVideoFile),
+            const SizedBox(height: 8),
+            _VideoSourceCard(icon: Icons.videocam, title: 'Record Video', subtitle: _recordSubtitle, isSelected: _videoSource == 'record', onTap: _recordVideo),
+            const SizedBox(height: 8),
+            _VideoSourceCard(icon: Icons.link, title: 'Video URL', subtitle: 'Paste a link from YouTube, etc.', isSelected: _videoSource == 'url', onTap: () => setState(() { _videoSource = 'url'; _selectedFile = null; _recordedVideoBytes = null; })),
+
+            if (_selectedFile != null)
+              _SelectedFileInfo(name: _selectedFile!.name, size: '${(_selectedFile!.size / (1024 * 1024)).toStringAsFixed(1)} MB'),
+            if (_recordedVideoBytes != null)
+              _SelectedFileInfo(name: _recordedFileName, size: '${(_recordedVideoBytes!.length / (1024 * 1024)).toStringAsFixed(1)} MB'),
+
+            if (_videoSource == 'url') ...[
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _videoUrlController,
+                keyboardType: TextInputType.url,
+                decoration: InputDecoration(labelText: 'Video URL', hintText: 'https://...', prefixIcon: const Icon(Icons.link), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
+                validator: (v) => _videoSource == 'url' && (v == null || v.isEmpty) ? 'Enter video URL' : null,
+              ),
+            ],
+
+            const SizedBox(height: 24),
+            const Text('Lesson Details', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1A237E))),
+            const SizedBox(height: 12),
+
+            TextFormField(controller: _titleController, decoration: InputDecoration(labelText: 'Lesson Title', hintText: 'e.g., Introduction to Mechanics', prefixIcon: const Icon(Icons.title), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))), validator: (v) => v!.isEmpty ? 'Enter lesson title' : null),
+            const SizedBox(height: 16),
+            TextFormField(controller: _descriptionController, maxLines: 3, decoration: InputDecoration(labelText: 'Description', hintText: 'What will students learn?', prefixIcon: const Icon(Icons.description), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)))),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(child: TextFormField(controller: _durationController, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: 'Duration (min)', hintText: 'e.g., 45', prefixIcon: const Icon(Icons.timer_outlined), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))))),
+                const SizedBox(width: 12),
+                Expanded(child: SwitchListTile(title: const Text('Premium', style: TextStyle(fontSize: 14)), subtitle: const Text('Exclusive content', style: TextStyle(fontSize: 11)), value: _isPremium, onChanged: (v) => setState(() => _isPremium = v), activeColor: const Color(0xFFFF9800), contentPadding: EdgeInsets.zero)),
+              ],
             ),
 
-          if (_isSaving) ...[
+            if (_isSaving) ...[
+              const SizedBox(height: 20),
+              LinearProgressIndicator(value: _uploadProgress, backgroundColor: Colors.grey.shade200, color: const Color(0xFFFF9800)),
+              const SizedBox(height: 8),
+              Text(_uploadStatus, style: const TextStyle(fontSize: 12, color: Colors.grey), textAlign: TextAlign.center),
+            ],
+            const SizedBox(height: 32),
+            SizedBox(width: double.infinity, height: 52, child: ElevatedButton(onPressed: _isSaving ? null : _saveLesson, style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1A237E), foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))), child: _isSaving ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('Upload Lesson', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)))),
             const SizedBox(height: 20),
-            LinearProgressIndicator(value: _uploadProgress, backgroundColor: Colors.grey.shade200, color: const Color(0xFFFF9800)),
-            const SizedBox(height: 8),
-            Text(_uploadStatus, style: const TextStyle(fontSize: 12, color: Colors.grey), textAlign: TextAlign.center),
           ],
-          const SizedBox(height: 32),
-          SizedBox(width: double.infinity, height: 52, child: ElevatedButton(onPressed: _isSaving ? null : _saveLesson, style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1A237E), foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))), child: _isSaving ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('Upload Lesson', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)))),
-          const SizedBox(height: 20),
-        ],
+        ),
       ),
     );
   }
 }
 
-// ===== HELPER WIDGETS =====
+// ===== HELPER WIDGETS (keep existing) =====
 class _VideoSourceCard extends StatelessWidget {
   final IconData icon;
   final String title;

@@ -43,36 +43,52 @@ Future<List<Map<String, dynamic>>> getAllSubjects() async {
         .eq('subject_id', subjectId);
   }
 
-  // Get topics created by teacher for a subject
   Future<List<Map<String, dynamic>>> getMyTopics(
-      String teacherId, String subjectId) async {
-    final response = await _client
-        .from('teacher_topics')
-        .select()
-        .eq('teacher_id', teacherId)
-        .eq('subject_id', subjectId)
-        .order('display_order', ascending: true); // ✅ Already correct
-
-    return List<Map<String, dynamic>>.from(response);
+  String teacherId, 
+  String subjectId, {
+  String? levelId,
+}) async {
+  // ✅ Build query with all filters before select
+  final filters = {
+    'teacher_id': teacherId,
+    'subject_id': subjectId,
+  };
+  
+  if (levelId != null) {
+    filters['level_id'] = levelId;
   }
+  
+  final response = await _client
+      .from('teacher_topics')
+      .select()
+      .match(filters)
+      .order('display_order', ascending: true);
+  
+  return List<Map<String, dynamic>>.from(response);
+}
 
-  // Add a topic
-  Future<void> addTopic({
-    required String teacherId,
-    required String subjectId,
-    required String name,
-    String? description,
-    int displayOrder = 0,
-  }) async {
-    await _client.from('teacher_topics').insert({
-      'teacher_id': teacherId,
-      'subject_id': subjectId,
-      'name': name,
-      'description': description,
-      'display_order': displayOrder,
-    });
+Future<void> addTopic({
+  required String teacherId,
+  required String subjectId,
+  required String name,
+  String? description,
+  int? displayOrder,
+  String? levelId,
+}) async {
+  final data = {
+    'teacher_id': teacherId,
+    'subject_id': subjectId,
+    'name': name,
+    'description': description,
+    'display_order': displayOrder ?? 0,
+  };
+  
+  if (levelId != null) {
+    data['level_id'] = levelId;
   }
-
+  
+  await _client.from('teacher_topics').insert(data);
+}
   // Update a topic
   Future<void> updateTopic({
     required String topicId,
@@ -87,6 +103,15 @@ Future<List<Map<String, dynamic>>> getAllSubjects() async {
 
     await _client.from('teacher_topics').update(updates).eq('id', topicId);
   }
+  Future<void> updateTopicOrder({
+  required String topicId,
+  required int displayOrder,
+}) async {
+  await _client
+      .from('teacher_topics')
+      .update({'display_order': displayOrder})
+      .eq('id', topicId);
+}
 
   // Delete a topic
   Future<void> deleteTopic(String topicId) async {
