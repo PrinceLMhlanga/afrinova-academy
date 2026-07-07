@@ -75,39 +75,25 @@ class _TeacherClassesScreenState extends State<TeacherClassesScreen> {
         child: CustomScrollView(
           slivers: [
             SliverAppBar(
-              expandedHeight: 140,
-              floating: false,
-              pinned: true,
-              backgroundColor: Colors.transparent,
-              leading: const BackButton(color: Colors.white),
-              flexibleSpace: Container(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Color(0xFF0D1B4C), Color(0xFF1A237E), Color(0xFF283593)],
-                  ),
-                ),
-                child: FlexibleSpaceBar(
-                  title: const Text('My Classes',
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: Colors.white)),
-                  centerTitle: false,
-                  titlePadding: const EdgeInsets.only(left: 16, bottom: 16),
-                  background: Padding(
-                    padding: const EdgeInsets.fromLTRB(24, 0, 24, 80),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('${_myLevels.length} class(es)',
-                            style: const TextStyle(color: Colors.white70, fontSize: 14)),
-                        const SizedBox(height: 4),
-                        Text('Manage your subjects and content',
-                            style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 12)),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
+  expandedHeight: 110,  // ✅ Reduced
+  floating: false,
+  pinned: true,
+  backgroundColor: Colors.transparent,
+  leading: const BackButton(color: Colors.white),
+  flexibleSpace: Container(
+    decoration: const BoxDecoration(
+      gradient: LinearGradient(
+        colors: [Color(0xFF0D1B4C), Color(0xFF1A237E), Color(0xFF283593)],
+      ),
+    ),
+    child: FlexibleSpaceBar(
+      title: const Text('My Classes',
+          style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: Colors.white)),
+      centerTitle: false,
+      titlePadding: const EdgeInsets.only(left: 56, bottom: 16),  // ✅ Clear back button
+    ),
+  ),
+),
             SliverPadding(
               padding: const EdgeInsets.all(16),
               sliver: SliverList(
@@ -122,25 +108,25 @@ class _TeacherClassesScreenState extends State<TeacherClassesScreen> {
                   else ...[
                     // Info card
                     Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1A237E).withOpacity(0.05),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: const Color(0xFF1A237E).withOpacity(0.1)),
-                      ),
-                      child: const Row(
-                        children: [
-                          Icon(Icons.info_outline, color: Color(0xFF1A237E), size: 18),
-                          SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              'Select a class to manage subjects, topics, and content',
-                              style: TextStyle(fontSize: 12, color: Color(0xFF1A237E)),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
+  padding: const EdgeInsets.all(14),
+  decoration: BoxDecoration(
+    color: const Color(0xFF1A237E).withOpacity(0.05),
+    borderRadius: BorderRadius.circular(14),
+    border: Border.all(color: const Color(0xFF1A237E).withOpacity(0.1)),
+  ),
+  child: Row(
+    children: [
+      const Icon(Icons.school_rounded, color: Color(0xFF1A237E), size: 18),
+      const SizedBox(width: 10),
+      Expanded(
+        child: Text(
+          '${_myLevels.length} class(es) assigned • Select to manage subjects & topics',
+          style: const TextStyle(fontSize: 12, color: Color(0xFF1A237E)),
+        ),
+      ),
+    ],
+  ),
+),
                     const SizedBox(height: 16),
 
                     // Level cards
