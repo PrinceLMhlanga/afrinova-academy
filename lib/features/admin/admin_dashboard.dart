@@ -2,6 +2,8 @@ import 'package:afrinova_academy/features/admin/approve_teachers_screen.dart';
 import 'package:flutter/material.dart';
 import '../teacher/teacher_dashboard.dart';
 import 'settlements_screen.dart';
+import 'manage_platform_subjects_screen.dart';
+import 'question_bank_entry_screen.dart';
 
 class AdminDashboard extends StatelessWidget {
   final String userName;
@@ -51,7 +53,32 @@ class AdminDashboard extends StatelessWidget {
           onTap: () {
             // Future: User management screen
           },
+          
         ),
+        _AdminAction(
+  icon: Icons.topic_rounded,
+  title: 'Platform Topics',
+  subtitle: 'Manage subjects and their topics',
+  color: const Color(0xFF00897B),
+  onTap: () {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const ManagePlatformSubjectsScreen()),
+    );
+  },
+),
+_AdminAction(
+  icon: Icons.quiz_rounded,
+  title: 'Question Bank',
+  subtitle: 'Add questions from exam papers',
+  color: const Color(0xFFFF9800),
+  onTap: () {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const QuestionBankEntryScreen()),
+    );
+  },
+),
       ],
     );
   }
