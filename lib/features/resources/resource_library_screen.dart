@@ -73,12 +73,22 @@ class _ResourceLibraryScreenState extends State<ResourceLibraryScreen> {
       // Get resources from enrolled teachers only
 List<Map<String, dynamic>> resources = [];
 if (teacherIds.isNotEmpty) {
-  var query = Supabase.instance.client
-    .from('resources')
-    .select('*, subjects(name), profiles!uploaded_by(full_name)')  // ✅ Add teacher name
-    .inFilter('uploaded_by', teacherIds.toList());
+  String? studentLevelId;
+  if (userId != null) {
+    final profile = await Supabase.instance.client
+        .from('profiles')
+        .select('level_id')
+        .eq('id', userId)
+        .maybeSingle();
+    studentLevelId = profile?['level_id'] as String?;
+  }
 
-  // ✅ Fix: Store in local variables to avoid non-final promotion issue
+  var query = Supabase.instance.client
+      .from('resources')
+      .select('*, subjects(name), profiles!teacher_id(full_name), levels(name)')
+      .eq('level_id', studentLevelId ?? '')
+      .inFilter('teacher_id', teacherIds.toList());
+
   final subjectFilter = _selectedSubjectId;
   final typeFilter = _selectedType;
 

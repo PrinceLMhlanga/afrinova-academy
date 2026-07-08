@@ -3,6 +3,7 @@ import '../../core/exam_service.dart';
 import '../../core/auth_service.dart';
 import '../../core/subject_service.dart';
 import '../../core/teacher_service.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class ExamCreatorScreen extends StatefulWidget {
   const ExamCreatorScreen({super.key});
@@ -38,8 +39,78 @@ class _ExamCreatorScreenState extends State<ExamCreatorScreen> {
   @override
   void initState() {
     super.initState();
-    _loadSubjects();
+    _loadLevels();
   }
+
+  // ✅ ADD: Level support
+List<Map<String, dynamic>> _levels = [];
+String? _selectedLevelId;
+String? _selectedLevelName;
+
+// ✅ REPLACE _loadSubjects with:
+Future<void> _loadLevels() async {
+  try {
+    final userId = _authService.currentUserId;
+    if (userId == null) return;
+
+    final response = await Supabase.instance.client
+        .from('teacher_levels')
+        .select('level_id, levels!inner(name)')
+        .eq('teacher_id', userId);
+
+    if (mounted) {
+      setState(() {
+        _levels = List<Map<String, dynamic>>.from(response);
+        _isLoadingData = false;
+      });
+    }
+  } catch (e) {
+    if (mounted) setState(() => _isLoadingData = false);
+  }
+}
+
+Future<void> _loadSubjectsForLevel(String levelId) async {
+  try {
+    final userId = _authService.currentUserId;
+    if (userId == null) return;
+
+    final response = await Supabase.instance.client
+        .from('teacher_subjects')
+        .select('subject_id, subjects!inner(name)')
+        .eq('teacher_id', userId)
+        .eq('level_id', levelId);
+
+    if (mounted) {
+      setState(() {
+        _subjects = List<Map<String, dynamic>>.from(response);
+        _topics = [];
+        _selectedTeacherTopicId = null;
+      });
+    }
+  } catch (_) {}
+}
+
+Future<void> _loadTopicsForSubject(String subjectId) async {
+  try {
+    final userId = _authService.currentUserId;
+    if (userId == null) return;
+
+    final filters = <String, Object>{'teacher_id': userId, 'subject_id': subjectId};
+    final levelId = _selectedLevelId;
+    if (levelId != null) filters['level_id'] = levelId;
+
+    final response = await Supabase.instance.client
+        .from('teacher_topics')
+        .select()
+        .match(filters)
+        .order('display_order', ascending: true);
+
+    if (mounted) {
+      setState(() => _topics = List<Map<String, dynamic>>.from(response));
+      _selectedTeacherTopicId = null;
+    }
+  } catch (_) {}
+}
 
  final TeacherService  _teacherService = TeacherService();
   Future<void> _loadSubjects() async {
@@ -129,6 +200,7 @@ final examId = await _examService.createExamWithTeacherTopic(
   totalMarks: totalMarks,
   passingPercentage: int.tryParse(_passingController.text) ?? 50,
   subjectId: subjectId, // ✅ Add this
+  levelId: _selectedLevelId,
 );
       if (examId != null) {
         // Add all questions
@@ -257,40 +329,67 @@ final examId = await _examService.createExamWithTeacherTopic(
                   const SizedBox(height: 16),
 
                   // Subject Dropdown
-                  DropdownButtonFormField<String>(
-                    value: _selectedSubject,
-                    decoration: InputDecoration(
-                      labelText: 'Subject',
-                      prefixIcon: const Icon(Icons.book),
-                      border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                    ),
-                    items: _subjects.map<DropdownMenuItem<String>>((s) {
-  return DropdownMenuItem<String>(
-    value: s['name'] as String?,
-    child: Text(s['name'] ?? ''),
-  );
-}).toList(),
-                   onChanged: (value) {
-  setState(() {
-    _selectedSubject = value;
-    _topics = [];
-    _selectedTeacherTopicId = null;
-  });
-  if (value != null) {
-    final subject = _subjects.firstWhere(
-      (s) => s['name'] == value,
-      orElse: () => {'id': ''},
+                  // ✅ ADD: Level Dropdown (before Subject)
+DropdownButtonFormField<String>(
+  value: _selectedLevelId,
+  decoration: InputDecoration(
+    labelText: 'Class Level',
+    prefixIcon: const Icon(Icons.school_rounded),
+    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+  ),
+  items: _levels.map((row) {
+    final level = row['levels'] as Map<String, dynamic>;
+    return DropdownMenuItem<String>(
+      value: row['level_id'] as String,
+      child: Text(level['name'] ?? ''),
     );
-    final subjectId = subject['id'] as String?;
-    if (subjectId != null) {
-      _loadTopics(subjectId);  // ✅ Pass ID, not name
+  }).toList(),
+  onChanged: (value) {
+    setState(() {
+      _selectedLevelId = value;
+      _selectedSubject = null;
+      _subjects = [];
+      _topics = [];
+      _selectedTeacherTopicId = null;
+    });
+    if (value != null) _loadSubjectsForLevel(value);
+  },
+  validator: (v) => v == null ? 'Select a class' : null,
+),
+const SizedBox(height: 16),
+
+// ✅ UPDATE: Subject Dropdown
+DropdownButtonFormField<String>(
+  value: _selectedSubject,
+  decoration: InputDecoration(
+    labelText: 'Subject',
+    prefixIcon: const Icon(Icons.book),
+    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+  ),
+  items: _subjects.map<DropdownMenuItem<String>>((row) {
+    final subject = row['subjects'] as Map<String, dynamic>;
+    return DropdownMenuItem<String>(
+      value: subject['name'] as String?,
+      child: Text(subject['name'] ?? ''),
+    );
+  }).toList(),
+  onChanged: (value) {
+    setState(() {
+      _selectedSubject = value;
+      _topics = [];
+      _selectedTeacherTopicId = null;
+    });
+    if (value != null) {
+      final subject = _subjects.firstWhere(
+        (s) => (s['subjects'] as Map)['name'] == value,
+        orElse: () => {},
+      );
+      final subjectId = subject['subject_id'] as String?;
+      if (subjectId != null) _loadTopicsForSubject(subjectId);
     }
-  }
-},
-                    validator: (v) =>
-                        v == null ? 'Select a subject' : null,
-                  ),
+  },
+  validator: (v) => v == null ? 'Select a subject' : null,
+),
                   const SizedBox(height: 16),
 
                   // Topic Dropdown

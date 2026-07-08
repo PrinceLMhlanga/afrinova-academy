@@ -22,26 +22,61 @@ class _MyExamsScreenState extends State<MyExamsScreen> {
   @override
   void initState() {
     super.initState();
+    _loadLevels();
     _loadExams();
   }
 
-  Future<void> _loadExams() async {
-    try {
-      final userId = _authService.currentUserId;
-      if (userId != null) {
-        final exams = await _examService.getTeacherExams(userId);
-        if (mounted) {
-          setState(() {
-            _exams = exams;
-            _isLoading = false;
-          });
-        }
-      }
-    } catch (e) {
-      debugPrint('Error loading exams: $e');
-      if (mounted) setState(() => _isLoading = false);
+  // ✅ ADD: Level tab support
+List<Map<String, dynamic>> _levels = [];
+String? _selectedLevelId;
+String _selectedLevelName = 'All';
+
+Future<void> _loadLevels() async {
+  try {
+    final userId = _authService.currentUserId;
+    if (userId == null) return;
+
+    final response = await Supabase.instance.client
+        .from('teacher_levels')
+        .select('level_id, levels!inner(name)')
+        .eq('teacher_id', userId);
+
+    if (mounted) {
+      setState(() {
+        _levels = List<Map<String, dynamic>>.from(response);
+      });
     }
+  } catch (_) {}
+}
+
+List<Map<String, dynamic>> get _filteredExams {
+  if (_selectedLevelId == null) return _exams;
+  return _exams.where((e) => e['level_id'] == _selectedLevelId).toList();
+}
+
+  Future<void> _loadExams() async {
+  try {
+    final userId = _authService.currentUserId;
+    if (userId != null) {
+      // ✅ Load with level info
+      final response = await Supabase.instance.client
+          .from('exams')
+          .select('*, teacher_topics!inner(name, subjects!inner(name), levels!inner(name))')
+          .eq('creator_id', userId)
+          .order('created_at', ascending: false);
+      
+      if (mounted) {
+        setState(() {
+          _exams = List<Map<String, dynamic>>.from(response);
+          _isLoading = false;
+        });
+      }
+    }
+  } catch (e) {
+    debugPrint('Error loading exams: $e');
+    if (mounted) setState(() => _isLoading = false);
   }
+}
 
   Future<void> _publishExam(String examId) async {
     try {
@@ -173,34 +208,71 @@ class _MyExamsScreenState extends State<MyExamsScreen> {
           ),
         ],
       ),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: Color(0xFF1A237E)))
-          : _exams.isEmpty
+      body: Column(
+  children: [
+    // ✅ Level tabs
+    if (_levels.isNotEmpty)
+      Container(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        color: Colors.white,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Row(
+            children: [
+              _LevelTab(
+                label: 'All',
+                count: _exams.length,
+                isSelected: _selectedLevelId == null,
+                onTap: () => setState(() {
+                  _selectedLevelId = null;
+                  _selectedLevelName = 'All';
+                }),
+              ),
+              ..._levels.map((row) {
+                final level = row['levels'] as Map<String, dynamic>;
+                final levelId = row['level_id'] as String;
+                final levelName = level['name'] as String;
+                final count = _exams.where((e) => e['level_id'] == levelId).length;
+                return _LevelTab(
+                  label: levelName,
+                  count: count,
+                  isSelected: _selectedLevelId == levelId,
+                  color: _getLevelColor(levelName),
+                  onTap: () => setState(() {
+                    _selectedLevelId = levelId;
+                    _selectedLevelName = levelName;
+                  }),
+                );
+              }),
+            ],
+          ),
+        ),
+      ),
+    const Divider(height: 1),
+
+    // ✅ Use _filteredExams instead of _exams
+    Expanded(
+      child: _isLoading
+          ? const Center(child: CircularProgressIndicator(color: Color(0xFF1A237E)))
+          : _filteredExams.isEmpty
               ? Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.quiz_outlined,
-                          size: 80, color: Colors.grey.shade300),
+                      Icon(Icons.quiz_outlined, size: 80, color: Colors.grey.shade300),
                       const SizedBox(height: 16),
-                      const Text(
-                        'No exams created yet',
-                        style: TextStyle(fontSize: 18, color: Colors.grey),
+                      Text(
+                        _selectedLevelId == null ? 'No exams created yet' : 'No exams for $_selectedLevelName',
+                        style: const TextStyle(fontSize: 18, color: Colors.grey),
                       ),
                       const SizedBox(height: 8),
-                      const Text(
-                        'Create your first exam to test your students',
-                        style: TextStyle(fontSize: 14, color: Colors.grey),
-                      ),
+                      const Text('Create your first exam to test your students',
+                          style: TextStyle(fontSize: 14, color: Colors.grey)),
                       const SizedBox(height: 24),
                       ElevatedButton.icon(
                         onPressed: () async {
-                          await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                                builder: (_) => const ExamCreatorScreen()),
-                          );
+                          await Navigator.push(context, MaterialPageRoute(builder: (_) => const ExamCreatorScreen()));
                           _loadExams();
                         },
                         icon: const Icon(Icons.add),
@@ -208,10 +280,7 @@ class _MyExamsScreenState extends State<MyExamsScreen> {
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFF1A237E),
                           foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 24, vertical: 14),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12)),
+                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
                         ),
                       ),
                     ],
@@ -221,9 +290,10 @@ class _MyExamsScreenState extends State<MyExamsScreen> {
                   onRefresh: _loadExams,
                   child: ListView.builder(
                     padding: const EdgeInsets.all(16),
-                    itemCount: _exams.length,
+                    itemCount: _filteredExams.length,
                     itemBuilder: (context, index) {
-                      final exam = _exams[index];
+                      final exam = _filteredExams[index];  // ✅ Use filtered
+                      
                       final isPublished = exam['is_published'] ?? false;
                       final examId = exam['id'] as String;
                       final title = exam['title'] as String? ?? 'Untitled';
@@ -320,6 +390,11 @@ class _MyExamsScreenState extends State<MyExamsScreen> {
                                 spacing: 8,
                                 runSpacing: 6,
                                 children: [
+                                  if (exam['teacher_topics']?['levels']?['name'] != null)
+      _InfoChip(
+        icon: Icons.school_rounded,
+        text: exam['teacher_topics']['levels']['name'] as String,
+      ),
                                   if (subjectName.isNotEmpty)
                                     _InfoChip(
                                         icon: Icons.book,
@@ -421,10 +496,24 @@ class _MyExamsScreenState extends State<MyExamsScreen> {
                         ),
                       );
                     },
+                    
                   ),
                 ),
+    ),
+  ],
+),
     );
   }
+
+  Color _getLevelColor(String level) {
+  switch (level) {
+    case 'Form 1': return Colors.blue;
+    case 'Form 2': return Colors.teal;
+    case 'O-Level': return const Color(0xFFFF9800);
+    case 'A-Level': return Colors.purple;
+    default: return const Color(0xFF1A237E);
+  }
+}
 }
 
 class _InfoChip extends StatelessWidget {
@@ -494,6 +583,64 @@ class _ActionButton extends StatelessWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+class _LevelTab extends StatelessWidget {
+  final String label;
+  final int count;
+  final bool isSelected;
+  final Color? color;
+  final VoidCallback onTap;
+
+  const _LevelTab({
+    required this.label,
+    required this.count,
+    required this.isSelected,
+    this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final tabColor = color ?? const Color(0xFF1A237E);
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.only(right: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? tabColor.withOpacity(0.1) : Colors.grey.shade50,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isSelected ? tabColor : Colors.grey.shade300,
+            width: isSelected ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(label, style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: isSelected ? tabColor : Colors.grey.shade600,
+            )),
+            const SizedBox(width: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+              decoration: BoxDecoration(
+                color: isSelected ? tabColor.withOpacity(0.2) : Colors.grey.shade200,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text('$count', style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                color: isSelected ? tabColor : Colors.grey,
+              )),
+            ),
+          ],
         ),
       ),
     );

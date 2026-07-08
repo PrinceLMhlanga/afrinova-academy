@@ -51,14 +51,27 @@ class _StudentPapersScreenState extends State<StudentPapersScreen>
 
       // Load published papers ONLY from enrolled teachers
       List<Map<String, dynamic>> papers = [];
-      if (teacherIds.isNotEmpty) {
-        papers = await Supabase.instance.client
-            .from('exam_papers')
-            .select('*, subjects(name), profiles!creator_id(full_name)')
-            .eq('is_published', true)
-            .inFilter('creator_id', teacherIds.toList())
-            .order('created_at', ascending: false);
-      }
+if (teacherIds.isNotEmpty) {
+  String? studentLevelId;
+  if (userId != null) {
+    final profile = await Supabase.instance.client
+        .from('profiles')
+        .select('level_id')
+        .eq('id', userId)
+        .maybeSingle();
+    studentLevelId = profile?['level_id'] as String?;
+  }
+
+  final response = await Supabase.instance.client
+      .from('exam_papers')
+      .select('*, subjects(name), profiles!creator_id(full_name), levels(name)')
+      .eq('is_published', true)
+      .eq('level_id', studentLevelId ?? '')
+      .inFilter('creator_id', teacherIds.toList())
+      .order('created_at', ascending: false);
+
+  papers = List<Map<String, dynamic>>.from(response);
+}
 
       // Load ALL student's answers
       final allAnswers = await Supabase.instance.client

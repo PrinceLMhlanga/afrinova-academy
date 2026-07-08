@@ -48,18 +48,28 @@ class _StudentExamsScreenState extends State<StudentExamsScreen> {
       }
 
       // Get exams from enrolled teachers only
-      List<Map<String, dynamic>> allExams = [];
-      if (teacherIds.isNotEmpty) {
-        final response = await Supabase.instance.client
-            .from('exams')
-            .select('*, teacher_topics(subject_id, subjects(name)), profiles!creator_id(full_name)')
-            .eq('is_published', true)
-            .inFilter('creator_id', teacherIds.toList())
-            .order('created_at', ascending: false);
+   List<Map<String, dynamic>> allExams = [];
+if (teacherIds.isNotEmpty) {
+  String? studentLevelId;
+  if (userId != null) {
+    final profile = await Supabase.instance.client
+        .from('profiles')
+        .select('level_id')
+        .eq('id', userId)
+        .maybeSingle();
+    studentLevelId = profile?['level_id'] as String?;
+  }
 
-        allExams = List<Map<String, dynamic>>.from(response);
-      }
+  final response = await Supabase.instance.client
+      .from('exams')
+      .select('*, teacher_topics(subject_id, subjects(name)), profiles!creator_id(full_name), levels(name)')
+      .eq('is_published', true)
+      .eq('level_id', studentLevelId ?? '')
+      .inFilter('creator_id', teacherIds.toList())
+      .order('created_at', ascending: false);
 
+  allExams = List<Map<String, dynamic>>.from(response);
+}
       // Get completed attempts
       List<Map<String, dynamic>> attempts = [];
       attempts = await Supabase.instance.client

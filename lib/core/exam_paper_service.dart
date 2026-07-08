@@ -13,12 +13,14 @@ class ExamPaperService {
     required int durationMinutes,
     required String curriculum,
     required String paperType,
+    String? levelId,
     required List<Map<String, dynamic>> questions,
   }) async {
     // Insert the paper
     final paperResponse = await _client.from('exam_papers').insert({
       'creator_id': creatorId,
       'subject_id': subjectId,
+      'level_id': levelId,
       'title': title,
       'instructions': instructions,
       'total_marks': totalMarks,

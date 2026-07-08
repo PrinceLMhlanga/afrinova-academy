@@ -26,41 +26,71 @@ class _EnrollmentRequestsScreenState extends State<EnrollmentRequestsScreen> {
       final userId = _authService.currentUserId;
       if (userId == null) return;
 
+      // ✅ Load with level info
       final response = await Supabase.instance.client
           .from('enrollments')
-          .select('id, status, student_id, subject_id, subjects(name, color_hex), profiles!student_id(full_name, email)')
+          .select('id, status, level_id, student_id, subject_id, subjects(name, color_hex), profiles!student_id(full_name, email), levels(name)')
           .eq('teacher_id', userId)
           .eq('status', 'pending')
           .order('requested_at', ascending: false);
 
-      // Group by student_id
-      final Map<String, Map<String, dynamic>> grouped = {};
+      // ✅ Group by level, then by student
+      final Map<String, Map<String, dynamic>> levelGroups = {};
+      
       for (final row in response) {
+        final levelData = row['levels'] as Map<String, dynamic>?;
+        final levelName = levelData?['name'] as String? ?? 'Unknown Level';
+        final levelId = row['level_id'] as String? ?? 'unknown';
         final studentId = row['student_id'] as String;
         final profile = row['profiles'] as Map<String, dynamic>?;
         final subject = row['subjects'] as Map<String, dynamic>?;
 
-        if (!grouped.containsKey(studentId)) {
-          grouped[studentId] = {
+        if (!levelGroups.containsKey(levelId)) {
+          levelGroups[levelId] = {
+            'level_id': levelId,
+            'level_name': levelName,
+            'students': <String, Map<String, dynamic>>{},
+          };
+        }
+
+        final students = levelGroups[levelId]!['students'] as Map<String, Map<String, dynamic>>;
+        
+        if (!students.containsKey(studentId)) {
+          students[studentId] = {
             'student_id': studentId,
             'profile': profile ?? {'full_name': 'Unknown Student', 'email': ''},
             'requests': <Map<String, dynamic>>[],
           };
         }
 
-        grouped[studentId]!['requests'].add({
+        (students[studentId]!['requests'] as List).add({
           'enrollment_id': row['id'],
           'subject_name': subject?['name'] ?? 'Unknown',
           'subject_color': subject?['color_hex'] ?? '#1A237E',
         });
       }
 
-      final allRequests = grouped.values.toList();
-      _totalPending = allRequests.fold(0, (sum, s) => sum + (s['requests'] as List).length);
+      // Convert to sorted list
+      final groupedRequests = levelGroups.values.map((level) {
+        final students = (level['students'] as Map<String, Map<String, dynamic>>).values.toList();
+        return {
+          'level_name': level['level_name'],
+          'students': students,
+        };
+      }).toList()
+        ..sort((a, b) => (a['level_name'] as String).compareTo(b['level_name'] as String));
+
+      int totalPending = 0;
+      for (final level in groupedRequests) {
+        for (final student in (level['students'] as List)) {
+          totalPending += (student['requests'] as List).length;
+        }
+      }
 
       if (mounted) {
         setState(() {
-          _groupedRequests = allRequests;
+          _groupedRequests = groupedRequests;
+          _totalPending = totalPending;
           _isLoading = false;
         });
       }
@@ -145,6 +175,15 @@ class _EnrollmentRequestsScreenState extends State<EnrollmentRequestsScreen> {
       );
     }
   }
+  Color _getLevelColor(String level) {
+  switch (level) {
+    case 'Form 1': return Colors.blue;
+    case 'Form 2': return Colors.teal;
+    case 'O-Level': return const Color(0xFFFF9800);
+    case 'A-Level': return Colors.purple;
+    default: return const Color(0xFF1A237E);
+  }
+}
 
   @override
   Widget build(BuildContext context) {
@@ -217,130 +256,143 @@ class _EnrollmentRequestsScreenState extends State<EnrollmentRequestsScreen> {
                       ),
                     )
                   else
-                    ..._groupedRequests.map((student) {
-                      final profile = student['profile'] as Map<String, dynamic>;
-                      final requests = student['requests'] as List<Map<String, dynamic>>;
+                    ..._groupedRequests.map((levelGroup) {
+  final levelName = levelGroup['level_name'] as String;
+  final students = levelGroup['students'] as List<Map<String, dynamic>>;
 
-                      return Container(
-                        margin: const EdgeInsets.only(bottom: 12),
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                          boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.06), blurRadius: 8)],
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // Student header
-                            Row(
-                              children: [
-                                CircleAvatar(
-                                  radius: 22,
-                                  backgroundColor: const Color(0xFF1A237E).withOpacity(0.1),
-                                  child: Text(
-                                    (profile['full_name'] as String? ?? 'S')[0].toUpperCase(),
-                                    style: const TextStyle(color: Color(0xFF1A237E), fontWeight: FontWeight.bold, fontSize: 16),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(profile['full_name'] ?? 'Student',
-                                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-                                      Text(profile['email'] ?? '',
-                                          style: const TextStyle(fontSize: 11, color: Colors.grey)),
-                                    ],
-                                  ),
-                                ),
-                                // Approve All
-                                GestureDetector(
-                                  onTap: () => _approveAll(student),
-                                  child: Container(
-                                    padding: const EdgeInsets.all(8),
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF4CAF50).withOpacity(0.1),
-                                      borderRadius: BorderRadius.circular(10),
-                                    ),
-                                    child: const Icon(Icons.check_circle, color: Color(0xFF4CAF50), size: 22),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                // Reject All
-                                GestureDetector(
-                                  onTap: () => _rejectAll(student),
-                                  child: Container(
-                                    padding: const EdgeInsets.all(8),
-                                    decoration: BoxDecoration(
-                                      color: Colors.red.withOpacity(0.1),
-                                      borderRadius: BorderRadius.circular(10),
-                                    ),
-                                    child: const Icon(Icons.cancel, color: Colors.red, size: 22),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            const Divider(height: 1),
-                            const SizedBox(height: 8),
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      // ✅ Level header
+      Padding(
+        padding: const EdgeInsets.only(top: 4, bottom: 10),
+        child: Row(
+          children: [
+            Container(
+              width: 4, height: 20,
+              decoration: BoxDecoration(
+                color: _getLevelColor(levelName),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Text(
+              levelName,
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: _getLevelColor(levelName),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: _getLevelColor(levelName).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                '${students.length} student(s)',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _getLevelColor(levelName)),
+              ),
+            ),
+          ],
+        ),
+      ),
 
-                            // Subject requests
-                            ...requests.map((req) {
-                              final subjectName = req['subject_name'] as String;
-                              final color = Color(int.parse('FF${(req['subject_color'] as String).replaceAll('#', '')}', radix: 16));
+      // ✅ Student cards under this level
+      ...students.map((student) {
+        final profile = student['profile'] as Map<String, dynamic>;
+        final requests = student['requests'] as List<Map<String, dynamic>>;
 
-                              return Container(
-                                margin: const EdgeInsets.only(bottom: 6),
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                decoration: BoxDecoration(
-                                  color: color.withOpacity(0.06),
-                                  borderRadius: BorderRadius.circular(10),
-                                  border: Border.all(color: color.withOpacity(0.2)),
-                                ),
-                                child: Row(
-                                  children: [
-                                    Container(
-                                      width: 8, height: 8,
-                                      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Text(subjectName,
-                                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: color)),
-                                    ),
-                                    GestureDetector(
-                                      onTap: () => _approveSingle(req['enrollment_id'] as String, subjectName),
-                                      child: Container(
-                                        padding: const EdgeInsets.all(4),
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFF4CAF50).withOpacity(0.1),
-                                          borderRadius: BorderRadius.circular(6),
-                                        ),
-                                        child: const Icon(Icons.check, color: Color(0xFF4CAF50), size: 16),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 6),
-                                    GestureDetector(
-                                      onTap: () => _rejectSingle(req['enrollment_id'] as String, subjectName),
-                                      child: Container(
-                                        padding: const EdgeInsets.all(4),
-                                        decoration: BoxDecoration(
-                                          color: Colors.red.withOpacity(0.1),
-                                          borderRadius: BorderRadius.circular(6),
-                                        ),
-                                        child: const Icon(Icons.close, color: Colors.red, size: 16),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            }),
-                          ],
-                        ),
-                      );
-                    }),
+        return Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.06), blurRadius: 8)],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Student header (same as before)
+              Row(
+                children: [
+                  CircleAvatar(
+                    radius: 22,
+                    backgroundColor: const Color(0xFF1A237E).withOpacity(0.1),
+                    child: Text(
+                      (profile['full_name'] as String? ?? 'S')[0].toUpperCase(),
+                      style: const TextStyle(color: Color(0xFF1A237E), fontWeight: FontWeight.bold, fontSize: 16),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(profile['full_name'] ?? 'Student', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                        Text(profile['email'] ?? '', style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                      ],
+                    ),
+                  ),
+                  GestureDetector(
+                    onTap: () => _approveAll(student),
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(color: const Color(0xFF4CAF50).withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+                      child: const Icon(Icons.check_circle, color: Color(0xFF4CAF50), size: 22),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  GestureDetector(
+                    onTap: () => _rejectAll(student),
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(color: Colors.red.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+                      child: const Icon(Icons.cancel, color: Colors.red, size: 22),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              const Divider(height: 1),
+              const SizedBox(height: 8),
+              // Subject requests (same as before)
+              ...requests.map((req) {
+                final subjectName = req['subject_name'] as String;
+                final color = Color(int.parse('FF${(req['subject_color'] as String).replaceAll('#', '')}', radix: 16));
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(color: color.withOpacity(0.06), borderRadius: BorderRadius.circular(10), border: Border.all(color: color.withOpacity(0.2))),
+                  child: Row(
+                    children: [
+                      Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(subjectName, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: color))),
+                      GestureDetector(
+                        onTap: () => _approveSingle(req['enrollment_id'] as String, subjectName),
+                        child: Container(padding: const EdgeInsets.all(4), decoration: BoxDecoration(color: const Color(0xFF4CAF50).withOpacity(0.1), borderRadius: BorderRadius.circular(6)), child: const Icon(Icons.check, color: Color(0xFF4CAF50), size: 16)),
+                      ),
+                      const SizedBox(width: 6),
+                      GestureDetector(
+                        onTap: () => _rejectSingle(req['enrollment_id'] as String, subjectName),
+                        child: Container(padding: const EdgeInsets.all(4), decoration: BoxDecoration(color: Colors.red.withOpacity(0.1), borderRadius: BorderRadius.circular(6)), child: const Icon(Icons.close, color: Colors.red, size: 16)),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+            ],
+          ),
+        );
+      }),
+      const SizedBox(height: 8),
+    ],
+  );
+}),
                 ]),
               ),
             ),

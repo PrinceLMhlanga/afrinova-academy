@@ -39,6 +39,8 @@ Future<void> joinLesson({
   required String description,
   String? meetUrl,
   DateTime? scheduledAt,  // ← Add this
+  String? levelId,
+  String? teacherTopicId,
 }) async {
   final roomId = "AfriNova-${_uuid.v4().substring(0, 8)}";
   final finalUrl = meetUrl ?? 'https://meet.ffmuc.net/$roomId';
@@ -46,6 +48,8 @@ Future<void> joinLesson({
   final response = await _client.from('live_lessons').insert({
     'teacher_id': teacherId,
     'subject_id': subjectId,
+    'level_id': levelId,
+    'teacher_topic_id': teacherTopicId,
     'topic': topic,
     'description': description,
     'room_id': roomId,

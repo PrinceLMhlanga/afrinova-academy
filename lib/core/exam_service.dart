@@ -112,6 +112,7 @@ Future<String?> createExamWithTeacherTopic({
   int totalMarks = 0,
   int passingPercentage = 50,
   String? subjectId,
+  String? levelId,
 }) async {
   final response = await _client.from('exams').insert({
     'teacher_topic_id': teacherTopicId,
@@ -122,6 +123,7 @@ Future<String?> createExamWithTeacherTopic({
     'total_marks': totalMarks,
     'passing_percentage': passingPercentage,
     'subject_id': subjectId,
+    'level_id': levelId,
     'is_published': false,
   }).select('id').single();
 

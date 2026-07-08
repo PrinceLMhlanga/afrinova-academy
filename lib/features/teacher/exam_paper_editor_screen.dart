@@ -51,6 +51,11 @@ class _ExamPaperEditorScreenState extends State<ExamPaperEditorScreen>
   String? _pendingImageData;
   String? _pendingTableData;
 
+  // ✅ ADD: Level support
+List<Map<String, dynamic>> _levels = [];
+String? _selectedLevelId;
+String? _selectedLevelName;
+
   // Toolbar states
   bool _showMathKeyboard = false;
   bool _showCircuitToolbar = false;
@@ -69,7 +74,8 @@ class _ExamPaperEditorScreenState extends State<ExamPaperEditorScreen>
   @override
 void initState() {
   super.initState();
-  _loadSubjects();
+  
+  _loadLevels();
   _loadExistingPaper();
   
   _slideController = AnimationController(
@@ -126,6 +132,40 @@ void didChangeDependencies() {
     });
   }
 
+  Future<void> _loadLevels() async {
+  try {
+    final userId = _authService.currentUserId;
+    if (userId == null) return;
+
+    final response = await Supabase.instance.client
+        .from('teacher_levels')
+        .select('level_id, levels!inner(name)')
+        .eq('teacher_id', userId);
+
+    if (mounted) setState(() => _levels = List<Map<String, dynamic>>.from(response));
+  } catch (_) {}
+}
+
+Future<void> _loadSubjectsForLevel(String levelId) async {
+  try {
+    final userId = _authService.currentUserId;
+    if (userId == null) return;
+
+    final response = await Supabase.instance.client
+        .from('teacher_subjects')
+        .select('subject_id, subjects!inner(name, color_hex, icon_name)')
+        .eq('teacher_id', userId)
+        .eq('level_id', levelId);
+
+    if (mounted) {
+      setState(() {
+        _subjects = List<Map<String, dynamic>>.from(response);
+        _selectedSubjectId = null;
+      });
+    }
+  } catch (_) {}
+}
+
   Future<void> _loadExistingPaper() async {
     final paper = widget.existingPaper;
     if (paper == null) return;
@@ -153,33 +193,20 @@ void didChangeDependencies() {
       if (mounted) {
         setState(() {
           _questions.clear();
-          final reversedQuestions = questions.reversed.toList();
-          for (final q in reversedQuestions) {
-            _questions.add(_PaperQuestion(
-              text: q['question_text'] ?? '',
-              marks: q['marks'] as int? ?? 0,
-              number: q['question_number'] as int? ?? _questions.length + 1,
-            ));
-          }
+          for (final q in questions) {
+  _questions.add(_PaperQuestion(
+    text: q['question_text'] ?? '',
+    marks: q['marks'] as int? ?? 0,
+    number: q['question_number'] as int? ?? _questions.length + 1,
+  ));
+}
+
         });
       }
     } catch (_) {}
   }
 
-  Future<void> _loadSubjects() async {
-    try {
-      final userId = _authService.currentUserId;
-      if (userId == null) return;
-
-      final mySubjects = await _teacherService.getMySubjects(userId);
-      final subjects = mySubjects
-          .where((s) => s['subjects'] != null)
-          .map((s) => s['subjects'] as Map<String, dynamic>)
-          .toList();
-
-      if (mounted) setState(() => _subjects = subjects);
-    } catch (_) {}
-  }
+  
 
   void _resetQuestionComposer() {
     _questionController.clear();
@@ -841,6 +868,7 @@ void didChangeDependencies() {
           'title': _titleController.text.trim(),
           'instructions': _instructionsController.text.trim(),
           'subject_id': _selectedSubjectId,
+          'level_id': _selectedLevelId,
           'total_marks': totalMarks,
           'duration_minutes': int.tryParse(_durationController.text) ?? 120,
           'curriculum': _curriculum,
@@ -864,6 +892,7 @@ void didChangeDependencies() {
         await _paperService.createPaper(
           creatorId: userId,
           subjectId: _selectedSubjectId!,
+          levelId: _selectedLevelId,
           title: _titleController.text.trim(),
           instructions: _instructionsController.text.trim(),
           totalMarks: totalMarks,
@@ -923,10 +952,10 @@ void didChangeDependencies() {
                     style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 8),
-                  Text(
-                    '${_curriculum} • ${_paperType}',
-                    style: const TextStyle(fontSize: 13, color: Colors.grey),
-                  ),
+                 Text(
+  '${_selectedSubjectName ?? 'Subject'} • ${_curriculum} • ${_paperType}',
+  style: const TextStyle(fontSize: 13, color: Colors.grey),
+),
                   Text(
                     'Total: ${_questions.fold<int>(0, (sum, q) => sum + q.marks)} marks • ${_durationController.text} minutes',
                     style: const TextStyle(fontSize: 13, color: Colors.grey),
@@ -1162,7 +1191,40 @@ void didChangeDependencies() {
                   ),
                 ),
                 const SizedBox(height: 12),
-                // FIXED: Wrap in a Container with constraints to prevent overflow
+
+                // ✅ Level Dropdown (full width, outside Row)
+                Container(
+                  constraints: const BoxConstraints(maxHeight: 200),
+                  child: DropdownButtonFormField<String>(
+                    value: _selectedLevelId,
+                    isExpanded: true,
+                    decoration: InputDecoration(
+                      labelText: 'Class Level',
+                      prefixIcon: const Icon(Icons.school_rounded),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      isDense: true,
+                    ),
+                    items: _levels.map((row) {
+                      final level = row['levels'] as Map<String, dynamic>;
+                      return DropdownMenuItem<String>(
+                        value: row['level_id'] as String,
+                        child: Text(level['name'] ?? ''),
+                      );
+                    }).toList(),
+                    onChanged: (v) {
+                      setState(() {
+                        _selectedLevelId = v;
+                        _selectedSubjectId = null;
+                        _subjects = [];
+                      });
+                      if (v != null) _loadSubjectsForLevel(v);
+                    },
+                    validator: (v) => v == null ? 'Select a class' : null,
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                // Subject + Curriculum Row
                 Container(
                   constraints: const BoxConstraints(maxHeight: 200),
                   child: Row(
@@ -1177,13 +1239,27 @@ void didChangeDependencies() {
                             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                             isDense: true,
                           ),
-                          items: _subjects.map<DropdownMenuItem<String>>((s) {
+                          items: _subjects.map<DropdownMenuItem<String>>((row) {
+                            final subject = row['subjects'] as Map<String, dynamic>;
                             return DropdownMenuItem<String>(
-                              value: s['id'] as String?,
-                              child: Text(s['name'] ?? ''),
+                              value: row['subject_id'] as String?,
+                              child: Text(subject['name'] ?? ''),
                             );
                           }).toList(),
-                          onChanged: (v) => setState(() => _selectedSubjectId = v),
+                          onChanged: (v) {
+  setState(() {
+    _selectedSubjectId = v;
+    // ✅ Set the subject name
+    if (v != null) {
+      final subject = _subjects.firstWhere(
+        (s) => s['subject_id'] == v || s['id'] == v,
+        orElse: () => {},
+      );
+      final subjectData = subject['subjects'] as Map<String, dynamic>?;
+      _selectedSubjectName = subjectData?['name'] ?? subject['name'];
+    }
+  });
+},
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -1649,6 +1725,7 @@ class _LiveQuestionPreview extends StatefulWidget {
 }
 
 class _LiveQuestionPreviewState extends State<_LiveQuestionPreview> {
+  final Map<String, Widget> _cachedWidgets = {};  
   @override
   void initState() {
     super.initState();
@@ -1702,6 +1779,8 @@ class _LiveQuestionPreviewState extends State<_LiveQuestionPreview> {
     
     return buffer.toString();
   }
+
+
 
   @override
   Widget build(BuildContext context) {
@@ -2067,66 +2146,32 @@ class _LiveQuestionPreviewState extends State<_LiveQuestionPreview> {
     }
 
     for (final drawing in drawings) {
-      contentWidgets.add(
-        Padding(
+      final cacheKey = 'drawing_${drawing.hashCode}';
+      if (!_cachedWidgets.containsKey(cacheKey)) {
+        _cachedWidgets[cacheKey] = Padding(
           padding: const EdgeInsets.only(top: 12, bottom: 8),
-          child: Stack(  // ✅ Wrap in Stack for remove button
-            children: [
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  border: Border.all(color: Colors.grey.shade300),
-                  borderRadius: BorderRadius.circular(8),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border.all(color: Colors.grey.shade300),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              children: [
+                const Text('Drawing', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.grey)),
+                const SizedBox(height: 8),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: Image.memory(base64Decode(drawing), fit: BoxFit.contain),
                 ),
-                child: Column(
-                  children: [
-                    const Text(
-                      'Drawing',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12,
-                        color: Colors.grey,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: Image.memory(
-                        base64Decode(drawing),
-                        fit: BoxFit.contain,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              // ✅ Remove button overlay
-              Positioned(
-                top: 8,
-                right: 8,
-                child: GestureDetector(
-                  onTap: widget.onRemoveDrawing,
-                  child: Container(
-                    padding: const EdgeInsets.all(4),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.1),
-                          blurRadius: 4,
-                        ),
-                      ],
-                    ),
-                    child: const Icon(Icons.close, size: 16, color: Colors.red),
-                  ),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-      );
+        );
+      }
+      contentWidgets.add(_cachedWidgets[cacheKey]!);
     }
 
     for (final spec in graphs) {
@@ -2164,67 +2209,36 @@ class _LiveQuestionPreviewState extends State<_LiveQuestionPreview> {
       );
     }
 
+     // ✅ Cache key for images/drawings
     for (final image in images) {
-      contentWidgets.add(
-        Padding(
+      final cacheKey = 'image_${image.hashCode}';
+      if (!_cachedWidgets.containsKey(cacheKey)) {
+        _cachedWidgets[cacheKey] = Padding(
           padding: const EdgeInsets.only(top: 12, bottom: 8),
-          child: Stack(
-            children: [
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  border: Border.all(color: Colors.grey.shade300),
-                  borderRadius: BorderRadius.circular(8),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border.all(color: Colors.grey.shade300),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              children: [
+                const Text('Inserted Image', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.grey)),
+                const SizedBox(height: 8),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: Image.memory(base64Decode(image), fit: BoxFit.contain),
                 ),
-                child: Column(
-                  children: [
-                    const Text(
-                      'Inserted Image',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12,
-                        color: Colors.grey,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: Image.memory(
-                        base64Decode(image),
-                        fit: BoxFit.contain,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Positioned(
-                top: 8,
-                right: 8,
-                child: GestureDetector(
-                  onTap: widget.onRemoveImage,
-                  child: Container(
-                    padding: const EdgeInsets.all(4),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.1),
-                          blurRadius: 4,
-                        ),
-                      ],
-                    ),
-                    child: const Icon(Icons.close, size: 16, color: Colors.red),
-                  ),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-      );
+        );
+      }
+      contentWidgets.add(_cachedWidgets[cacheKey]!);
     }
+
 
     for (final table in tables) {
       contentWidgets.add(

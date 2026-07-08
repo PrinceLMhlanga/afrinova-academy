@@ -3,6 +3,7 @@ import '../../core/teacher_service.dart';
 import '../../core/auth_service.dart';
 import 'upload_lesson_screen.dart';
 import 'upload_resource_screen.dart';
+import 'go_live_screen.dart';
 
 class TopicManagerScreen extends StatefulWidget {
   final String subjectId;
@@ -307,6 +308,15 @@ class _TopicManagerScreenState extends State<TopicManagerScreen> {
       ),
     ),
     const PopupMenuItem(
+  value: 'live',
+  child: ListTile(
+    leading: Icon(Icons.live_tv, color: Colors.red),
+    title: Text('Go Live', style: TextStyle(fontSize: 14)),
+    dense: true,
+    contentPadding: EdgeInsets.zero,
+  ),
+),
+    const PopupMenuItem(
       value: 'resource',
       child: ListTile(
         leading: Icon(Icons.attach_file, color: Color(0xFF1A237E)),
@@ -352,6 +362,21 @@ class _TopicManagerScreenState extends State<TopicManagerScreen> {
           ),
         ).then((_) => _loadTopics());
         break;
+        case 'live':
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => GoLiveScreen(
+        preSelectedLevelId: widget.levelId,
+        preSelectedLevelName: widget.levelName,
+        preSelectedSubjectId: widget.subjectId,
+        preSelectedSubjectName: widget.subjectName,
+        preSelectedTopicId: topic['id'] as String,
+        preSelectedTopicName: topicName,
+      ),
+    ),
+  ).then((_) => _loadTopics());
+  break;
       case 'resource':
         Navigator.push(
           context,

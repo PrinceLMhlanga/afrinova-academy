@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../core/auth_service.dart';
 import 'teacher_application_screen.dart';
 import '../home/home_screen.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class SignupScreen extends StatefulWidget {
   const SignupScreen({super.key});
@@ -21,8 +22,45 @@ class _SignupScreenState extends State<SignupScreen> {
   String _selectedRole = 'student';
   bool _isLoading = false;
 
+  // ✅ ADD: Level selection for students
+List<Map<String, dynamic>> _levels = [];
+String? _selectedLevelId;
+String? _selectedLevelName;
+bool _isLoadingLevels = true;
+
+@override
+void initState() {
+  super.initState();
+  _loadLevels();
+}
+
+Future<void> _loadLevels() async {
+  try {
+    final response = await Supabase.instance.client
+        .from('levels')
+        .select()
+        .order('display_order', ascending: true);
+
+    if (mounted) {
+      setState(() {
+        _levels = List<Map<String, dynamic>>.from(response);
+        _isLoadingLevels = false;
+      });
+    }
+  } catch (_) {
+    if (mounted) setState(() => _isLoadingLevels = false);
+  }
+}
+
   Future<void> _signup() async {
     if (!_formKey.currentState!.validate()) return;
+    
+    if (_selectedRole == 'student' && _selectedLevelId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select your class level'), backgroundColor: Colors.red),
+      );
+      return;
+    }
 
     setState(() => _isLoading = true);
 
@@ -34,14 +72,21 @@ class _SignupScreenState extends State<SignupScreen> {
         role: _selectedRole,
       );
 
+      // ✅ Save level to profiles for students
+      if (_selectedRole == 'student' && _selectedLevelId != null && response.user != null) {
+        await Supabase.instance.client
+            .from('profiles')
+            .update({'level_id': _selectedLevelId})
+            .eq('id', response.user!.id);
+      }
+
       if (mounted) {
         if (_selectedRole == 'teacher') {
-          // ✅ Use response.user?.id
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
               builder: (_) => TeacherApplicationScreen(
-                userId: response.user?.id ?? '',  // ✅ Fixed
+                userId: response.user?.id ?? '',
                 userEmail: _emailController.text.trim(),
                 userName: _nameController.text.trim(),
               ),
@@ -58,10 +103,7 @@ class _SignupScreenState extends State<SignupScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Signup failed: ${e.toString()}'),
-            backgroundColor: Colors.red,
-          ),
+          SnackBar(content: Text('Signup failed: ${e.toString()}'), backgroundColor: Colors.red),
         );
       }
     } finally {
@@ -202,6 +244,36 @@ class _SignupScreenState extends State<SignupScreen> {
                     ),
                   ],
                 ),
+
+                // ✅ ADD: Level selection for students
+if (_selectedRole == 'student') ...[
+  const SizedBox(height: 24),
+  const Text('Your Class Level:', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
+  const SizedBox(height: 4),
+  Text('Select the class/level you are in', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+  const SizedBox(height: 12),
+  DropdownButtonFormField<String>(
+    value: _selectedLevelId,
+    decoration: InputDecoration(
+      labelText: 'Class Level',
+      prefixIcon: const Icon(Icons.school_rounded),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+    ),
+    items: _levels.map((level) {
+      return DropdownMenuItem<String>(
+        value: level['id'] as String,
+        child: Text(level['name'] as String),
+      );
+    }).toList(),
+    onChanged: (v) {
+      setState(() {
+        _selectedLevelId = v;
+        _selectedLevelName = _levels.firstWhere((l) => l['id'] == v)['name'] as String?;
+      });
+    },
+    validator: (v) => _selectedRole == 'student' && v == null ? 'Select your class' : null,
+  ),
+],
                 
                 if (_selectedRole == 'teacher') ...[
                   const SizedBox(height: 16),
