@@ -556,7 +556,7 @@ FadeTransition(
                       ),
                       const SizedBox(width: 12),
                       const Text(
-                        'Quick Actions',
+                        'Teacher Tools',
                         style: TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.bold,
@@ -565,24 +565,7 @@ FadeTransition(
                         ),
                       ),
                       const Spacer(),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF1A237E).withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Text(
-                          '${_getActionCount()} tools',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: const Color(0xFF1A237E).withOpacity(0.7),
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ),
+                      
                     ],
                   ),
 
