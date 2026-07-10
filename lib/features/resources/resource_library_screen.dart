@@ -34,7 +34,7 @@ class _ResourceLibraryScreenState extends State<ResourceLibraryScreen> {
       final userId = _authService.currentUserId;
       if (userId == null) return;
 
-      // Get enrollments with trial + subscription info
+      // Get enrollments
       final enrollments = await Supabase.instance.client
           .from('enrollments')
           .select('id, teacher_id, subject_id, status, trial_ends_at, is_subscribed, subscription_expires_at')
@@ -69,39 +69,41 @@ class _ResourceLibraryScreenState extends State<ResourceLibraryScreen> {
         }
       }
 
-      // Get resources from enrolled teachers only
-      // Get resources from enrolled teachers only
-List<Map<String, dynamic>> resources = [];
-if (teacherIds.isNotEmpty) {
-  String? studentLevelId;
-  if (userId != null) {
-    final profile = await Supabase.instance.client
-        .from('profiles')
-        .select('level_id')
-        .eq('id', userId)
-        .maybeSingle();
-    studentLevelId = profile?['level_id'] as String?;
-  }
+      // Get student's level
+      String? studentLevelId;
+      final profile = await Supabase.instance.client
+          .from('profiles')
+          .select('level_id')
+          .eq('id', userId)
+          .maybeSingle();
+      studentLevelId = profile?['level_id'] as String?;
 
-  var query = Supabase.instance.client
-      .from('resources')
-      .select('*, subjects(name), profiles!teacher_id(full_name), levels(name)')
-      .eq('level_id', studentLevelId ?? '')
-      .inFilter('teacher_id', teacherIds.toList());
+      // Get resources
+      List<Map<String, dynamic>> resources = [];
+      if (teacherIds.isNotEmpty) {
+        var query = Supabase.instance.client
+            .from('resources')
+            .select('*, subjects(name), profiles!teacher_id(full_name), levels(name)')
+            .inFilter('teacher_id', teacherIds.toList());
 
-  final subjectFilter = _selectedSubjectId;
-  final typeFilter = _selectedType;
+        // ✅ Only add level filter if student has a level
+        if (studentLevelId != null && studentLevelId.isNotEmpty) {
+          query = query.eq('level_id', studentLevelId);
+        }
 
-  if (subjectFilter != null && subjectFilter.isNotEmpty) {
-    query = query.eq('subject_id', subjectFilter);
-  }
-  if (typeFilter != 'all') {
-    query = query.eq('resource_type', typeFilter);
-  }
+        // ✅ Apply subject filter
+        if (_selectedSubjectId != null && _selectedSubjectId!.isNotEmpty) {
+          query = query.eq('subject_id', _selectedSubjectId!);
+        }
 
-  final response = await query.order('created_at', ascending: false);
-  resources = List<Map<String, dynamic>>.from(response);
-}
+        // ✅ Apply type filter
+        if (_selectedType != 'all') {
+          query = query.eq('resource_type', _selectedType);
+        }
+
+        final response = await query.order('created_at', ascending: false);
+        resources = List<Map<String, dynamic>>.from(response);
+      }
 
       if (mounted) {
         setState(() {
@@ -120,10 +122,10 @@ if (teacherIds.isNotEmpty) {
 
   // ✅ Access check
   bool _canAccessResource(Map<String, dynamic> resource) {
-    final uploadedBy = resource['uploaded_by'] as String?;
-    if (uploadedBy == null) return false;
+    final teacherId = resource['teacher_id'] as String?;  // ✅ Changed from uploaded_by
+    if (teacherId == null) return false;
 
-    final enrollment = _enrollments[uploadedBy];
+    final enrollment = _enrollments[teacherId];
     if (enrollment == null) return false;
 
     if (enrollment['is_subscribed'] == true) {
@@ -134,6 +136,7 @@ if (teacherIds.isNotEmpty) {
       }
     }
 
+    // ✅ Check trial
     if (enrollment['is_subscribed'] != true) {
       final trialEndsAt = enrollment['trial_ends_at'] as String?;
       if (trialEndsAt != null) {
@@ -147,10 +150,10 @@ if (teacherIds.isNotEmpty) {
 
   // ✅ Status text
   String _getAccessStatus(Map<String, dynamic> resource) {
-    final uploadedBy = resource['uploaded_by'] as String?;
-    if (uploadedBy == null) return '';
+    final teacherId = resource['teacher_id'] as String?;  // ✅ Changed
+    if (teacherId == null) return '';
 
-    final enrollment = _enrollments[uploadedBy];
+    final enrollment = _enrollments[teacherId];
     if (enrollment == null) return '';
 
     if (enrollment['is_subscribed'] == true) {

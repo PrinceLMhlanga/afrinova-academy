@@ -233,6 +233,7 @@ class _UploadResourceScreenState extends State<UploadResourceScreen> {
         'teacher_topic_id': topicId,
         'teacher_id': userId,
         'level_id': _selectedLevelId,
+        'subject_id': _selectedSubjectId,
         'title': _titleController.text.trim(),
         'description': _descriptionController.text.trim().isNotEmpty
             ? _descriptionController.text.trim()
