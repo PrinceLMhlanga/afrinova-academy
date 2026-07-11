@@ -24,6 +24,7 @@ class _StudentPerformanceScreenState extends State<StudentPerformanceScreen>
   late AnimationController _animationController;
   final ProgressService _progressService = ProgressService(); // Add at top
   // Replace the subject breakdown section with:
+  List<Map<String, dynamic>> _groupedStudentList = [];
 
 
 
@@ -48,34 +49,56 @@ class _StudentPerformanceScreenState extends State<StudentPerformanceScreen>
     super.dispose();
   }
 
-  Future<void> _loadStudents() async {
+ Future<void> _loadStudents() async {
     try {
       final teacherId = Supabase.instance.client.auth.currentUser?.id;
       if (teacherId == null) return;
 
+      // ✅ Load with level info
       final response = await Supabase.instance.client
           .from('enrollments')
-          .select('student_id, profiles!student_id(id, full_name, email)')
+          .select('student_id, level_id, profiles!student_id(id, full_name, email), levels(name)')
           .eq('teacher_id', teacherId)
           .inFilter('status', ['approved', 'paid']);
 
+      // ✅ Group by level
+      final Map<String, Map<String, dynamic>> levelGroups = {};
       final seen = <String>{};
-      final uniqueStudents = <Map<String, dynamic>>[];
+
       for (final row in response) {
         final studentId = row['student_id'] as String;
-        if (!seen.contains(studentId)) {
-          seen.add(studentId);
-          uniqueStudents.add({
-            'student_id': studentId,
-            'full_name': row['profiles']?['full_name'] ?? 'Unknown',
-            'email': row['profiles']?['email'] ?? '',
-          });
+        final levelData = row['levels'] as Map<String, dynamic>?;
+        final levelName = levelData?['name'] as String? ?? 'Unknown Level';
+        final levelId = row['level_id'] as String? ?? 'unknown';
+        
+        if (seen.contains(studentId)) continue;
+        seen.add(studentId);
+
+        if (!levelGroups.containsKey(levelId)) {
+          levelGroups[levelId] = {
+            'level_name': levelName,
+            'students': <Map<String, dynamic>>[],
+          };
         }
+
+        (levelGroups[levelId]!['students'] as List).add({
+          'student_id': studentId,
+          'full_name': row['profiles']?['full_name'] ?? 'Unknown',
+          'email': row['profiles']?['email'] ?? '',
+          'level_name': levelName,
+        });
       }
+
+      // Convert to sorted list
+      final uniqueStudents = levelGroups.entries.map((entry) => {
+        'level_name': entry.key != 'unknown' ? entry.value['level_name'] : 'No Level',
+        'students': entry.value['students'] as List<Map<String, dynamic>>,
+      }).toList()
+        ..sort((a, b) => (a['level_name'] as String).compareTo(b['level_name'] as String));
 
       if (mounted) {
         setState(() {
-          _students = uniqueStudents;
+          _groupedStudentList = uniqueStudents;
           _isLoading = false;
         });
       }
@@ -395,6 +418,16 @@ Future<void> _selectStudent(Map<String, dynamic> student) async {
   }
 }
 
+Color _getLevelColor(String level) {
+  switch (level) {
+    case 'Form 1': return Colors.blue;
+    case 'Form 2': return Colors.teal;
+    case 'O-Level': return const Color(0xFFFF9800);
+    case 'A-Level': return Colors.purple;
+    default: return const Color(0xFF1A237E);
+  }
+}
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -448,71 +481,108 @@ Future<void> _selectStudent(Map<String, dynamic> student) async {
               sliver: SliverList(
                 delegate: SliverChildListDelegate([
                   // Student selector
-                  FadeTransition(
-                    opacity: _animationController,
-                    child: Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(16),
-                        boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.08), blurRadius: 10)],
-                      ),
-                      child: Column(
+                  // Student selector
+FadeTransition(
+  opacity: _animationController,
+  child: Container(
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.08), blurRadius: 10)],
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('Select Student', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF1A237E))),
+        const SizedBox(height: 12),
+        _isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : _groupedStudentList.isEmpty
+                ? const Text('No students enrolled yet', style: TextStyle(color: Colors.grey))
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: _groupedStudentList.map((levelGroup) {
+                      final levelName = levelGroup['level_name'] as String;
+                      final students = levelGroup['students'] as List<Map<String, dynamic>>;
+                      
+                      return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text('Select Student', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF1A237E))),
-                          const SizedBox(height: 12),
-                          _isLoading
-                              ? const Center(child: CircularProgressIndicator())
-                              : _students.isEmpty
-                                  ? const Text('No students enrolled yet', style: TextStyle(color: Colors.grey))
-                                  : Wrap(
-                                      spacing: 8,
-                                      runSpacing: 8,
-                                      children: _students.map((student) {
-                                        final isSelected = _selectedStudent?['student_id'] == student['student_id'];
-                                        return GestureDetector(
-                                          onTap: () => _selectStudent(student),
-                                          child: Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                                            decoration: BoxDecoration(
-                                              color: isSelected ? const Color(0xFF1A237E) : Colors.grey.shade100,
-                                              borderRadius: BorderRadius.circular(20),
-                                            ),
-                                            child: Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                CircleAvatar(
-                                                  radius: 14,
-                                                  backgroundColor: isSelected ? Colors.white24 : const Color(0xFF1A237E).withOpacity(0.1),
-                                                  child: Text(
-                                                    (student['full_name'] as String)[0].toUpperCase(),
-                                                    style: TextStyle(
-                                                      color: isSelected ? Colors.white : const Color(0xFF1A237E),
-                                                      fontWeight: FontWeight.bold,
-                                                      fontSize: 12,
-                                                    ),
-                                                  ),
-                                                ),
-                                                const SizedBox(width: 8),
-                                                Text(
-                                                  student['full_name'] ?? '',
-                                                  style: TextStyle(
-                                                    color: isSelected ? Colors.white : Colors.black87,
-                                                    fontWeight: FontWeight.w500,
-                                                    fontSize: 13,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
+                          // Level label
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4, bottom: 6),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 4, height: 16,
+                                  decoration: BoxDecoration(
+                                    color: _getLevelColor(levelName),
+                                    borderRadius: BorderRadius.circular(2),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(levelName,
+                                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: _getLevelColor(levelName))),
+                                const SizedBox(width: 8),
+                                Text('${students.length} student(s)',
+                                    style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+                              ],
+                            ),
+                          ),
+                          // Students in this level
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: students.map((student) {
+                              final isSelected = _selectedStudent?['student_id'] == student['student_id'];
+                              return GestureDetector(
+                                onTap: () => _selectStudent(student),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                                  decoration: BoxDecoration(
+                                    color: isSelected ? const Color(0xFF1A237E) : Colors.grey.shade100,
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      CircleAvatar(
+                                        radius: 14,
+                                        backgroundColor: isSelected ? Colors.white24 : _getLevelColor(levelName).withOpacity(0.15),
+                                        child: Text(
+                                          (student['full_name'] as String)[0].toUpperCase(),
+                                          style: TextStyle(
+                                            color: isSelected ? Colors.white : _getLevelColor(levelName),
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 12,
                                           ),
-                                        );
-                                      }).toList(),
-                                    ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        student['full_name'] ?? '',
+                                        style: TextStyle(
+                                          color: isSelected ? Colors.white : Colors.black87,
+                                          fontWeight: FontWeight.w500,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                          const SizedBox(height: 8),
                         ],
-                      ),
-                    ),
+                      );
+                    }).toList(),
                   ),
+      ],
+    ),
+  ),
+),
 
                   if (_selectedStudent != null) ...[
                     const SizedBox(height: 20),

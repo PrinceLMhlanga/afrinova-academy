@@ -63,13 +63,21 @@ class _QuestionBankEntryScreenState extends State<QuestionBankEntryScreen> {
     }
   }
 
-  Future<void> _loadTopics(String subjectId) async {
+ Future<void> _loadTopics() async {
+    if (_selectedSubjectId == null) return;
+
     try {
-      final response = await Supabase.instance.client
+      var query = Supabase.instance.client
           .from('topics')
           .select()
-          .eq('subject_id', subjectId)
-          .order('display_order', ascending: true);
+          .eq('subject_id', _selectedSubjectId!);
+
+      // ✅ Put level filter before order
+      if (_selectedLevelId != null && _selectedLevelId!.isNotEmpty) {
+        query = query.eq('level_id', _selectedLevelId!);
+      }
+
+      final response = await query.order('display_order', ascending: true);
 
       if (mounted) {
         setState(() => _topics = List<Map<String, dynamic>>.from(response));
@@ -78,7 +86,6 @@ class _QuestionBankEntryScreenState extends State<QuestionBankEntryScreen> {
       debugPrint('Error loading topics: $e');
     }
   }
-
   void _parseQuestions() {
     String text = _textController.text.trim();
     setState(() => _parseError = '');
@@ -214,7 +221,7 @@ class _QuestionBankEntryScreenState extends State<QuestionBankEntryScreen> {
         await Supabase.instance.client.from('question_bank').insert({
           'subject_id': _selectedSubjectId,
           'level_id': _selectedLevelId,
-          'topic_id': _selectedTopicId,
+          'topic_id': q.topicId ?? _selectedTopicId,
           'question_text': q.question,
           'option_a': q.optionA,
           'option_b': q.optionB,
@@ -291,9 +298,12 @@ class _QuestionBankEntryScreenState extends State<QuestionBankEntryScreen> {
                             value: s['id'] as String, child: Text(s['name'] ?? '', style: const TextStyle(fontSize: 13)),
                           )).toList(),
                           onChanged: (v) {
-                            setState(() { _selectedSubjectId = v; _selectedTopicId = null; });
-                            if (v != null) _loadTopics(v);
-                          },
+  setState(() { 
+    _selectedSubjectId = v; 
+    _selectedTopicId = null; 
+  });
+  if (v != null) _loadTopics();  // ✅ No parameter needed
+},
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -304,7 +314,13 @@ class _QuestionBankEntryScreenState extends State<QuestionBankEntryScreen> {
                           items: _levels.map((l) => DropdownMenuItem<String>(
                             value: l['id'] as String, child: Text(l['name'] ?? '', style: const TextStyle(fontSize: 13)),
                           )).toList(),
-                          onChanged: (v) => setState(() => _selectedLevelId = v),
+                          onChanged: (v) {
+  setState(() {
+    _selectedLevelId = v;
+    _selectedTopicId = null;
+  });
+  _loadTopics();  // ✅ Reload topics for new level
+},
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -478,19 +494,21 @@ Row(
                           ),
                         ),
                         const SizedBox(height: 8),
-                        ..._parsedQuestions.asMap().entries.map((entry) {
-                          final index = entry.key;
-                          final q = entry.value;
-                          return _QuestionCard(
-                            index: index + 1,
-                            question: q,
-                            onCorrectChanged: (v) => setState(() => _parsedQuestions[index].correctAnswer = v),
-                            onDifficultyChanged: (v) => setState(() => _parsedQuestions[index].difficulty = v),
-                            onAddDiagram: () => _pickDiagram(index),
-                            onRemoveDiagram: () => setState(() => _parsedQuestions[index].diagramUrl = null),
-                            onRemove: () => setState(() => _parsedQuestions.removeAt(index)),
-                          );
-                        }),
+                       ..._parsedQuestions.asMap().entries.map((entry) {
+  final index = entry.key;
+  final q = entry.value;
+  return _QuestionCard(
+    index: index + 1,
+    question: q,
+    topics: _topics,  // ✅ Pass topics list
+    onCorrectChanged: (v) => setState(() => _parsedQuestions[index].correctAnswer = v),
+    onDifficultyChanged: (v) => setState(() => _parsedQuestions[index].difficulty = v),
+    onTopicChanged: (v) => setState(() => _parsedQuestions[index].topicId = v),  // ✅
+    onAddDiagram: () => _pickDiagram(index),
+    onRemoveDiagram: () => setState(() => _parsedQuestions[index].diagramUrl = null),
+    onRemove: () => setState(() => _parsedQuestions[index].topicId = _parsedQuestions[index].topicId ?? _selectedTopicId),
+  );
+}),
                       ],
                     ],
                   ),
@@ -515,20 +533,23 @@ class _QuestionCard extends StatelessWidget {
   final int index;
   final _ParsedQuestion question;
   final ValueChanged<String> onCorrectChanged;
-  final ValueChanged<String> onDifficultyChanged; // NEW
+  final ValueChanged<String> onDifficultyChanged;
+  final ValueChanged<String?> onTopicChanged;  // ✅ New
   final VoidCallback onAddDiagram;
   final VoidCallback onRemoveDiagram;
   final VoidCallback onRemove;
+  final List<Map<String, dynamic>> topics;  // ✅ Topics list from parent
 
   const _QuestionCard({
     required this.index,
     required this.question,
     required this.onCorrectChanged,
-    required this.onDifficultyChanged, // NEW
-
+    required this.onDifficultyChanged,
+    required this.onTopicChanged,  // ✅
     required this.onAddDiagram,
     required this.onRemoveDiagram,
     required this.onRemove,
+    required this.topics,  // ✅
   });
 
   @override
@@ -632,74 +653,111 @@ class _QuestionCard extends StatelessWidget {
 
             // Correct answer + Diagram button
             // Correct answer + Difficulty + Diagram button
-Row(
+// Correct answer + Difficulty + Topic + Diagram button
+Column(
   children: [
-    Expanded(
-      flex: 2,
-      child: DropdownButtonFormField<String>(
-        value: question.correctAnswer.isNotEmpty ? question.correctAnswer : null,
-        decoration: InputDecoration(
-          labelText: 'Correct Answer',
-          labelStyle: TextStyle(
-            color: hasMissingAnswer ? Colors.orange : Colors.grey.shade600,
-            fontSize: 12,
-          ),
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-          isDense: true,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        ),
-        items: ['A', 'B', 'C', 'D'].map((a) => DropdownMenuItem(value: a, child: Text(a))).toList(),
-        onChanged: (v) => onCorrectChanged(v ?? ''),
-      ),
-    ),
-    const SizedBox(width: 8),
-    Expanded(
-      flex: 1,
-      child: DropdownButtonFormField<String>(
-        value: question.difficulty,
-        decoration:  InputDecoration(
-          labelText: 'Difficulty',
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-          isDense: true,
-          contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        ),
-        items: const [
-          DropdownMenuItem(value: 'easy', child: Text('Easy', style: TextStyle(fontSize: 12))),
-          DropdownMenuItem(value: 'medium', child: Text('Medium', style: TextStyle(fontSize: 12))),
-          DropdownMenuItem(value: 'hard', child: Text('Hard', style: TextStyle(fontSize: 12))),
-        ],
-        onChanged: (v) => onDifficultyChanged(v ?? 'medium'),
-      ),
-    ),
-    const SizedBox(width: 8),
-    GestureDetector(
-      onTap: onAddDiagram,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-        decoration: BoxDecoration(
-          color: question.diagramUrl != null ? Colors.green.withOpacity(0.1) : Colors.grey.shade100,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: question.diagramUrl != null ? Colors.green : Colors.grey.shade300),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.add_photo_alternate,
-              size: 18,
-              color: question.diagramUrl != null ? Colors.green : Colors.grey.shade600,
-            ),
-            const SizedBox(width: 4),
-            Text(
-              'Diagram',
-              style: TextStyle(
+    // Row 1: Correct Answer + Difficulty
+    Row(
+      children: [
+        Expanded(
+          flex: 2,
+          child: DropdownButtonFormField<String>(
+            value: question.correctAnswer.isNotEmpty ? question.correctAnswer : null,
+            decoration: InputDecoration(
+              labelText: 'Correct Answer',
+              labelStyle: TextStyle(
+                color: hasMissingAnswer ? Colors.orange : Colors.grey.shade600,
                 fontSize: 12,
-                color: question.diagramUrl != null ? Colors.green : Colors.grey.shade600,
               ),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             ),
-          ],
+            items: ['A', 'B', 'C', 'D'].map((a) => DropdownMenuItem(value: a, child: Text(a))).toList(),
+            onChanged: (v) => onCorrectChanged(v ?? ''),
+          ),
         ),
-      ),
+        const SizedBox(width: 8),
+        Expanded(
+          flex: 1,
+          child: DropdownButtonFormField<String>(
+            value: question.difficulty,
+            decoration: InputDecoration(
+              labelText: 'Difficulty',
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            ),
+            items: const [
+              DropdownMenuItem(value: 'easy', child: Text('Easy', style: TextStyle(fontSize: 12))),
+              DropdownMenuItem(value: 'medium', child: Text('Medium', style: TextStyle(fontSize: 12))),
+              DropdownMenuItem(value: 'hard', child: Text('Hard', style: TextStyle(fontSize: 12))),
+            ],
+            onChanged: (v) => onDifficultyChanged(v ?? 'medium'),
+          ),
+        ),
+      ],
+    ),
+    const SizedBox(height: 8),
+    // Row 2: Topic + Diagram
+    Row(
+      children: [
+        Expanded(
+          flex: 3,
+          child: DropdownButtonFormField<String>(
+            value: question.topicId,
+            decoration: InputDecoration(
+              labelText: 'Topic',
+              labelStyle: TextStyle(
+                color: question.topicId == null ? Colors.orange : Colors.grey.shade600,
+                fontSize: 12,
+              ),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            ),
+            items: [
+              const DropdownMenuItem<String>(value: null, child: Text('Select topic...', style: TextStyle(fontSize: 12))),
+              // ✅ Topics list comes from parent
+              ...topics.map((t) => DropdownMenuItem<String>(
+                value: t['id'] as String,
+                child: Text(t['name'] ?? '', style: const TextStyle(fontSize: 12)),
+              )),
+            ],
+            onChanged: (v) => onTopicChanged(v),
+          ),
+        ),
+        const SizedBox(width: 8),
+        GestureDetector(
+          onTap: onAddDiagram,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            decoration: BoxDecoration(
+              color: question.diagramUrl != null ? Colors.green.withOpacity(0.1) : Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: question.diagramUrl != null ? Colors.green : Colors.grey.shade300),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.add_photo_alternate,
+                  size: 18,
+                  color: question.diagramUrl != null ? Colors.green : Colors.grey.shade600,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  'Diagram',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: question.diagramUrl != null ? Colors.green : Colors.grey.shade600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     ),
   ],
 ),
@@ -746,6 +804,7 @@ class _ParsedQuestion {
   String optionD;
   String correctAnswer;
   String difficulty;
+  String? topicId;       // ✅ Per-question topic
   String? diagramUrl;
 
   _ParsedQuestion({
@@ -756,6 +815,7 @@ class _ParsedQuestion {
     required this.optionD,
     required this.correctAnswer,
     required this.difficulty,
+    this.topicId,
     this.diagramUrl,
   });
 }

@@ -4,6 +4,8 @@ import '../teacher/teacher_dashboard.dart';
 import 'settlements_screen.dart';
 import 'manage_platform_subjects_screen.dart';
 import 'question_bank_entry_screen.dart';
+import 'manage_users_screen.dart';
+import 'platform_settings_screen.dart';
 
 class AdminDashboard extends StatelessWidget {
   final String userName;
@@ -41,18 +43,14 @@ class AdminDashboard extends StatelessWidget {
           title: 'Platform Settings',
           subtitle: 'Manage pricing, commission rates, and integrations',
           color: const Color(0xFF607D8B),
-          onTap: () {
-            // Future: Platform settings screen
-          },
+          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const PlatformSettingsScreen())),
         ),
         _AdminAction(
           icon: Icons.people_rounded,
           title: 'All Users',
           subtitle: 'View and manage all students and teachers',
           color: const Color(0xFF3F51B5),
-          onTap: () {
-            // Future: User management screen
-          },
+          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ManageUsersScreen())),
           
         ),
         _AdminAction(

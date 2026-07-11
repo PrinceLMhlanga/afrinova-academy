@@ -19,6 +19,8 @@ class ManageTopicsScreen extends StatefulWidget {
 
 class _ManageTopicsScreenState extends State<ManageTopicsScreen> {
   List<Map<String, dynamic>> _topics = [];
+  List<Map<String, dynamic>> _levels = [];
+  String? _selectedLevelId;
   bool _isLoading = true;
 
   final _topicController = TextEditingController();
@@ -27,16 +29,36 @@ class _ManageTopicsScreenState extends State<ManageTopicsScreen> {
   @override
   void initState() {
     super.initState();
+    _loadLevels();
     _loadTopics();
+  }
+
+  Future<void> _loadLevels() async {
+    try {
+      final response = await Supabase.instance.client
+          .from('levels')
+          .select()
+          .order('display_order', ascending: true);
+
+      if (mounted) setState(() => _levels = List<Map<String, dynamic>>.from(response));
+    } catch (e) {
+      debugPrint('Error loading levels: $e');
+    }
   }
 
   Future<void> _loadTopics() async {
     try {
-      final response = await Supabase.instance.client
+      var query = Supabase.instance.client
           .from('topics')
           .select()
-          .eq('subject_id', widget.subjectId)
-          .order('display_order', ascending: true);
+          .eq('subject_id', widget.subjectId);
+
+      // ✅ Filter by level if selected
+      if (_selectedLevelId != null) {
+        query = query.eq('level_id', _selectedLevelId!);
+      }
+
+      final response = await query.order('display_order', ascending: true);
 
       if (mounted) {
         setState(() {
@@ -53,11 +75,18 @@ class _ManageTopicsScreenState extends State<ManageTopicsScreen> {
   Future<void> _addTopic() async {
     final name = _topicController.text.trim();
     if (name.isEmpty) return;
+    if (_selectedLevelId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select a level first'), backgroundColor: Colors.red),
+      );
+      return;
+    }
 
     try {
       await Supabase.instance.client.from('topics').insert({
         'name': name,
         'subject_id': widget.subjectId,
+        'level_id': _selectedLevelId, // ✅ Save level
         'description': _descriptionController.text.trim().isNotEmpty
             ? _descriptionController.text.trim()
             : null,
@@ -170,6 +199,8 @@ class _ManageTopicsScreenState extends State<ManageTopicsScreen> {
     }
   }
 
+  // ... rest of methods stay the same (_editTopic, _deleteTopic)
+
   @override
   void dispose() {
     _topicController.dispose();
@@ -187,6 +218,37 @@ class _ManageTopicsScreenState extends State<ManageTopicsScreen> {
       ),
       body: Column(
         children: [
+          // ✅ Level filter
+          Container(
+            padding: const EdgeInsets.all(16),
+            color: Colors.white,
+            child: DropdownButtonFormField<String>(
+              value: _selectedLevelId,
+              decoration: InputDecoration(
+                labelText: 'Filter by Level',
+                prefixIcon: const Icon(Icons.school_rounded),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                isDense: true,
+              ),
+              items: [
+                const DropdownMenuItem<String>(value: null, child: Text('All Levels')),
+                ..._levels.map((l) => DropdownMenuItem<String>(
+                  value: l['id'] as String,
+                  child: Text(l['name'] ?? ''),
+                )),
+              ],
+              onChanged: (v) {
+                setState(() {
+                  _selectedLevelId = v;
+                  _topics = [];
+                  _isLoading = true;
+                });
+                _loadTopics();
+              },
+            ),
+          ),
+          const Divider(height: 1),
+
           // Add topic bar
           Container(
             padding: const EdgeInsets.all(16),
@@ -197,17 +259,18 @@ class _ManageTopicsScreenState extends State<ManageTopicsScreen> {
                   child: TextFormField(
                     controller: _topicController,
                     decoration: InputDecoration(
-                      hintText: 'Enter topic name...',
+                      hintText: _selectedLevelId == null ? 'Select a level first...' : 'Enter topic name...',
                       prefixIcon: Icon(Icons.topic_rounded, color: widget.subjectColor),
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                       isDense: true,
                     ),
+                    enabled: _selectedLevelId != null, // ✅ Disable if no level selected
                     onFieldSubmitted: (_) => _addTopic(),
                   ),
                 ),
                 const SizedBox(width: 10),
                 ElevatedButton.icon(
-                  onPressed: _addTopic,
+                  onPressed: _selectedLevelId != null ? _addTopic : null,
                   icon: const Icon(Icons.add, size: 18),
                   label: const Text('Add'),
                   style: ElevatedButton.styleFrom(
@@ -215,6 +278,7 @@ class _ManageTopicsScreenState extends State<ManageTopicsScreen> {
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    disabledBackgroundColor: Colors.grey.shade300,
                   ),
                 ),
               ],
@@ -222,7 +286,7 @@ class _ManageTopicsScreenState extends State<ManageTopicsScreen> {
           ),
           const Divider(height: 1),
 
-          // Topics list
+          // Topics list (same as before)
           Expanded(
             child: _isLoading
                 ? Center(child: CircularProgressIndicator(color: widget.subjectColor))
@@ -233,10 +297,15 @@ class _ManageTopicsScreenState extends State<ManageTopicsScreen> {
                           children: [
                             Icon(Icons.topic_outlined, size: 64, color: Colors.grey.shade300),
                             const SizedBox(height: 16),
-                            const Text('No topics yet', style: TextStyle(color: Colors.grey, fontSize: 16)),
+                            Text(
+                              _selectedLevelId == null ? 'Select a level to view topics' : 'No topics for this level',
+                              style: const TextStyle(color: Colors.grey, fontSize: 16),
+                            ),
                             const SizedBox(height: 4),
-                            Text('Add topics for ${widget.subjectName}',
-                                style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                            Text(
+                              _selectedLevelId == null ? '' : 'Add topics for ${widget.subjectName}',
+                              style: const TextStyle(color: Colors.grey, fontSize: 13),
+                            ),
                           ],
                         ),
                       )
@@ -257,6 +326,11 @@ class _ManageTopicsScreenState extends State<ManageTopicsScreen> {
                         },
                         itemBuilder: (context, index) {
                           final topic = _topics[index];
+                          final levelName = _levels.firstWhere(
+                            (l) => l['id'] == topic['level_id'],
+                            orElse: () => {'name': ''},
+                          )['name'] as String?;
+
                           return Card(
                             key: Key(topic['id'] as String),
                             margin: const EdgeInsets.only(bottom: 8),
@@ -276,9 +350,23 @@ class _ManageTopicsScreenState extends State<ManageTopicsScreen> {
                                 ),
                               ),
                               title: Text(topic['name'] ?? '', style: const TextStyle(fontWeight: FontWeight.w600)),
-                              subtitle: topic['description'] != null && (topic['description'] as String).isNotEmpty
-                                  ? Text(topic['description'], style: const TextStyle(fontSize: 12, color: Colors.grey))
-                                  : null,
+                              subtitle: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  if (topic['description'] != null && (topic['description'] as String).isNotEmpty)
+                                    Text(topic['description'], style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                                  if (levelName != null && levelName.isNotEmpty)
+                                    Container(
+                                      margin: const EdgeInsets.only(top: 2),
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                      decoration: BoxDecoration(
+                                        color: _getLevelColor(levelName).withOpacity(0.1),
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: Text(levelName, style: TextStyle(fontSize: 10, color: _getLevelColor(levelName))),
+                                    ),
+                                ],
+                              ),
                               trailing: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
@@ -304,5 +392,15 @@ class _ManageTopicsScreenState extends State<ManageTopicsScreen> {
         ],
       ),
     );
+  }
+
+  Color _getLevelColor(String level) {
+    switch (level) {
+      case 'Form 1': return Colors.blue;
+      case 'Form 2': return Colors.teal;
+      case 'O-Level': return const Color(0xFFFF9800);
+      case 'A-Level': return Colors.purple;
+      default: return Colors.grey;
+    }
   }
 }

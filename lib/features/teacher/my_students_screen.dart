@@ -30,9 +30,10 @@ class _MyStudentsScreenState extends State<MyStudentsScreen> {
       final userId = _authService.currentUserId;
       if (userId == null) return;
 
+      // ✅ Load with level info
       final response = await Supabase.instance.client
           .from('enrollments')
-          .select('id, status, approved_at, student_id, subject_id, subjects(name, color_hex)')
+          .select('id, status, level_id, approved_at, student_id, subject_id, subjects(name, color_hex), levels(name)')
           .eq('teacher_id', userId)
           .inFilter('status', ['paid', 'approved'])
           .order('approved_at', ascending: false);
@@ -50,15 +51,36 @@ class _MyStudentsScreenState extends State<MyStudentsScreen> {
         }
       }
 
-      // Group by student_id
-      final Map<String, Map<String, dynamic>> grouped = {};
+      // ✅ Group by level → student
+      final Map<String, Map<String, dynamic>> levelGroups = {};
+      int totalStudents = 0;
+      int totalPaid = 0;
+      final allStudentIds = <String>{};
+
       for (final row in response) {
+        final levelData = row['levels'] as Map<String, dynamic>?;
+        final levelName = levelData?['name'] as String? ?? 'Unknown Level';
+        final levelId = row['level_id'] as String? ?? 'unknown';
         final studentId = row['student_id'] as String;
         final status = row['status'] as String;
         final subject = row['subjects'] as Map<String, dynamic>?;
 
-        if (!grouped.containsKey(studentId)) {
-          grouped[studentId] = {
+        allStudentIds.add(studentId);
+
+        if (!levelGroups.containsKey(levelId)) {
+          levelGroups[levelId] = {
+            'level_id': levelId,
+            'level_name': levelName,
+            'students': <String, Map<String, dynamic>>{},
+            'subject_counts': <String, int>{},
+          };
+        }
+
+        final students = levelGroups[levelId]!['students'] as Map<String, Map<String, dynamic>>;
+        final subjectCounts = levelGroups[levelId]!['subject_counts'] as Map<String, int>;
+
+        if (!students.containsKey(studentId)) {
+          students[studentId] = {
             'student_id': studentId,
             'profile': profiles[studentId] ?? {'full_name': 'Unknown Student'},
             'subjects': <Map<String, dynamic>>[],
@@ -66,37 +88,45 @@ class _MyStudentsScreenState extends State<MyStudentsScreen> {
           };
         }
 
-        grouped[studentId]!['subjects'].add({
+        students[studentId]!['subjects'].add({
           'enrollment_id': row['id'],
           'subject_name': subject?['name'] ?? 'Unknown',
           'subject_color': subject?['color_hex'] ?? '#1A237E',
           'status': status,
         });
 
-        // If ANY subject is paid, mark student as paid
+        // Track subject counts per level
+        final subjectName = subject?['name'] ?? 'Unknown';
+        subjectCounts[subjectName] = (subjectCounts[subjectName] ?? 0) + 1;
+
         if (status == 'paid') {
-          grouped[studentId]!['isPaid'] = true;
+          students[studentId]!['isPaid'] = true;
         }
       }
 
-      // Calculate stats
-      final allStudents = grouped.values.toList();
-      _totalStudents = allStudents.length;
-      _totalPaid = allStudents.where((s) => s['isPaid'] == true).length;
-
-      // Per-subject stats
-      final subjectStats = <String, int>{};
-      for (final student in allStudents) {
-        for (final subject in (student['subjects'] as List<Map<String, dynamic>>)) {
-          final name = subject['subject_name'] as String;
-          subjectStats[name] = (subjectStats[name] ?? 0) + 1;
-        }
+      totalStudents = allStudentIds.length;
+      for (final level in levelGroups.values) {
+        final students = level['students'] as Map<String, Map<String, dynamic>>;
+        totalPaid += students.values.where((s) => s['isPaid'] == true).length;
       }
+
+      // Convert to sorted list
+      final groupedStudents = levelGroups.values.map((level) {
+        final students = (level['students'] as Map<String, Map<String, dynamic>>).values.toList();
+        final subjectCounts = level['subject_counts'] as Map<String, int>;
+        return {
+          'level_name': level['level_name'],
+          'students': students,
+          'subject_counts': subjectCounts,
+        };
+      }).toList()
+        ..sort((a, b) => (a['level_name'] as String).compareTo(b['level_name'] as String));
 
       if (mounted) {
         setState(() {
-          _groupedStudents = allStudents;
-          _subjectStats = subjectStats;
+          _groupedStudents = groupedStudents;
+          _totalStudents = totalStudents;
+          _totalPaid = totalPaid;
           _isLoading = false;
         });
       }
@@ -174,6 +204,16 @@ Future<void> _removeStudentCompletely(String studentId, String studentName) asyn
   }
 }
 
+Color _getLevelColor(String level) {
+  switch (level) {
+    case 'Form 1': return Colors.blue;
+    case 'Form 2': return Colors.teal;
+    case 'O-Level': return const Color(0xFFFF9800);
+    case 'A-Level': return Colors.purple;
+    default: return const Color(0xFF1A237E);
+  }
+}
+
 @override
 Widget build(BuildContext context) {
   return Scaffold(
@@ -232,42 +272,7 @@ Widget build(BuildContext context) {
 
                 const SizedBox(height: 16),
 
-                // Per-subject stats
-                if (_subjectStats.isNotEmpty)
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    margin: const EdgeInsets.only(bottom: 16),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.06), blurRadius: 8)],
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('By Subject',
-                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF1A237E))),
-                        const SizedBox(height: 10),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: _subjectStats.entries.map((entry) {
-                            return Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                              decoration: BoxDecoration(
-                                color: Colors.grey.shade100,
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: Text('${entry.key}: ${entry.value} students',
-                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500)),
-                            );
-                          }).toList(),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                // Student list
+                // Student list grouped by level
                 if (_isLoading)
                   const Center(child: Padding(
                     padding: EdgeInsets.all(40),
@@ -279,205 +284,181 @@ Widget build(BuildContext context) {
                     child: Text('No students yet', style: TextStyle(color: Colors.grey)),
                   ))
                 else
-                  ..._groupedStudents.map((student) {
-                    final profile = student['profile'] as Map<String, dynamic>;
-                    final subjects = student['subjects'] as List<Map<String, dynamic>>;
-                    final isPaidOverall = student['isPaid'] as bool;
+                  ..._groupedStudents.map((levelGroup) {
+                    final levelName = levelGroup['level_name'] as String;
+                    final students = levelGroup['students'] as List<Map<String, dynamic>>;
+                    final subjectCounts = levelGroup['subject_counts'] as Map<String, int>;
 
-                    return Container(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(16),
-                        boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.06), blurRadius: 8)],
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          // Student header
-                          Row(
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Level header card
+                        Container(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: _getLevelColor(levelName).withOpacity(0.08),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: _getLevelColor(levelName).withOpacity(0.3)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              CircleAvatar(
-                                radius: 22,
-                                backgroundColor: const Color(0xFF1A237E).withOpacity(0.1),
-                                child: Text(
-                                  (profile['full_name'] as String? ?? 'S')[0].toUpperCase(),
-                                  style: const TextStyle(color: Color(0xFF1A237E), fontWeight: FontWeight.bold, fontSize: 16),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(profile['full_name'] ?? 'Student',
-                                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-                                    Text(profile['email'] ?? '',
-                                        style: const TextStyle(fontSize: 11, color: Colors.grey)),
-                                  ],
-                                ),
-                              ),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: isPaidOverall
-                                      ? const Color(0xFF4CAF50).withOpacity(0.1)
-                                      : Colors.orange.withOpacity(0.1),
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: Text(
-                                  isPaidOverall ? 'Paid ✅' : 'Unpaid',
-                                  style: TextStyle(
-                                    color: isPaidOverall ? const Color(0xFF4CAF50) : Colors.orange,
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 11,
+                              Row(
+                                children: [
+                                  Container(
+                                    width: 4, height: 20,
+                                    decoration: BoxDecoration(
+                                      color: _getLevelColor(levelName),
+                                      borderRadius: BorderRadius.circular(2),
+                                    ),
                                   ),
-                                ),
-                              ),
-                              const SizedBox(width: 6),
-                              // Analytics
-                              GestureDetector(
-                                onTap: () {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(builder: (_) => const StudentPerformanceScreen()),
-                                  );
-                                },
-                                child: Container(
-                                  padding: const EdgeInsets.all(6),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF1A237E).withOpacity(0.1),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: const Icon(Icons.analytics_outlined, size: 18, color: Color(0xFF1A237E)),
-                                ),
-                              ),
-                              const SizedBox(width: 4),
-                              // More menu
-                              PopupMenuButton<String>(
-                                padding: EdgeInsets.zero,
-                                icon: Container(
-                                  padding: const EdgeInsets.all(6),
-                                  decoration: BoxDecoration(
-                                    color: Colors.grey.withOpacity(0.1),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: const Icon(Icons.more_vert, size: 18, color: Colors.grey),
-                                ),
-                                onSelected: (action) {
-                                  if (action == 'remove_all') {
-                                    _removeStudentCompletely(
-                                      student['student_id'] as String,
-                                      profile['full_name'] ?? 'Student',
-                                    );
-                                  }
-                                },
-                                itemBuilder: (ctx) => [
-                                  const PopupMenuItem(
-                                    value: 'remove_all',
-                                    child: Row(children: [
-                                      Icon(Icons.remove_circle_outline, size: 18, color: Colors.red),
-                                      SizedBox(width: 8),
-                                      Text('Remove from all subjects', style: TextStyle(color: Colors.red)),
-                                    ]),
+                                  const SizedBox(width: 10),
+                                  Text(levelName,
+                                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _getLevelColor(levelName))),
+                                  const Spacer(),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: _getLevelColor(levelName).withOpacity(0.15),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Text('${students.length} students',
+                                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _getLevelColor(levelName))),
                                   ),
                                 ],
                               ),
+                              if (subjectCounts.isNotEmpty) ...[
+                                const SizedBox(height: 10),
+                                Wrap(
+                                  spacing: 6,
+                                  runSpacing: 6,
+                                  children: subjectCounts.entries.map((entry) {
+                                    return Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: Colors.grey.shade200),
+                                      ),
+                                      child: Text('${entry.key}: ${entry.value}',
+                                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500)),
+                                    );
+                                  }).toList(),
+                                ),
+                              ],
                             ],
                           ),
+                        ),
 
-                          const SizedBox(height: 12),
-                          const Divider(height: 1),
-                          const SizedBox(height: 8),
+                        // Student cards under this level
+                        ...students.map((student) {
+                          final profile = student['profile'] as Map<String, dynamic>;
+                          final subjects = student['subjects'] as List<Map<String, dynamic>>;
+                          final isPaidOverall = student['isPaid'] as bool;
 
-                          // Subjects list with actions
-                        // Subjects list - Simplified (no manual paid/unpaid buttons)
-Wrap(
-  spacing: 6,
-  runSpacing: 6,
-  children: subjects.map((sub) {
-    final subjectName = sub['subject_name'] as String;
-    final subjectStatus = sub['status'] as String;
-    final enrollmentId = sub['enrollment_id'] as String;
-    final color = Color(int.parse('FF${(sub['subject_color'] as String).replaceAll('#', '')}', radix: 16));
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 10, left: 8),
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(14),
+                              boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.04), blurRadius: 6)],
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    CircleAvatar(
+                                      radius: 20,
+                                      backgroundColor: const Color(0xFF1A237E).withOpacity(0.1),
+                                      child: Text((profile['full_name'] as String? ?? 'S')[0].toUpperCase(),
+                                          style: const TextStyle(color: Color(0xFF1A237E), fontWeight: FontWeight.bold, fontSize: 14)),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(profile['full_name'] ?? 'Student', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                                          Text(profile['email'] ?? '', style: const TextStyle(fontSize: 10, color: Colors.grey)),
+                                        ],
+                                      ),
+                                    ),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                      decoration: BoxDecoration(
+                                        color: isPaidOverall ? const Color(0xFF4CAF50).withOpacity(0.1) : Colors.orange.withOpacity(0.1),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Text(isPaidOverall ? 'Paid' : 'Unpaid',
+                                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
+                                              color: isPaidOverall ? const Color(0xFF4CAF50) : Colors.orange)),
+                                    ),
+                                    PopupMenuButton<String>(
+                                      padding: EdgeInsets.zero,
+                                      icon: const Icon(Icons.more_vert, size: 18, color: Colors.grey),
+                                      onSelected: (action) {
+                                        if (action == 'remove_all') {
+                                          _removeStudentCompletely(student['student_id'] as String, profile['full_name'] ?? 'Student');
+                                        }
+                                      },
+                                      itemBuilder: (ctx) => [
+                                        const PopupMenuItem(
+                                          value: 'remove_all',
+                                          child: Row(children: [
+                                            Icon(Icons.remove_circle_outline, size: 16, color: Colors.red),
+                                            SizedBox(width: 8),
+                                            Text('Remove completely', style: TextStyle(color: Colors.red, fontSize: 13)),
+                                          ]),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                Wrap(
+                                  spacing: 6,
+                                  runSpacing: 6,
+                                  children: subjects.map((sub) {
+                                    final subjectName = sub['subject_name'] as String;
+                                    final subjectStatus = sub['status'] as String;
+                                    final enrollmentId = sub['enrollment_id'] as String;
+                                    final color = Color(int.parse('FF${(sub['subject_color'] as String).replaceAll('#', '')}', radix: 16));
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.3)),
-      ),
-      child: Row(
-        children: [
-          // Subject color dot
-          Container(
-            width: 8, height: 8,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 10),
-          // Subject name
-          Expanded(
-            child: Text(
-              subjectName,
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: color),
-            ),
-          ),
-          const SizedBox(width: 8),
-          // Status badge (read-only)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: subjectStatus == 'paid'
-                  ? const Color(0xFF4CAF50).withOpacity(0.1)
-                  : Colors.orange.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  subjectStatus == 'paid' ? Icons.check_circle : Icons.pending,
-                  size: 12,
-                  color: subjectStatus == 'paid' ? const Color(0xFF4CAF50) : Colors.orange,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  subjectStatus == 'paid' ? 'Paid' : 'Pending',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: subjectStatus == 'paid' ? const Color(0xFF4CAF50) : Colors.orange,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 6),
-          // Remove button only
-          Tooltip(
-            message: 'Remove from $subjectName',
-            child: GestureDetector(
-              onTap: () => _removeStudent(enrollmentId, profile['full_name'] ?? 'Student', subjectName),
-              child: Container(
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(
-                  color: Colors.red.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: const Icon(Icons.remove_circle_outline, size: 16, color: Colors.red),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }).toList(),
-),
-                        ],
-                      ),
+                                    return Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                      decoration: BoxDecoration(
+                                        color: color.withOpacity(0.06),
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: color.withOpacity(0.2)),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Container(width: 6, height: 6, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+                                          const SizedBox(width: 6),
+                                          Text(subjectName, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: color)),
+                                          const SizedBox(width: 6),
+                                          Text(subjectStatus == 'paid' ? 'Paid' : 'Pending',
+                                              style: TextStyle(fontSize: 10, color: subjectStatus == 'paid' ? const Color(0xFF4CAF50) : Colors.grey)),
+                                          const SizedBox(width: 6),
+                                          GestureDetector(
+                                            onTap: () => _removeStudent(enrollmentId, profile['full_name'] ?? 'Student', subjectName),
+                                            child: const Icon(Icons.close, size: 14, color: Colors.red),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  }).toList(),
+                                ),
+                              ],
+                            ),
+                          );
+                        }),
+                        const SizedBox(height: 16),
+                      ],
                     );
                   }),
               ]),
