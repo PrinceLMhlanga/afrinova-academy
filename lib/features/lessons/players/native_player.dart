@@ -50,7 +50,7 @@ class _YouTubePlayerWidgetState extends State<YouTubePlayerWidget> {
         showControls: true,
         showFullscreenButton: true,
         mute: false,
-        origin: 'https://www.afrinova-academy.com',
+        
       ),
     );
 
