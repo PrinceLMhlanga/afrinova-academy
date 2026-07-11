@@ -3,6 +3,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/auth_service.dart';
 import 'upload_resource_screen.dart';
+import '../pdf/pdf_viewer_screen.dart'; // ✅ Import your inline PDF viewer
 
 class MyUploadsScreen extends StatefulWidget {
   const MyUploadsScreen({super.key});
@@ -110,11 +111,15 @@ class _MyUploadsScreenState extends State<MyUploadsScreen> {
   }
 
   Future<void> _openFile(String url) async {
-    final uri = Uri.parse(url);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    }
-  }
+  // ✅ Open in your inline PDF viewer instead of external browser
+  final fileName = url.split('/').last;
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => PdfViewerScreen(url: url, title: fileName),
+    ),
+  );
+}
 
   String _formatFileSize(int? bytes) {
     if (bytes == null) return '';

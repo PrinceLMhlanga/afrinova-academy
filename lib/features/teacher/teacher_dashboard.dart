@@ -56,6 +56,7 @@ class _TeacherDashboardState extends State<TeacherDashboard>
       vsync: this,
       duration: const Duration(milliseconds: 1200),
     );
+    _loadDailyQuote();
     _loadStats();
     Future.delayed(const Duration(milliseconds: 300), () {
       if (mounted) _animationController.forward();
@@ -67,6 +68,37 @@ class _TeacherDashboardState extends State<TeacherDashboard>
     _animationController.dispose();
     super.dispose();
   }
+
+  // Add this variable to your state class
+Map<String, String> _dailyQuote = {'quote': '', 'author': ''};
+
+// Add to initState or load method
+Future<void> _loadDailyQuote() async {
+  try {
+    // Get random quote
+    final response = await Supabase.instance.client
+    .from('daily_quotes')
+    .select('quote, author')
+    .eq('is_active', true)
+    .order('created_at', ascending: false);  // Get all
+
+    if (response.isNotEmpty) {
+  final random = response[DateTime.now().millisecond % response.length];
+  _dailyQuote = {
+    'quote': random['quote'] as String,
+    'author': random['author'] as String,
+  };
+}
+  } catch (e) {
+    // Fallback quote if DB fails
+    setState(() {
+      _dailyQuote = {
+        'quote': 'Education is the most powerful weapon which you can use to change the world.',
+        'author': 'Nelson Mandela',
+      };
+    });
+  }
+}
 
   Future<void> _loadStats() async {
     try {
@@ -472,7 +504,7 @@ FadeTransition(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      _getDailyQuote(),
+                      _dailyQuote['quote'] ?? 'Education is the most powerful weapon...',
                       style: TextStyle(
                         fontSize: 13,
                         color: Colors.white.withOpacity(0.8),
@@ -482,7 +514,7 @@ FadeTransition(
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      _getQuoteAuthor(),
+                      '— ${_dailyQuote['author'] ?? 'Nelson Mandela'}',
                       style: TextStyle(
                         fontSize: 11,
                         color: Colors.white.withOpacity(0.5),

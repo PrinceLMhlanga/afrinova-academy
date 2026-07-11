@@ -139,7 +139,7 @@ class _ExamGeneratorScreenState extends State<ExamGeneratorScreen> {
             questions: questions,
             subjectName: _subjects.firstWhere((s) => s['id'] == _selectedSubjectId)['name'] ?? 'Exam',
             totalQuestions: questions.length,
-            timeMinutes: questions.length,
+            timeMinutes: (questions.length * 1.5).ceil(), // Round up to give full minutes
           ),
         ),
       );

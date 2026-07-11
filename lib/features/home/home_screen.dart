@@ -15,7 +15,7 @@ import '../badges/badges_screen.dart';
 import '../admin/admin_dashboard.dart';
 import '../trial/trial_banner.dart';
 import '../account/my_account_screen.dart';
-
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../generated_exams/exam_generator_screen.dart'; // Added import
 
 class HomeScreen extends StatefulWidget {
@@ -40,6 +40,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       duration: const Duration(milliseconds: 1200),
     );
     _loadProfile();
+    
     Future.delayed(const Duration(milliseconds: 300), () {
       if (mounted) _animationController.forward();
     });
@@ -50,6 +51,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     _animationController.dispose();
     super.dispose();
   }
+
+  // Add to state class
+
+
+
+
+
 
   Future<void> _loadProfile() async {
     try {
@@ -162,6 +170,7 @@ class _StudentHomeState extends State<_StudentHome> with AutomaticKeepAliveClien
   final AuthService _authService = AuthService();
   Map<String, dynamic> _stats = {};
   bool _statsLoaded = false;
+  Map<String, String> _dailyQuote = {'quote': '', 'author': ''};
 
   @override
   bool get wantKeepAlive => true;
@@ -170,7 +179,49 @@ class _StudentHomeState extends State<_StudentHome> with AutomaticKeepAliveClien
   void initState() {
     super.initState();
     _loadStats();
+    _loadDailyQuote();
   }
+
+  Future<void> _loadDailyQuote() async {
+  try {
+    final response = await Supabase.instance.client
+        .from('daily_quotes')
+        .select('quote, author')
+        .eq('is_active', true)
+        .order('created_at', ascending: false);
+
+    if (response.isNotEmpty) {
+      final random = response[DateTime.now().millisecond % response.length];
+      if (mounted) {
+        setState(() {
+          _dailyQuote = {
+            'quote': random['quote'] as String,
+            'author': random['author'] as String,
+          };
+        });
+      }
+    }
+  } catch (_) {
+    _dailyQuote = {
+      'quote': 'Education is the most powerful weapon which you can use to change the world.',
+      'author': 'Nelson Mandela',
+    };
+  }
+}
+
+String _getGreeting() {
+  final hour = DateTime.now().hour;
+  if (hour < 12) return '☀️ Good Morning,';
+  if (hour < 17) return '🌤️ Good Afternoon,';
+  return '🌙 Good Evening,';
+}
+
+String _getFormattedDate() {
+  final now = DateTime.now();
+  final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  final days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  return '${days[now.weekday - 1]}, ${now.day} ${months[now.month - 1]} ${now.year}';
+}
 
   Future<void> _loadStats() async {
     try {
@@ -323,119 +374,120 @@ class _StudentHomeState extends State<_StudentHome> with AutomaticKeepAliveClien
               sliver: SliverList(
                 delegate: SliverChildListDelegate([
                   // Welcome Card with Animation
-                  FadeTransition(
-                    opacity: widget.animationController,
-                    child: SlideTransition(
-                      position: Tween<Offset>(
-                        begin: const Offset(0, 0.1),
-                        end: Offset.zero,
-                      ).animate(CurvedAnimation(
-                        parent: widget.animationController,
-                        curve: Curves.easeOut,
-                      )),
-                      child: Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(24),
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: [
-                              Color(0xFF1A237E),
-                              Color(0xFF283593),
-                              Color(0xFF3949AB),
-                            ],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
-                          borderRadius: BorderRadius.circular(24),
-                          boxShadow: [
-                            BoxShadow(
-                              color: const Color(0xFF1A237E).withOpacity(0.3),
-                              blurRadius: 20,
-                              offset: const Offset(0, 8),
-                            ),
-                          ],
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.all(8),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.2),
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: const Icon(
-                                    Icons.waving_hand,
-                                    color: Colors.white,
-                                    size: 28,
-                                  ),
-                                ),
-                                const Spacer(),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 4,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.2),
-                                    borderRadius: BorderRadius.circular(20),
-                                  ),
-                                  child: const Text(
-                                    'Student',
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              'Welcome back,',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.white.withOpacity(0.8),
-                                fontWeight: FontWeight.w400,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              widget.userName,
-                              style: const TextStyle(
-                                fontSize: 28,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                                letterSpacing: 0.5,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Row(
-                              children: [
-                                Icon(
-                                  Icons.school_rounded,
-                                  size: 16,
-                                  color: Colors.white.withOpacity(0.7),
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  'Continue your learning journey',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    color: Colors.white.withOpacity(0.7),
-                                    fontWeight: FontWeight.w400,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
+                 FadeTransition(
+  opacity: widget.animationController,
+  child: SlideTransition(
+    position: Tween<Offset>(
+      begin: const Offset(0, 0.1),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(
+      parent: widget.animationController,
+      curve: Curves.easeOut,
+    )),
+    child: Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [
+            Color(0xFF1A237E),
+            Color(0xFF283593),
+            Color(0xFF3949AB),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF1A237E).withOpacity(0.3),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Top row: Role badge + Date
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.school_rounded, size: 14, color: Colors.white.withOpacity(0.8)),
+                    const SizedBox(width: 4),
+                    const Text(
+                      'Student',
+                      style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w500),
                     ),
-                  ),
+                  ],
+                ),
+              ),
+              const Spacer(),
+              Text(
+                _getFormattedDate(),
+                style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 11),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          // Dynamic greeting
+          Text(
+            _getGreeting(),
+            style: const TextStyle(fontSize: 16, color: Colors.white70, fontWeight: FontWeight.w500),
+          ),
+          const SizedBox(height: 4),
+
+          // User name
+          Text(
+            widget.userName,
+            style: const TextStyle(
+              fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 0.5,
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Divider
+          Container(height: 1, color: Colors.white.withOpacity(0.15)),
+          const SizedBox(height: 16),
+
+          // Quote of the day
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.format_quote_rounded, size: 24, color: Colors.white.withOpacity(0.4)),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _dailyQuote['quote'] ?? 'Education is the most powerful weapon which you can use to change the world.',
+                      style: TextStyle(fontSize: 13, color: Colors.white.withOpacity(0.8), fontStyle: FontStyle.italic, height: 1.4),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '— ${_dailyQuote['author'] ?? 'Nelson Mandela'}',
+                      style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.5), fontWeight: FontWeight.w500),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    ),
+  ),
+),
                   
                   // Trial Banner
                   const SizedBox(height: 16),
