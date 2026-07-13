@@ -122,6 +122,29 @@ class _ManageUsersScreenState extends State<ManageUsersScreen>
     setState(() => _filteredUsers = filtered);
   }
 
+  Future<void> _showEnrollmentManager(Map<String, dynamic> user) async {
+  final enrollments = await Supabase.instance.client
+      .from('enrollments')
+      .select('*, subjects(name), profiles!teacher_id(full_name)')
+      .eq('student_id', user['id'])
+      .inFilter('status', ['paid', 'approved', 'pending']);
+
+  if (!mounted) return;
+
+  showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    ),
+    builder: (ctx) => _EnrollmentManagerSheet(
+      student: user,
+      enrollments: List<Map<String, dynamic>>.from(enrollments),
+      onUpdate: _loadData,
+    ),
+  );
+}
+
   Future<void> _toggleUserStatus(Map<String, dynamic> user) async {
     final newStatus = user['is_active'] == true ? false : true;
     await Supabase.instance.client
@@ -132,15 +155,19 @@ class _ManageUsersScreenState extends State<ManageUsersScreen>
   }
 
   Future<void> _viewUserDetails(Map<String, dynamic> user) async {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => _UserDetailSheet(user: user, onUpdate: _loadData),
-    );
-  }
+  showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    ),
+    builder: (ctx) => _UserDetailSheet(
+      user: user,
+      onUpdate: _loadData,
+      onManageSubscriptions: _showEnrollmentManager,  // ✅ Pass callback
+    ),
+  );
+}
 
   @override
   Widget build(BuildContext context) {
@@ -485,8 +512,13 @@ class _FilterDropdown extends StatelessWidget {
 class _UserDetailSheet extends StatefulWidget {
   final Map<String, dynamic> user;
   final VoidCallback onUpdate;
+  final Function(Map<String, dynamic>)? onManageSubscriptions;
 
-  const _UserDetailSheet({required this.user, required this.onUpdate});
+  const _UserDetailSheet({
+    required this.user,
+    required this.onUpdate,
+    this.onManageSubscriptions,
+  });
 
   @override
   State<_UserDetailSheet> createState() => _UserDetailSheetState();
@@ -494,6 +526,8 @@ class _UserDetailSheet extends StatefulWidget {
 
 class _UserDetailSheetState extends State<_UserDetailSheet> {
   bool _isSaving = false;
+
+  
 
   Future<void> _updateField(String field, dynamic value) async {
     setState(() => _isSaving = true);
@@ -535,10 +569,26 @@ class _UserDetailSheetState extends State<_UserDetailSheet> {
         ],
       ),
     );
-    if (confirm == true) {
-      await Supabase.instance.client.from('profiles').delete().eq('id', widget.user['id']);
+    if (confirm != true) return;
+
+    try {
+      // ✅ Call Edge Function to delete auth user + profile
+      await Supabase.instance.client.functions.invoke('delete-user', body: {
+        'userId': widget.user['id'],
+      });
+      
       widget.onUpdate();
       if (mounted) Navigator.pop(context);
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('User deleted ✅'), backgroundColor: Color(0xFF4CAF50)),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
@@ -624,13 +674,17 @@ else
         ),
       
       // ✅ Only show subscription toggle for students
-      if (role == 'student')
-        _ActionChip(
-          label: isSubscribed ? 'Remove Subscription' : 'Grant Subscription',
-          icon: isSubscribed ? Icons.cancel : Icons.card_giftcard,
-          color: isSubscribed ? Colors.orange : const Color(0xFF4CAF50),
-          onTap: () => _updateField('is_subscribed', !isSubscribed),
-        ),
+      // In the actions section, replace the subscription chip:
+if (role == 'student')
+  _ActionChip(
+    label: 'Manage Subscriptions',
+    icon: Icons.card_giftcard,
+    color: const Color(0xFF4CAF50),
+    onTap: () {
+      Navigator.pop(context); // Close detail sheet
+      widget.onManageSubscriptions?.call(widget.user); // ✅ Call parent
+    },
+  ),
       
       // ✅ Only show delete for non-admins
       if (role != 'admin')
@@ -665,6 +719,223 @@ else
     } catch (_) {
       return dateStr;
     }
+  }
+
+  
+}
+
+class _EnrollmentManagerSheet extends StatefulWidget {
+  final Map<String, dynamic> student;
+  final List<Map<String, dynamic>> enrollments;
+  final VoidCallback onUpdate;
+
+  const _EnrollmentManagerSheet({
+    required this.student,
+    required this.enrollments,
+    required this.onUpdate,
+  });
+
+  @override
+  State<_EnrollmentManagerSheet> createState() => _EnrollmentManagerSheetState();
+}
+
+class _EnrollmentManagerSheetState extends State<_EnrollmentManagerSheet> {
+  bool _isSaving = false;
+
+  Future<void> _grantSubscription(Map<String, dynamic> enrollment, int days) async {
+    setState(() => _isSaving = true);
+    try {
+      final expiresAt = DateTime.now().add(Duration(days: days)).toIso8601String();
+      
+      await Supabase.instance.client
+          .from('enrollments')
+          .update({
+            'is_subscribed': true,
+            'subscription_expires_at': expiresAt,
+            'status': 'paid',
+            'amount_paid': 0, // Manual grant
+          })
+          .eq('id', enrollment['id']);
+
+      // Also update profile
+      await Supabase.instance.client
+          .from('profiles')
+          .update({
+            'is_subscribed': true,
+            'subscription_expires_at': expiresAt,
+            'subscription_plan': 'paid',
+          })
+          .eq('id', widget.student['id']);
+
+      widget.onUpdate();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Subscription granted for $days days ✅'), backgroundColor: const Color(0xFF4CAF50)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  Future<void> _revokeSubscription(Map<String, dynamic> enrollment) async {
+    setState(() => _isSaving = true);
+    try {
+      await Supabase.instance.client
+          .from('enrollments')
+          .update({
+            'is_subscribed': false,
+            'subscription_expires_at': null,
+            'status': 'approved',
+          })
+          .eq('id', enrollment['id']);
+
+      widget.onUpdate();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Subscription revoked'), backgroundColor: Colors.orange),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  @override
+Widget build(BuildContext context) {
+  return Container(
+    constraints: BoxConstraints(
+      maxHeight: MediaQuery.of(context).size.height * 0.8,  // ✅ Max 80% of screen
+    ),
+    padding: const EdgeInsets.all(24),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Center(
+          child: Container(
+            width: 40, height: 4,
+            decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2)),
+          ),
+        ),
+        const SizedBox(height: 20),
+        Text('${widget.student['full_name']} - Enrollments',
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 16),
+
+        if (_isSaving)
+          const Center(child: CircularProgressIndicator())
+        else if (widget.enrollments.isEmpty)
+          const Center(child: Text('No enrollments found', style: TextStyle(color: Colors.grey)))
+        else
+          // ✅ Make the list scrollable
+          Flexible(
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: widget.enrollments.length,
+              itemBuilder: (context, index) {
+                final e = widget.enrollments[index];
+                final subjectName = e['subjects']?['name'] ?? 'Unknown';
+                final teacherName = e['profiles']?['full_name'] ?? 'Unknown';
+                final isSubscribed = e['is_subscribed'] == true;
+                final expiresAt = e['subscription_expires_at'] as String?;
+
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.grey.shade200),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(subjectName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                                Text('Teacher: $teacherName', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                                const SizedBox(height: 4),
+                                if (isSubscribed && expiresAt != null)
+                                  Text('✅ Subscribed until ${_formatDate(expiresAt)}',
+                                      style: const TextStyle(fontSize: 11, color: Color(0xFF4CAF50)))
+                                else
+                                  const Text('❌ Not subscribed', style: TextStyle(fontSize: 11, color: Colors.red)),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          if (isSubscribed)
+                            _SmallActionButton(label: 'Revoke', color: Colors.red, onTap: () => _revokeSubscription(e))
+                          else ...[
+                            _SmallActionButton(label: '30 Days', color: const Color(0xFF4CAF50), onTap: () => _grantSubscription(e, 30)),
+                            const SizedBox(width: 8),
+                            _SmallActionButton(label: '90 Days', color: Colors.blue, onTap: () => _grantSubscription(e, 90)),
+                          ],
+                        ],
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+        const SizedBox(height: 12),
+      ],
+    ),
+  );
+}
+
+  String _formatDate(String dateStr) {
+    try {
+      return '${DateTime.parse(dateStr).day}/${DateTime.parse(dateStr).month}/${DateTime.parse(dateStr).year}';
+    } catch (_) {
+      return dateStr;
+    }
+  }
+}
+
+class _SmallActionButton extends StatelessWidget {
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _SmallActionButton({required this.label, required this.color, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: color.withOpacity(0.3)),
+        ),
+        child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color)),
+      ),
+    );
   }
 }
 

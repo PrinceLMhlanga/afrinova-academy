@@ -9,7 +9,7 @@ import 'my_exams_screen.dart';
 import 'upload_resource_screen.dart';
 import 'my_uploads_screen.dart';
 import 'upload_lesson_screen.dart';
-
+import '../account/my_account_screen.dart';
 import 'enrollment_requests_screen.dart';
 import 'my_students_screen.dart';
 import 'go_live_screen.dart';
@@ -158,42 +158,7 @@ String _getFormattedDate() {
   return '${days[now.weekday - 1]}, ${now.day} ${months[now.month - 1]} ${now.year}';
 }
 
-String _getDailyQuote() {
-  final quotes = [
-    'Education is the most powerful weapon which you can use to change the world.',
-    'The beautiful thing about learning is that no one can take it away from you.',
-    'Teaching is the profession that teaches all other professions.',
-    'A teacher affects eternity; he can never tell where his influence stops.',
-    'The art of teaching is the art of assisting discovery.',
-    'Education is not the filling of a pail, but the lighting of a fire.',
-    'The best teachers are those who show you where to look but don\'t tell you what to see.',
-    'Every student can learn, just not on the same day, or in the same way.',
-    'Teaching is the greatest act of optimism.',
-    'What the teacher is, is more important than what he teaches.',
-  ];
-  
-  // Use the day of year to pick a consistent quote for the day
-  final dayOfYear = DateTime.now().difference(DateTime(DateTime.now().year, 1, 1)).inDays;
-  return quotes[dayOfYear % quotes.length];
-}
 
-String _getQuoteAuthor() {
-  final authors = [
-    '— Nelson Mandela',
-    '— B.B. King',
-    '— Unknown',
-    '— Henry Adams',
-    '— Mark Van Doren',
-    '— W.B. Yeats',
-    '— Alexandra K. Trenfor',
-    '— George Evans',
-    '— Colleen Wilcox',
-    '— Karl Menninger',
-  ];
-  
-  final dayOfYear = DateTime.now().difference(DateTime(DateTime.now().year, 1, 1)).inDays;
-  return authors[dayOfYear % authors.length];
-}
 
   @override
   Widget build(BuildContext context) {
@@ -351,6 +316,29 @@ String _getQuoteAuthor() {
     },
   ),
   actions: [
+    Container(
+                  margin: const EdgeInsets.only(right: 4),
+                  child: IconButton(
+                    icon: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.account_circle_outlined,
+                        color: Colors.white,
+                        size: 22,
+                      ),
+                    ),
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const MyAccountScreen()),
+                      );
+                    },
+                  ),
+                ),
     Container(
       margin: const EdgeInsets.only(right: 8),
       child: IconButton(
