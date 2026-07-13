@@ -31,26 +31,32 @@ class ExamService {
 
   // Add a question to an exam
   Future<void> addQuestion({
-    required String examId,
-    required String questionText,
-    required String questionType,
-    required List<String> options,
-    required String correctAnswer,
-    int marks = 1,
-    String? explanation,
-    int displayOrder = 0,
-  }) async {
-    await _client.from('questions').insert({
-      'exam_id': examId,
-      'question_text': questionText,
-      'question_type': questionType,
-      'options': options,
-      'correct_answer': correctAnswer,
-      'marks': marks,
-      'explanation': explanation,
-      'display_order': displayOrder,
-    });
-  }
+  required String examId,
+  required String questionText,
+  required String questionType,
+  required List<String> options,
+  required String correctAnswer,
+  required int marks,
+  String? explanation,
+  String? diagramUrl,
+  String? drawingData,     // ✅ Add
+  String? graphData,       // ✅ Add
+  int displayOrder = 0,
+}) async {
+  await _client.from('questions').insert({
+    'exam_id': examId,
+    'question_text': questionText,  // Just the text, no media
+    'question_type': questionType,
+    'options': options,
+    'correct_answer': correctAnswer,
+    'marks': marks,
+    'explanation': explanation,
+    'diagram_url': diagramUrl,
+    'drawing_data': drawingData,    // ✅ Store separately
+    'graph_data': graphData,        // ✅ Store separately
+    'display_order': displayOrder,
+  });
+}
 
   // Get all exams created by a teacher
   Future<List<Map<String, dynamic>>> getTeacherExams(String teacherId) async {

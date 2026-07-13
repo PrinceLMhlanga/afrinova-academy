@@ -4,6 +4,11 @@ import '../../core/auth_service.dart';
 import '../../core/subject_service.dart';
 import '../../core/teacher_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'dart:convert';
+import 'dart:typed_data';
+import 'package:image_picker/image_picker.dart';
+import '../teacher/drawing_canvas.dart';
+import '../teacher/graph_plotter.dart';
 
 class ExamCreatorScreen extends StatefulWidget {
   const ExamCreatorScreen({super.key});
@@ -33,6 +38,8 @@ class _ExamCreatorScreenState extends State<ExamCreatorScreen> {
   bool _isLoadingData = true;
   bool _isSaving = false;
 
+  
+
   // Questions
   List<_QuestionData> _questions = [];
 
@@ -45,7 +52,6 @@ class _ExamCreatorScreenState extends State<ExamCreatorScreen> {
   // ✅ ADD: Level support
 List<Map<String, dynamic>> _levels = [];
 String? _selectedLevelId;
-String? _selectedLevelName;
 
 // ✅ REPLACE _loadSubjects with:
 Future<void> _loadLevels() async {
@@ -112,6 +118,8 @@ Future<void> _loadTopicsForSubject(String subjectId) async {
   } catch (_) {}
 }
 
+
+
  final TeacherService  _teacherService = TeacherService();
   Future<void> _loadSubjects() async {
   try {
@@ -136,21 +144,7 @@ Future<void> _loadTopicsForSubject(String subjectId) async {
 }
 
   // Change the dropdown onChanged to pass subject ID instead of name
-Future<void> _loadTopics(String subjectId) async {
-  try {
-    final userId = _authService.currentUserId;
-    if (userId == null) return;
 
-    final topics = await _teacherService.getMyTopics(userId, subjectId);
-
-    if (mounted) {
-      setState(() {
-        _topics = topics;
-        _selectedTeacherTopicId = null;
-      });
-    }
-  } catch (_) {}
-}
 
   Future<void> _saveExam() async {
     if (!_formKey.currentState!.validate()) return;
@@ -182,13 +176,17 @@ Future<void> _loadTopics(String subjectId) async {
 
       // Create exam
       // Find the subject ID from the selected subject name
+// ✅ New - looks inside the nested 'subjects' map
 String? subjectId;
 if (_selectedSubject != null) {
-  final subject = _subjects.firstWhere(
-    (s) => s['name'] == _selectedSubject,
-    orElse: () => {'id': null},
+  final row = _subjects.firstWhere(
+    (s) {
+      final subject = s['subjects'] as Map<String, dynamic>?;
+      return subject?['name'] == _selectedSubject;
+    },
+    orElse: () => {},
   );
-  subjectId = subject['id'] as String?;
+  subjectId = row['subject_id'] as String?;  // ✅ Use subject_id from the row
 }
 
 final examId = await _examService.createExamWithTeacherTopic(
@@ -205,18 +203,21 @@ final examId = await _examService.createExamWithTeacherTopic(
       if (examId != null) {
         // Add all questions
         for (int i = 0; i < _questions.length; i++) {
-          final q = _questions[i];
-          await _examService.addQuestion(
-            examId: examId,
-            questionText: q.text,
-            questionType: q.type,
-            options: q.options,
-            correctAnswer: q.correctAnswer,
-            marks: q.marks,
-            explanation: q.explanation,
-            displayOrder: i + 1,
-          );
-        }
+  final q = _questions[i];
+  await _examService.addQuestion(
+    examId: examId,
+    questionText: q.text,  // ✅ Just clean text
+    questionType: q.type,
+    options: q.options,
+    correctAnswer: q.correctAnswer,
+    marks: q.marks,
+    explanation: q.explanation,
+    diagramUrl: q.diagramUrl,
+    drawingData: q.drawingData,    // ✅ Pass separately
+    graphData: q.graphData,        // ✅ Pass separately
+    displayOrder: i + 1,
+  );
+}
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -242,36 +243,39 @@ final examId = await _examService.createExamWithTeacherTopic(
     }
   }
 
-  void _addQuestion() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (_) => _QuestionEditorSheet(
-        onSave: (question) {
-          setState(() => _questions.add(question));
-        },
-      ),
-    );
-  }
+  
 
-  void _editQuestion(int index) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (_) => _QuestionEditorSheet(
-        existingQuestion: _questions[index],
-        onSave: (question) {
-          setState(() => _questions[index] = question);
-        },
-      ),
-    );
-  }
+ void _addQuestion() {
+  showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    ),
+    builder: (_) => _QuestionEditorSheet(
+      onSave: (question) => setState(() => _questions.add(question)),
+      // Remove onPickDiagram, onOpenDrawing, onOpenGraph callbacks
+      // Remove pendingDiagramUrl, pendingDrawingData, pendingGraphData
+    ),
+  );
+}
+
+void _editQuestion(int index) {
+  final q = _questions[index];
+  
+  showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    ),
+    builder: (_) => _QuestionEditorSheet(
+      existingQuestion: q,
+      onSave: (question) => setState(() => _questions[index] = question),
+      // Remove callbacks and pending data - sheet manages its own state
+    ),
+  );
+}
 
   @override
   void dispose() {
@@ -555,6 +559,9 @@ class _QuestionData {
   final String correctAnswer;
   final int marks;
   final String? explanation;
+  final String? diagramUrl;      // ✅ Add
+  final String? drawingData;     // ✅ Add
+  final String? graphData;       // ✅ Add
 
   _QuestionData({
     required this.text,
@@ -563,6 +570,9 @@ class _QuestionData {
     required this.correctAnswer,
     required this.marks,
     this.explanation,
+    this.diagramUrl,
+    this.drawingData,
+    this.graphData,
   });
 }
 
@@ -695,10 +705,22 @@ class _QuestionCard extends StatelessWidget {
 class _QuestionEditorSheet extends StatefulWidget {
   final _QuestionData? existingQuestion;
   final void Function(_QuestionData) onSave;
+  final VoidCallback? onPickDiagram;
+  final VoidCallback? onOpenDrawing;
+  final VoidCallback? onOpenGraph;
+  final String? pendingDiagramUrl;    // ✅ Pass from parent
+  final String? pendingDrawingData;   // ✅ Pass from parent
+  final String? pendingGraphData;     // ✅ Pass from parent
 
   const _QuestionEditorSheet({
     this.existingQuestion,
     required this.onSave,
+    this.onPickDiagram,
+    this.onOpenDrawing,
+    this.onOpenGraph,
+    this.pendingDiagramUrl,
+    this.pendingDrawingData,
+    this.pendingGraphData,
   });
 
   @override
@@ -716,51 +738,125 @@ class _QuestionEditorSheetState extends State<_QuestionEditorSheet> {
 
   bool get _isEditing => widget.existingQuestion != null;
 
-  @override
-  void initState() {
-    super.initState();
-    _optionControllers = [
-      TextEditingController(),
-      TextEditingController(),
-      TextEditingController(),
-      TextEditingController(),
-    ];
+  // In _QuestionEditorSheetState, add:
+String? _pendingDiagramUrl;
+String? _pendingDrawingData;
+String? _pendingGraphData;
 
-    if (_isEditing) {
-      final q = widget.existingQuestion!;
-      _questionController.text = q.text;
-      _questionType = q.type;
-      _marksController.text = q.marks.toString();
-      _explanationController.text = q.explanation ?? '';
-      _correctAnswer = q.correctAnswer;
-      for (int i = 0; i < q.options.length && i < 4; i++) {
-        _optionControllers[i].text = q.options[i];
-      }
+@override
+void initState() {
+  super.initState();
+  _optionControllers = [
+    TextEditingController(),
+    TextEditingController(),
+    TextEditingController(),
+    TextEditingController(),
+  ];
+
+  if (_isEditing) {
+    final q = widget.existingQuestion!;
+    _questionController.text = q.text;
+    _questionType = q.type;
+    _marksController.text = q.marks.toString();
+    _explanationController.text = q.explanation ?? '';
+    _correctAnswer = q.correctAnswer;
+    for (int i = 0; i < q.options.length && i < 4; i++) {
+      _optionControllers[i].text = q.options[i];
+    }
+    // Initialize media from existing question
+    _pendingDiagramUrl = q.diagramUrl;
+    _pendingDrawingData = q.drawingData;
+    _pendingGraphData = q.graphData;
+  }
+}
+
+// Add methods to handle media pickers locally:
+Future<void> _pickDiagram() async {
+  try {
+    final image = await ImagePicker().pickImage(
+      source: ImageSource.gallery, 
+      imageQuality: 80
+    );
+    if (image == null) return;
+
+    final bytes = await image.readAsBytes();
+    final userId = Supabase.instance.client.auth.currentUser?.id ?? 'unknown';
+    final fileName = '${DateTime.now().millisecondsSinceEpoch}.png';
+    final filePath = 'exam-diagrams/$userId/$fileName';
+
+    await Supabase.instance.client
+        .storage
+        .from('resources')
+        .uploadBinary(filePath, Uint8List.fromList(bytes));
+
+    final url = Supabase.instance.client
+        .storage
+        .from('resources')
+        .getPublicUrl(filePath);
+
+    setState(() => _pendingDiagramUrl = url);
+  } catch (e) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error uploading diagram: $e'), 
+          backgroundColor: Colors.red
+        ),
+      );
     }
   }
+}
 
-  void _save() {
-    if (!_qFormKey.currentState!.validate()) return;
+void _openDrawingCanvas() {
+  Navigator.push(context, MaterialPageRoute(
+    builder: (_) => DrawingCanvas(onSave: (base64Image) {
+      Navigator.pop(context);
+      setState(() => _pendingDrawingData = '%%DRAWING:$base64Image%%');
+    }),
+  ));
+}
 
-    final options = _optionControllers
-        .map((c) => c.text.trim())
-        .where((t) => t.isNotEmpty)
-        .toList();
+void _openGraphPlotter() {
+  showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    builder: (_) => SizedBox(
+      height: MediaQuery.of(context).size.height * 0.6,
+      child: GraphPlotter(
+        onInsertGraph: (graphData) {
+          Navigator.pop(context);
+          setState(() => _pendingGraphData = graphData);
+        },
+      ),
+    ),
+  );
+}
 
-    final question = _QuestionData(
-      text: _questionController.text.trim(),
-      type: _questionType,
-      options: options,
-      correctAnswer: _correctAnswer,
-      marks: int.tryParse(_marksController.text) ?? 1,
-      explanation: _explanationController.text.trim().isNotEmpty
-          ? _explanationController.text.trim()
-          : null,
-    );
+// Update _save method to use local state:
+void _save() {
+  if (!_qFormKey.currentState!.validate()) return;
 
-    widget.onSave(question);
-    Navigator.pop(context);
-  }
+  final options = _optionControllers
+      .map((c) => c.text.trim())
+      .where((t) => t.isNotEmpty)
+      .toList();
+
+  final question = _QuestionData(
+    text: _questionController.text.trim(),
+    type: _questionType,
+    options: options,
+    correctAnswer: _correctAnswer,
+    marks: int.tryParse(_marksController.text) ?? 1,
+    explanation: _explanationController.text.trim().isNotEmpty
+        ? _explanationController.text.trim()
+        : null,
+    diagramUrl: _pendingDiagramUrl,      // Use local state
+    drawingData: _pendingDrawingData,    // Use local state
+    graphData: _pendingGraphData,        // Use local state
+  );
+  widget.onSave(question);
+  Navigator.pop(context);
+}
 
   @override
   void dispose() {
@@ -930,17 +1026,94 @@ if (_questionType == 'multiple_choice') ...[
               ],
               const SizedBox(height: 16),
 
-              // Explanation
-              TextFormField(
-                controller: _explanationController,
-                maxLines: 2,
-                decoration: InputDecoration(
-                  labelText: 'Explanation (optional)',
-                  hintText: 'Shown after student answers',
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                ),
-              ),
+Row(
+  children: [
+    Expanded(
+      child: OutlinedButton.icon(
+        onPressed: _pickDiagram,  // ✅ Use local method
+        icon: const Icon(Icons.image_outlined, size: 16),
+        label: const Text('Diagram', style: TextStyle(fontSize: 12)),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: Colors.blue,
+          side: const BorderSide(color: Colors.blue),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          padding: const EdgeInsets.symmetric(vertical: 10),
+        ),
+      ),
+    ),
+    const SizedBox(width: 8),
+    Expanded(
+      child: OutlinedButton.icon(
+        onPressed: _openDrawingCanvas,  // ✅ Use local method
+        icon: const Icon(Icons.draw_outlined, size: 16),
+        label: const Text('Drawing', style: TextStyle(fontSize: 12)),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: Colors.purple,
+          side: const BorderSide(color: Colors.purple),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          padding: const EdgeInsets.symmetric(vertical: 10),
+        ),
+      ),
+    ),
+    const SizedBox(width: 8),
+    Expanded(
+      child: OutlinedButton.icon(
+        onPressed: _openGraphPlotter,  // ✅ Use local method
+        icon: const Icon(Icons.insert_chart_outlined, size: 16),
+        label: const Text('Graph', style: TextStyle(fontSize: 12)),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: Colors.green,
+          side: const BorderSide(color: Colors.green),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          padding: const EdgeInsets.symmetric(vertical: 10),
+        ),
+      ),
+    ),
+  ],
+),
+
+// ✅ Show pending media indicators
+if (_pendingDiagramUrl != null || 
+    _pendingDrawingData != null || 
+    _pendingGraphData != null) ...[
+  const SizedBox(height: 12),
+  Container(
+    padding: const EdgeInsets.all(10),
+    decoration: BoxDecoration(
+      color: Colors.green.shade50,
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(color: Colors.green.shade200),
+    ),
+    child: Row(
+      children: [
+        const Icon(Icons.check_circle, color: Colors.green, size: 16),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            [
+              if (_pendingDiagramUrl != null) '📷 Diagram attached',
+              if (_pendingDrawingData != null) '✏️ Drawing attached',
+              if (_pendingGraphData != null) '📊 Graph attached',
+            ].join(', '),
+            style: const TextStyle(fontSize: 11, color: Colors.green),
+          ),
+        ),
+      ],
+    ),
+  ),
+],
+const SizedBox(height: 16),
+
+// Explanation
+TextFormField(
+  controller: _explanationController,
+  maxLines: 2,
+  decoration: InputDecoration(
+    labelText: 'Explanation (optional)',
+    hintText: 'Shown after student answers',
+    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+  ),
+),
               const SizedBox(height: 24),
 
               // Save Button

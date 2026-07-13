@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import '../../core/exam_service.dart';
 import '../../core/auth_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'dart:convert';
+import 'package:fl_chart/fl_chart.dart';
+import 'dart:math' as math;
 
 class ExamTakerScreen extends StatefulWidget {
   final Map<String, dynamic> exam;
@@ -189,6 +192,291 @@ class _ExamTakerScreenState extends State<ExamTakerScreen> {
     }
   }
 
+  // ✅ Render diagram from URL
+Widget _buildDiagram(String? url) {
+  if (url == null || url.isEmpty) return const SizedBox.shrink();
+  return Padding(
+    padding: const EdgeInsets.only(bottom: 16),
+    child: ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: Image.network(
+        url,
+        fit: BoxFit.contain,
+        loadingBuilder: (context, child, loadingProgress) {
+          if (loadingProgress == null) return child;
+          return Container(
+            height: 200,
+            color: Colors.grey.shade100,
+            child: const Center(child: CircularProgressIndicator()),
+          );
+        },
+        errorBuilder: (context, error, stackTrace) => Container(
+          height: 100,
+          color: Colors.grey.shade100,
+          child: const Center(child: Icon(Icons.broken_image, color: Colors.grey)),
+        ),
+      ),
+    ),
+  );
+}
+
+// ✅ Render drawing from base64 data
+Widget _buildDrawing(String? drawingData) {
+  if (drawingData == null || drawingData.isEmpty) return const SizedBox.shrink();
+  try {
+    // Extract base64 from %%DRAWING:...%%
+    final match = RegExp(r'%%DRAWING:([A-Za-z0-9+/=]+)%%').firstMatch(drawingData);
+    if (match == null) return const SizedBox.shrink();
+    
+    final base64 = match.group(1)!;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: Colors.grey.shade300),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(children: [
+              Icon(Icons.draw, size: 14, color: Colors.purple),
+              SizedBox(width: 6),
+              Text('Drawing', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.grey)),
+            ]),
+            const SizedBox(height: 8),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: Image.memory(
+                base64Decode(base64),
+                fit: BoxFit.contain,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  } catch (_) {
+    return const SizedBox.shrink();
+  }
+}
+
+// ✅ Render graph from graph data
+Widget _buildGraph(String? graphData) {
+  if (graphData == null || graphData.isEmpty) return const SizedBox.shrink();
+  try {
+    final match = RegExp(r'GRAPH:([^:]+):([^:]+):([^:]+):([a-fA-F0-9]+):(.+)').firstMatch(graphData);
+    if (match == null) return const SizedBox.shrink();
+    
+    final title = match.group(1) ?? 'Graph';
+    final xLabel = match.group(2) ?? 'x';
+    final yLabel = match.group(3) ?? 'y';
+    final colorHex = match.group(4)!;
+    final color = Color(int.parse(colorHex, radix: 16));
+    final data = match.group(5) ?? '';
+
+    final spots = data.split(';').where((p) => p.contains(',')).map((p) {
+      final v = p.split(',');
+      return FlSpot(double.tryParse(v.first.trim()) ?? 0, double.tryParse(v.last.trim()) ?? 0);
+    }).toList();
+
+    if (spots.length < 2) return const SizedBox.shrink();
+
+    // Calculate bounds
+    final allX = spots.map((s) => s.x);
+    final allY = spots.map((s) => s.y);
+    final minX = allX.reduce(math.min);
+    final maxX = allX.reduce(math.max);
+    final minY = allY.reduce(math.min);
+    final maxY = allY.reduce(math.max);
+
+    final xPad = (maxX - minX).abs() < 1 ? 1.0 : (maxX - minX) * 0.18;
+    final yPad = (maxY - minY).abs() < 1 ? 1.0 : (maxY - minY) * 0.18;
+
+    final leftBound = minX - xPad;
+    final rightBound = maxX + xPad;
+    final bottomBound = minY - yPad;
+    final topBound = maxY + yPad;
+
+    final xRange = rightBound - leftBound;
+    final yRange = topBound - bottomBound;
+    
+    double niceInterval(double range) {
+      if (range <= 0) return 1;
+      final raw = range / 5;
+      final exponent = raw == 0 ? 0 : (math.log(raw) / math.ln10).floor();
+      final magnitude = math.pow(10, exponent).toDouble();
+      final normalized = raw / magnitude;
+      final nice = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+      return nice * magnitude;
+    }
+    
+    final xInterval = niceInterval(xRange);
+    final yInterval = niceInterval(yRange);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Container(
+        height: 300,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: Colors.grey.shade200),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        padding: const EdgeInsets.only(right: 48, top: 24, bottom: 24, left: 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Title
+            if (title.isNotEmpty && title != 'Graph')
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8, left: 4),
+                child: Row(
+                  children: [
+                    const Icon(Icons.insert_chart, size: 14, color: Colors.blue),
+                    const SizedBox(width: 6),
+                    Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF1A237E))),
+                  ],
+                ),
+              ),
+            Expanded(
+              child: LineChart(
+                LineChartData(
+                  lineTouchData: LineTouchData(
+                    enabled: true,
+                    handleBuiltInTouches: true,
+                    touchTooltipData: LineTouchTooltipData(
+                      tooltipRoundedRadius: 8,
+                      tooltipPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      tooltipMargin: 8,
+                      getTooltipItems: (touchedSpots) {
+                        return touchedSpots.map((spot) {
+                          return LineTooltipItem(
+                            '(${spot.x.toStringAsFixed(2)}, ${spot.y.toStringAsFixed(2)})',
+                            const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 12),
+                          );
+                        }).toList();
+                      },
+                    ),
+                  ),
+                  gridData: FlGridData(
+                    show: true,
+                    drawVerticalLine: true,
+                    drawHorizontalLine: true,
+                    getDrawingHorizontalLine: (value) => FlLine(
+                      color: Colors.grey.shade200,
+                      strokeWidth: 0.5,
+                    ),
+                    getDrawingVerticalLine: (value) => FlLine(
+                      color: Colors.grey.shade200,
+                      strokeWidth: 0.5,
+                    ),
+                  ),
+                  extraLinesData: ExtraLinesData(
+                    horizontalLines: [
+                      if (bottomBound <= 0 && topBound >= 0)
+                        HorizontalLine(y: 0, color: Colors.black54, strokeWidth: 1.2, dashArray: [4, 4]),
+                    ],
+                    verticalLines: [
+                      if (leftBound <= 0 && rightBound >= 0)
+                        VerticalLine(x: 0, color: Colors.black54, strokeWidth: 1.2, dashArray: [4, 4]),
+                    ],
+                  ),
+                  titlesData: FlTitlesData(
+                    show: true,
+                    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    bottomTitles: AxisTitles(
+                      axisNameWidget: Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Text(xLabel, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                      ),
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        reservedSize: 32,
+                        interval: xInterval,
+                        getTitlesWidget: (value, meta) {
+                          final label = value.toStringAsFixed(1);
+                          return Padding(
+                            padding: const EdgeInsets.only(top: 6),
+                            child: Text(
+                              label.endsWith('.0') ? label.substring(0, label.length - 2) : label,
+                              style: const TextStyle(fontSize: 10, color: Colors.grey),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    leftTitles: AxisTitles(
+                      axisNameWidget: Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Text(yLabel, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                      ),
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        reservedSize: 42,
+                        interval: yInterval,
+                        getTitlesWidget: (value, meta) {
+                          final label = value.toStringAsFixed(1);
+                          return Text(
+                            label.endsWith('.0') ? label.substring(0, label.length - 2) : label,
+                            style: const TextStyle(fontSize: 10, color: Colors.grey),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                  borderData: FlBorderData(
+                    show: true,
+                    border: Border(
+                      left: const BorderSide(color: Colors.black, width: 2),
+                      bottom: const BorderSide(color: Colors.black, width: 2),
+                      right: const BorderSide(color: Colors.transparent),
+                      top: const BorderSide(color: Colors.transparent),
+                    ),
+                  ),
+                  minX: leftBound,
+                  maxX: rightBound,
+                  minY: bottomBound,
+                  maxY: topBound,
+                  lineBarsData: [
+                    LineChartBarData(
+                      spots: spots,
+                      isCurved: true,
+                      curveSmoothness: 0.3,
+                      color: color,
+                      barWidth: 3,
+                      isStrokeCapRound: true,
+                      dotData: FlDotData(
+                        show: true,
+                        getDotPainter: (spot, percent, barData, index) => FlDotCirclePainter(
+                          radius: 5,
+                          color: Colors.white,
+                          strokeWidth: 2,
+                          strokeColor: color,
+                        ),
+                      ),
+                      belowBarData: BarAreaData(
+                        show: true,
+                        color: color.withValues(alpha: 0.08),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  } catch (_) {
+    return const SizedBox.shrink();
+  }
+}
+
   @override
   void dispose() {
     _timer?.cancel();
@@ -364,16 +652,27 @@ class _ExamTakerScreenState extends State<ExamTakerScreen> {
                     const SizedBox(height: 20),
 
                     // Question text
-                    Text(
-                      question['question_text'] ?? '',
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w500,
-                        color: Color(0xFF1A237E),
-                        height: 1.4,
-                      ),
-                    ),
-                    const SizedBox(height: 24),
+                    // Question text
+Text(
+  question['question_text'] ?? '',
+  style: const TextStyle(
+    fontSize: 18,
+    fontWeight: FontWeight.w500,
+    color: Color(0xFF1A237E),
+    height: 1.4,
+  ),
+),
+
+// ✅ Display diagram
+_buildDiagram(question['diagram_url'] as String?),
+
+// ✅ Display drawing
+_buildDrawing(question['drawing_data'] as String?),
+
+// ✅ Display graph
+_buildGraph(question['graph_data'] as String?),
+
+const SizedBox(height: 24),
 
                     // Options
                     if (questionType == 'multiple_choice')

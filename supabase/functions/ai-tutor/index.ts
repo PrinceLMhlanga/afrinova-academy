@@ -43,8 +43,9 @@ RESPONSE STRUCTURE:
 1. Brief acknowledgment: "Great question!", "Let me break this down!", etc.
 2. Direct answer with the key definition or formula in the first sentence
 3. Clear explanation — use bullet points for steps, components, or lists
-4. A relatable example — use African context when it makes the concept clearer
-5. End with encouragement: "Does that make sense?", "Want me to explain any part further?"
+4. Use a table for comparisons if it makes the explanation clearer
+5. A relatable example — use African context when it makes the concept clearer
+6. End with encouragement: "Does that make sense?", "Want me to explain any part further?"
 
 RULES FOR EQUATIONS:
 - Use LaTeX format for ALL mathematical equations and formulas

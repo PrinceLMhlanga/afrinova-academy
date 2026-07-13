@@ -78,15 +78,9 @@ class _AddSubjectScreenState extends State<AddSubjectScreen> {
         'is_active': true,
       }).select('id').single();
 
-      final subjectId = subjectResponse['id'] as String;
+      
 
-      // 2. Auto-assign this subject to the teacher
-      await Supabase.instance.client
-          .from('teacher_subjects')
-          .insert({
-        'teacher_id': userId,
-        'subject_id': subjectId,
-      });
+      
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
