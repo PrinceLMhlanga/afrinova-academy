@@ -4,8 +4,10 @@ import '../teacher/teacher_dashboard.dart';
 import 'settlements_screen.dart';
 import 'manage_platform_subjects_screen.dart';
 import 'question_bank_entry_screen.dart';
+import 'question_bank_overview_screen.dart';
 import 'manage_users_screen.dart';
 import 'platform_settings_screen.dart';
+import 'teacher_management_screen.dart';
 
 class AdminDashboard extends StatelessWidget {
   final String userName;
@@ -65,6 +67,19 @@ class AdminDashboard extends StatelessWidget {
     );
   },
 ),
+
+_AdminAction(
+  icon: Icons.manage_accounts,
+  title: 'Teacher Subjects',
+  subtitle: 'Manage assignments & view stats',
+  color: const Color(0xFF00897B),
+  onTap: () {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const TeacherSubjectManagerScreen()),
+    );
+  },
+),
 _AdminAction(
   icon: Icons.quiz_rounded,
   title: 'Question Bank',
@@ -74,6 +89,18 @@ _AdminAction(
     Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const QuestionBankEntryScreen()),
+    );
+  },
+),
+_AdminAction(
+  icon: Icons.quiz_rounded,
+  title: 'Question Bank Overview',
+  subtitle: 'View question statistics & counts',
+  color: const Color(0xFFFF9800),
+  onTap: () {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const QuestionBankOverviewScreen()),
     );
   },
 ),

@@ -572,21 +572,28 @@ class _UserDetailSheetState extends State<_UserDetailSheet> {
     if (confirm != true) return;
 
     try {
-      // ✅ Call Edge Function to delete auth user + profile
-      await Supabase.instance.client.functions.invoke('delete-user', body: {
-        'userId': widget.user['id'],
-      });
-      
-      widget.onUpdate();
-      if (mounted) Navigator.pop(context);
-      
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('User deleted ✅'), backgroundColor: Color(0xFF4CAF50)),
+      // ✅ Use the Supabase client's built-in function invoke
+      final response = await Supabase.instance.client.functions.invoke(
+        'delete-user',
+        body: {'userId': widget.user['id']},
       );
+
+      if (mounted) {
+        if (response.data?['success'] == true) {
+          widget.onUpdate();
+          Navigator.pop(context);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('User deleted ✅'), backgroundColor: Color(0xFF4CAF50)),
+          );
+        } else {
+          throw Exception(response.data?['error'] ?? 'Unknown error');
+        }
+      }
     } catch (e) {
+      debugPrint('Delete error: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+          SnackBar(content: Text('Error: ${e.toString()}'), backgroundColor: Colors.red),
         );
       }
     }
