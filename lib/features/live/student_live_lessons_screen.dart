@@ -233,7 +233,7 @@ class _StudentLiveLessonsScreenState extends State<StudentLiveLessonsScreen> {
     final statusColor = _getStatusColor(statusText);
     final isExpired = statusText.contains('Ended');
     final isSubscriptionExpired = statusText == 'Subscription Ended';
-    final teacherName = lesson['profiles']?['full_name'] ?? 'Teacher';
+    final teacherName = lesson['profiles']?['display_name'] ?? lesson['profiles']?['full_name'] ?? 'Teacher';
     final teacherId = lesson['teacher_id'] as String? ?? '';
     final subjectName = lesson['subjects']?['name'] ?? '';
     final enrollment = _enrollments[teacherId];

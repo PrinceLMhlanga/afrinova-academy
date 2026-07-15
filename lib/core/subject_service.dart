@@ -53,7 +53,7 @@ class SubjectService {
   Future<List<Map<String, dynamic>>> getLessons(String topicId) async {
     final response = await _client
         .from('lessons')
-        .select('*, profiles(full_name)')
+        .select('*, profiles(display_name, full_name)')
         .eq('topic_id', topicId)
         .eq('is_published', true)
         .order('created_at');
@@ -294,7 +294,7 @@ Future<Map<String, dynamic>?> createLessonWithVideoFileTeacherTopic({
 Future<List<Map<String, dynamic>>> getLessonsByTeacherTopic(String teacherTopicId) async {
   final response = await _client
       .from('lessons')
-      .select('*, profiles(full_name)')
+      .select('*, profiles(display_name, full_name)')
       .eq('teacher_topic_id', teacherTopicId)
       .eq('is_published', true)
       .order('created_at');

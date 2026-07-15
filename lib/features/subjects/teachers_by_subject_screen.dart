@@ -69,7 +69,7 @@ class _TeachersBySubjectScreenState extends State<TeachersBySubjectScreen> {
       if (teacherIds.isNotEmpty) {
         final profilesResponse = await Supabase.instance.client
             .from('profiles')
-            .select('id, full_name, avatar_url')
+            .select('id, full_name, display_name, avatar_url')
             .inFilter('id', teacherIds)
             .eq('is_approved', true);
 
@@ -91,7 +91,7 @@ class _TeachersBySubjectScreenState extends State<TeachersBySubjectScreen> {
 
       final teachers = teacherIds.map((id) => {
         'teacher_id': id,
-        'profile': profiles[id] ?? {'full_name': 'Unknown Teacher'},
+        'profile': profiles[id] ?? {'display_name': 'Unknown Teacher'},
       }).toList();
 
       if (mounted) {
@@ -193,12 +193,12 @@ class _TeachersBySubjectScreenState extends State<TeachersBySubjectScreen> {
                           radius: 28,
                           backgroundColor: widget.subjectColor.withOpacity(0.1),
                           child: Text(
-                            (profile?['full_name'] ?? 'T')[0].toUpperCase(),
+                            (profile?['display_name'] ?? 'T')[0].toUpperCase(),
                             style: TextStyle(color: widget.subjectColor, fontWeight: FontWeight.bold, fontSize: 18),
                           ),
                         ),
                         title: Text(
-                          profile?['full_name'] ?? 'Teacher',
+                          profile?['display_name'] ?? profile?['full_name'] ?? 'Teacher',
                           style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                         ),
                         subtitle: Text(widget.subjectName, style: TextStyle(color: widget.subjectColor, fontSize: 13)),
@@ -210,7 +210,7 @@ class _TeachersBySubjectScreenState extends State<TeachersBySubjectScreen> {
                                     MaterialPageRoute(
                                       builder: (_) => TeacherContentScreen(
                                         teacherId: teacherId,
-                                        teacherName: profile?['full_name'] ?? 'Teacher',
+                                        teacherName: profile?['display_name'] ?? profile?['full_name'] ?? 'Teacher',
                                         subjectName: widget.subjectName,
                                         subjectColor: widget.subjectColor,
                                       ),

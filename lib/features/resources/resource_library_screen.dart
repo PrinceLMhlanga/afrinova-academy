@@ -84,7 +84,7 @@ class _ResourceLibraryScreenState extends State<ResourceLibraryScreen> {
       if (teacherIds.isNotEmpty) {
         var query = Supabase.instance.client
             .from('resources')
-            .select('*, subjects(name), profiles!teacher_id(full_name), levels(name)')
+            .select('*, subjects(name), profiles!teacher_id(display_name, full_name), levels(name)')
             .inFilter('teacher_id', teacherIds.toList());
 
         // ✅ Only add level filter if student has a level
@@ -325,7 +325,7 @@ class _ResourceLibraryScreenState extends State<ResourceLibraryScreen> {
           style: TextStyle(fontSize: 11, color: canAccess ? const Color(0xFF1A237E) : Colors.grey)),
     // ✅ Teacher name
     if (r['profiles'] != null)
-      Text('By: ${r['profiles']['full_name'] ?? 'Teacher'}',
+      Text('By: ${r['profiles']['display_name'] ?? r['profiles']['full_name'] ?? 'Teacher'}',
           style: TextStyle(fontSize: 10, color: canAccess ? Colors.grey.shade600 : Colors.grey.shade400)),
     Text(
       '${_formatFileSize(r['file_size_bytes'])} • ${r['resource_type'] == 'question_paper' ? 'Question Paper' : 'Notes'}',

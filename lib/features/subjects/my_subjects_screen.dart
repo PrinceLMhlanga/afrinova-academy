@@ -41,7 +41,7 @@ class _MySubjectsScreenState extends State<MySubjectsScreen> {
       if (teacherIds.isNotEmpty) {
         final profilesResponse = await Supabase.instance.client
             .from('profiles')
-            .select('id, full_name')
+            .select('id, full_name, display_name, avatar_url')
             .inFilter('id', teacherIds);
         for (final p in profilesResponse) {
           teacherProfiles[p['id'] as String] = p;
@@ -63,7 +63,7 @@ class _MySubjectsScreenState extends State<MySubjectsScreen> {
         }
         (subjectMap[subjectId]!['teachers'] as List).add({
           'teacher_id': teacherId,
-          'profile': teacherProfiles[teacherId] ?? {'full_name': 'Teacher'},
+          'profile': teacherProfiles[teacherId] ?? {'display_name': 'Teacher'},
           'enrollment_id': enrollment['id'],
           'status': enrollment['status'],
           'is_subscribed': enrollment['is_subscribed'] ?? false,
@@ -242,7 +242,7 @@ class _MySubjectsScreenState extends State<MySubjectsScreen> {
                               final canAccess = _canAccess(teacher);
                               final statusText = _getStatusText(teacher);
                               final statusColor = _getStatusColor(statusText);
-                              final teacherName = profile['full_name'] ?? 'Teacher';
+                              final teacherName = profile['display_name'] ?? profile['full_name'] ?? 'Teacher';
                               final isExpired = statusText.contains('Ended');
 
                               return Container(

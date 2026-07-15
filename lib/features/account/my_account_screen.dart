@@ -12,24 +12,44 @@ class MyAccountScreen extends StatefulWidget {
 
 class _MyAccountScreenState extends State<MyAccountScreen> {
   final AuthService _authService = AuthService();
-  final _nameController = TextEditingController();
+  
+  // Text controllers for profile fields
+  final _fullNameController = TextEditingController();
+  final _displayNameController = TextEditingController();
   final _emailController = TextEditingController();
   final _phoneController = TextEditingController();
-  Map<String, dynamic>? _profile;
-  String _role = 'student';
-  bool _isLoading = true;
-  bool _isSaving = false;
-  bool _isChangingPassword = false;
-
+  final _schoolNameController = TextEditingController();
+  final _countryController = TextEditingController();
+  final _avatarUrlController = TextEditingController();
+  
   // Password controllers
   final _currentPasswordController = TextEditingController();
   final _newPasswordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
+  
+  // State variables
+  Map<String, dynamic>? _profile;
+  String _role = 'student';
+  String _approvalStatus = 'pending';
+  String _subscriptionPlan = 'free';
+  bool _isSubscribed = false;
+  String? _levelId;
+  String? _levelName;
+  DateTime? _subscriptionExpiresAt;
+  DateTime? _createdAt;
+  
+  bool _isLoading = true;
+  bool _isSaving = false;
+  bool _isChangingPassword = false;
   bool _showPasswordSection = false;
+  
+  // Password visibility toggles
   bool _obscureCurrentPassword = true;
   bool _obscureNewPassword = true;
   bool _obscureConfirmPassword = true;
-
+  
+  // Available levels (you should fetch these from your database)
+  List<Map<String, dynamic>> _levels = [];
   @override
   void initState() {
     super.initState();
@@ -38,14 +58,50 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
 
   Future<void> _loadProfile() async {
     try {
+      // ✅ Load levels from database
+      final levelsResponse = await Supabase.instance.client
+          .from('levels')
+          .select()
+          .order('display_order', ascending: true);
+      
+      if (mounted) {
+        setState(() => _levels = List<Map<String, dynamic>>.from(levelsResponse));
+      }
+
+      // Load profile
       final profile = await _authService.getProfile();
       if (profile != null && mounted) {
         setState(() {
           _profile = profile;
           _role = profile['role'] ?? 'student';
-          _nameController.text = profile['full_name'] ?? '';
+          _approvalStatus = profile['approval_status'] ?? 'pending';
+          _subscriptionPlan = profile['subscription_plan'] ?? 'free';
+          _isSubscribed = profile['is_subscribed'] ?? false;
+          _levelId = profile['level_id'] as String?;
+          _subscriptionExpiresAt = profile['subscription_expires_at'] != null 
+              ? DateTime.parse(profile['subscription_expires_at']) 
+              : null;
+          _createdAt = profile['created_at'] != null 
+              ? DateTime.parse(profile['created_at']) 
+              : null;
+          
+          // ✅ Get level name from loaded levels
+          if (_levelId != null) {
+            final level = _levels.firstWhere(
+              (l) => l['id'] == _levelId,
+              orElse: () => {'name': 'Not set'},
+            );
+            _levelName = level['name'] as String?;
+          }
+          
+          _fullNameController.text = profile['full_name'] ?? '';
+          _displayNameController.text = profile['display_name'] ?? profile['full_name'] ?? '';
           _emailController.text = profile['email'] ?? '';
           _phoneController.text = profile['phone_number'] ?? '';
+          _schoolNameController.text = profile['school_name'] ?? '';
+          _countryController.text = profile['country'] ?? '';
+          _avatarUrlController.text = profile['avatar_url'] ?? '';
+          
           _isLoading = false;
         });
       }
@@ -68,11 +124,10 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
         await Supabase.instance.client.auth.updateUser(
           UserAttributes(email: newEmail),
         );
-        // Show message that verification email was sent
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Verification email sent to your new email address. Please check your inbox.'),
+              content: Text('Verification email sent to your new email address.'),
               backgroundColor: Color(0xFFFF9800),
               duration: Duration(seconds: 5),
             ),
@@ -81,22 +136,35 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
       }
 
       // Update profile in database
-      await Supabase.instance.client.from('profiles').update({
-        'full_name': _nameController.text.trim(),
+      final Map<String, dynamic> updates = {
+        'full_name': _fullNameController.text.trim(),
+        'display_name': _displayNameController.text.trim(),
         'phone_number': _phoneController.text.trim(),
+        'school_name': _schoolNameController.text.trim(),
+        'country': _countryController.text.trim(),
+        'avatar_url': _avatarUrlController.text.trim(),
         'email': newEmail,
+        'level_id': _levelId,
         'updated_at': DateTime.now().toIso8601String(),
-      }).eq('id', userId);
+      };
+
+      await Supabase.instance.client.from('profiles').update(updates).eq('id', userId);
 
       if (mounted) {
         setState(() {
-          _profile?['email'] = newEmail;
-          _profile?['full_name'] = _nameController.text.trim();
-          _profile?['phone_number'] = _phoneController.text.trim();
+          _profile?.addAll(updates);
+          // Update level name
+          if (_levelId != null) {
+  final level = _levels.firstWhere(
+    (l) => l['id'] == _levelId,
+    orElse: () => {'name': 'Not set'},
+  );
+  _levelName = level['name'] as String?;
+}
         });
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Profile updated! ✅'),
+            content: Text('Profile updated successfully! ✅'),
             backgroundColor: Color(0xFF4CAF50),
           ),
         );
@@ -113,7 +181,6 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
   }
 
   Future<void> _changePassword() async {
-    // Validate passwords
     if (_currentPasswordController.text.isEmpty) {
       _showError('Please enter your current password');
       return;
@@ -133,7 +200,6 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
 
     setState(() => _isChangingPassword = true);
     try {
-      // First, re-authenticate user with current password
       final currentUser = Supabase.instance.client.auth.currentUser;
       if (currentUser?.email == null) {
         throw Exception('No authenticated user found');
@@ -144,13 +210,11 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
         password: _currentPasswordController.text,
       );
 
-      // Update password
       await Supabase.instance.client.auth.updateUser(
         UserAttributes(password: _newPasswordController.text),
       );
 
       if (mounted) {
-        // Clear password fields
         _currentPasswordController.clear();
         _newPasswordController.clear();
         _confirmPasswordController.clear();
@@ -218,9 +282,13 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
 
   @override
   void dispose() {
-    _nameController.dispose();
+    _fullNameController.dispose();
+    _displayNameController.dispose();
     _emailController.dispose();
     _phoneController.dispose();
+    _schoolNameController.dispose();
+    _countryController.dispose();
+    _avatarUrlController.dispose();
     _currentPasswordController.dispose();
     _newPasswordController.dispose();
     _confirmPasswordController.dispose();
@@ -252,8 +320,8 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
                     colors: [Color(0xFF0D1B4C), Color(0xFF1A237E), Color(0xFF283593)],
                   ),
                 ),
-                child: FlexibleSpaceBar(
-                  title: const Row(
+                child: const FlexibleSpaceBar(
+                  title: Row(
                     children: [
                       Text('👤', style: TextStyle(fontSize: 24)),
                       SizedBox(width: 8),
@@ -266,7 +334,7 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
                     ],
                   ),
                   centerTitle: false,
-                  titlePadding: const EdgeInsets.only(left: 16, bottom: 16),
+                  titlePadding: EdgeInsets.only(left: 16, bottom: 16),
                 ),
               ),
             ),
@@ -282,23 +350,27 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
                       ),
                     )
                   else ...[
-                    // Profile card
                     _buildProfileCard(),
                     const SizedBox(height: 24),
-
-                    // Edit form
                     _buildEditForm(),
                     const SizedBox(height: 16),
-
-                    // Password change section
+                    
+                    // Show subscription info only for students
+                    if (_role == 'student') ...[
+                      _buildSubscriptionInfo(),
+                      const SizedBox(height: 16),
+                    ],
+                    
+                    // Show approval status only for teachers
+                    if (_role == 'teacher') ...[
+                      _buildApprovalStatus(),
+                      const SizedBox(height: 16),
+                    ],
+                    
                     _buildPasswordSection(),
                     const SizedBox(height: 16),
-
-                    // Account info
-                    _buildAccountSection(),
+                    _buildAccountActions(),
                     const SizedBox(height: 16),
-
-                    // App info
                     _buildAppInfo(),
                   ],
                 ]),
@@ -322,24 +394,29 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
         Stack(
           children: [
             CircleAvatar(
-              radius: 40,
+              radius: 50,
               backgroundColor: const Color(0xFF1A237E).withOpacity(0.1),
-              child: Text(
-                (_nameController.text.isNotEmpty ? _nameController.text[0] : 'U').toUpperCase(),
-                style: const TextStyle(
-                  fontSize: 32,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF1A237E),
-                ),
-              ),
+              backgroundImage: _avatarUrlController.text.isNotEmpty 
+                  ? NetworkImage(_avatarUrlController.text) 
+                  : null,
+              child: _avatarUrlController.text.isEmpty
+                  ? Text(
+                      (_displayNameController.text.isNotEmpty 
+                          ? _displayNameController.text[0] 
+                          : 'U').toUpperCase(),
+                      style: const TextStyle(
+                        fontSize: 32,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF1A237E),
+                      ),
+                    )
+                  : null,
             ),
             Positioned(
               bottom: 0,
               right: 0,
               child: GestureDetector(
-                onTap: () {
-                  // Future: Change avatar
-                },
+                onTap: _showAvatarUrlDialog,
                 child: Container(
                   padding: const EdgeInsets.all(6),
                   decoration: BoxDecoration(
@@ -354,30 +431,150 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
           ],
         ),
         const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          decoration: BoxDecoration(
-            color: _role == 'teacher'
-                ? const Color(0xFF4CAF50).withOpacity(0.1)
-                : _role == 'admin'
-                    ? const Color(0xFFFF9800).withOpacity(0.1)
-                    : const Color(0xFF1A237E).withOpacity(0.1),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Text(
-            _role == 'teacher' ? 'Teacher' : _role == 'admin' ? 'Admin' : 'Student',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: _role == 'teacher'
-                  ? const Color(0xFF4CAF50)
-                  : _role == 'admin'
-                      ? const Color(0xFFFF9800)
-                      : const Color(0xFF1A237E),
-            ),
+        Text(
+          _displayNameController.text.isNotEmpty 
+              ? _displayNameController.text 
+              : _fullNameController.text,
+          style: const TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF1A237E),
           ),
         ),
+        const SizedBox(height: 4),
+        Text(
+          _emailController.text,
+          style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                color: _getRoleColor().withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                _role.toUpperCase(),
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: _getRoleColor(),
+                ),
+              ),
+            ),
+            if (_role == 'teacher') ...[
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                decoration: BoxDecoration(
+                  color: _getApprovalStatusColor().withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  _approvalStatus.toUpperCase(),
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: _getApprovalStatusColor(),
+                  ),
+                ),
+              ),
+            ],
+            if (_role == 'student' && _levelName != null) ...[
+  const SizedBox(width: 8),
+  Container(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+    decoration: BoxDecoration(
+      color: _getLevelColor(_levelName!).withOpacity(0.1),
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: Text(
+      _levelName!,
+      style: TextStyle(
+        fontSize: 12,
+        fontWeight: FontWeight.w600,
+        color: _getLevelColor(_levelName!),
+      ),
+    ),
+  ),
+],
+          ],
+        ),
+        if (_role == 'student' && _isSubscribed) ...[
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.green.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.star, size: 14, color: Colors.green.shade700),
+                const SizedBox(width: 4),
+                Text(
+                  'Premium Member',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.green.shade700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ]),
+    );
+  }
+
+  Color _getRoleColor() {
+    switch (_role) {
+      case 'teacher': return const Color(0xFF4CAF50);
+      case 'admin': return const Color(0xFFFF9800);
+      default: return const Color(0xFF1A237E);
+    }
+  }
+
+  Color _getApprovalStatusColor() {
+    switch (_approvalStatus) {
+      case 'approved': return const Color(0xFF4CAF50);
+      case 'rejected': return Colors.red;
+      default: return const Color(0xFFFF9800);
+    }
+  }
+
+  void _showAvatarUrlDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Update Avatar'),
+        content: TextField(
+          controller: _avatarUrlController,
+          decoration: const InputDecoration(
+            labelText: 'Avatar URL',
+            hintText: 'Enter image URL',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              setState(() {});
+              Navigator.pop(ctx);
+            },
+            child: const Text('Update'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -392,27 +589,49 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Profile Information',
+          const Text('Edit Profile',
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.bold,
                 color: Color(0xFF1A237E),
               )),
           const SizedBox(height: 16),
+          
           TextFormField(
-            controller: _nameController,
+            controller: _fullNameController,
             decoration: InputDecoration(
               labelText: 'Full Name',
               prefixIcon: const Icon(Icons.person_outline),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              helperText: _role == 'teacher' 
+                  ? 'Your real name (hidden from students)' 
+                  : null,
             ),
           ),
           const SizedBox(height: 12),
+          
+          TextFormField(
+            controller: _displayNameController,
+            decoration: InputDecoration(
+              labelText: 'Display Name',
+              prefixIcon: const Icon(Icons.badge_outlined),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              helperText: _role == 'teacher' 
+                  ? 'Name shown to students (e.g., Mr. Smith)' 
+                  : 'Name shown to others',
+              helperStyle: TextStyle(
+                fontSize: 11, 
+                color: _role == 'teacher' ? Colors.blue.shade700 : Colors.grey,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          
           TextFormField(
             controller: _emailController,
             keyboardType: TextInputType.emailAddress,
             decoration: InputDecoration(
-              labelText: 'Email',
+              labelText: 'Email Address',
               prefixIcon: const Icon(Icons.email_outlined),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
               helperText: 'Changing email requires verification',
@@ -420,6 +639,7 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
             ),
           ),
           const SizedBox(height: 12),
+          
           TextFormField(
             controller: _phoneController,
             keyboardType: TextInputType.phone,
@@ -429,6 +649,58 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
             ),
           ),
+          const SizedBox(height: 12),
+          
+          TextFormField(
+            controller: _schoolNameController,
+            decoration: InputDecoration(
+              labelText: 'School/Institution',
+              prefixIcon: const Icon(Icons.school_outlined),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+          const SizedBox(height: 12),
+          
+          TextFormField(
+            controller: _countryController,
+            decoration: InputDecoration(
+              labelText: 'Country',
+              prefixIcon: const Icon(Icons.public_outlined),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+          
+          // Level selector for students
+if (_role == 'student') ...[
+  const SizedBox(height: 12),
+  DropdownButtonFormField<String>(
+    value: _levelId,
+    decoration: InputDecoration(
+      labelText: 'Your Level',
+      prefixIcon: const Icon(Icons.school_rounded),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+    ),
+    items: _levels.map((level) {
+      return DropdownMenuItem<String>(
+        value: level['id'] as String,
+        child: Text(level['name'] as String? ?? 'Unknown'),
+      );
+    }).toList(),
+    onChanged: (value) {
+      setState(() {
+        _levelId = value;
+        if (value != null) {
+          final level = _levels.firstWhere(
+            (l) => l['id'] == value,
+            orElse: () => {'name': 'Unknown'},
+          );
+          _levelName = level['name'] as String?;
+        }
+      });
+    },
+  ),
+],
+          
           const SizedBox(height: 20),
           SizedBox(
             width: double.infinity,
@@ -455,6 +727,254 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
     );
   }
 
+  Widget _buildSubscriptionInfo() {
+    // ✅ Check if subscription is actually active (not expired)
+    bool isSubscriptionActive = _isSubscribed && 
+        _subscriptionExpiresAt != null && 
+        _subscriptionExpiresAt!.isAfter(DateTime.now());
+    
+    // Check if trial is active
+    bool isTrialActive = !_isSubscribed && 
+        _subscriptionExpiresAt != null && 
+        _subscriptionExpiresAt!.isAfter(DateTime.now());
+    
+    bool isExpired = _isSubscribed && 
+        _subscriptionExpiresAt != null && 
+        _subscriptionExpiresAt!.isBefore(DateTime.now());
+    
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.06), blurRadius: 8)],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                isSubscriptionActive ? Icons.star : Icons.star_outline,
+                color: isSubscriptionActive ? Colors.amber : Colors.grey,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                isSubscriptionActive 
+                    ? 'Premium Subscription' 
+                    : isTrialActive 
+                        ? 'Trial Active'
+                        : isExpired 
+                            ? 'Subscription Expired'
+                            : 'Free Account',
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF1A237E),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          
+          if (isSubscriptionActive) ...[
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.green.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.check_circle, color: Colors.green.shade700),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Active Subscription',
+                            style: TextStyle(fontWeight: FontWeight.w600, color: Colors.green.shade700)),
+                        if (_subscriptionExpiresAt != null)
+                          Text('Expires: ${_formatDate(_subscriptionExpiresAt!)}',
+                              style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ] else if (isTrialActive) ...[
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orange.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.rocket, color: Colors.orange.shade700),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Trial Period',
+                            style: TextStyle(fontWeight: FontWeight.w600, color: Colors.orange.shade700)),
+                        Text('Expires: ${_formatDate(_subscriptionExpiresAt!)}',
+                            style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ] else if (isExpired) ...[
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.red.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.warning_amber, color: Colors.red.shade700),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Subscription Expired',
+                            style: TextStyle(fontWeight: FontWeight.w600, color: Colors.red.shade700)),
+                        Text('Expired: ${_formatDate(_subscriptionExpiresAt!)}',
+                            style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ] else ...[
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.grey),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Text('Upgrade to premium for access to all courses and features',
+                        style: TextStyle(fontSize: 13)),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          
+          // Show upgrade button if not subscribed or expired
+          if (!isSubscriptionActive || isExpired) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: () {
+                  // Navigate to subscription page
+                },
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF1A237E),
+                  side: const BorderSide(color: Color(0xFF1A237E)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                child: Text(isExpired ? 'Renew Subscription' : 'Upgrade to Premium'),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildApprovalStatus() {
+    String statusMessage = '';
+    Color statusColor = Colors.grey;
+    IconData statusIcon = Icons.pending;
+    
+    switch (_approvalStatus) {
+      case 'approved':
+        statusMessage = '✅ Your teacher account is approved! You can now create and manage courses.';
+        statusColor = Colors.green;
+        statusIcon = Icons.check_circle;
+        break;
+      case 'rejected':
+        statusMessage = '❌ Your application was rejected. Please contact support for assistance.';
+        statusColor = Colors.red;
+        statusIcon = Icons.cancel;
+        break;
+      default:
+        statusMessage = '⏳ Your application is pending review. You\'ll be notified once approved.';
+        statusColor = Colors.orange;
+        statusIcon = Icons.pending;
+        break;
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.06), blurRadius: 8)],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.verified_user, color: Color(0xFF1A237E)),
+              SizedBox(width: 8),
+              Text('Teacher Status',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF1A237E),
+                  )),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: statusColor.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: statusColor.withOpacity(0.3)),
+            ),
+            child: Text(
+              statusMessage,
+              style: TextStyle(
+                fontSize: 13,
+                color: statusColor,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatDate(DateTime date) {
+    return '${date.day} ${_getMonthName(date.month)} ${date.year}';
+  }
+
+  String _getMonthName(int month) {
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
+    return months[month - 1];
+  }
+
   Widget _buildPasswordSection() {
     return Container(
       padding: const EdgeInsets.all(20),
@@ -466,7 +986,6 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Password section header
           InkWell(
             onTap: () {
               setState(() => _showPasswordSection = !_showPasswordSection);
@@ -507,8 +1026,6 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
               ],
             ),
           ),
-
-          // Expandable password form
           AnimatedCrossFade(
             firstChild: const SizedBox.shrink(),
             secondChild: Column(
@@ -604,7 +1121,7 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
     );
   }
 
-  Widget _buildAccountSection() {
+  Widget _buildAccountActions() {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -637,6 +1154,22 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
           trailing: const Icon(Icons.chevron_right, color: Colors.grey),
           onTap: _logout,
         ),
+        if (_createdAt != null) ...[
+          const Divider(),
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Row(
+              children: [
+                Icon(Icons.calendar_today, size: 14, color: Colors.grey.shade500),
+                const SizedBox(width: 8),
+                Text(
+                  'Member since ${_formatDate(_createdAt!)}',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+                ),
+              ],
+            ),
+          ),
+        ],
       ]),
     );
   }
@@ -662,4 +1195,13 @@ class _MyAccountScreenState extends State<MyAccountScreen> {
       ]),
     );
   }
+  Color _getLevelColor(String level) {
+  switch (level) {
+    case 'Form 1': return Colors.blue;
+    case 'Form 2': return Colors.teal;
+    case 'O-Level': return const Color(0xFFFF9800);
+    case 'A-Level': return Colors.purple;
+    default: return Colors.grey;
+  }
+}
 }

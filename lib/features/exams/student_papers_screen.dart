@@ -64,7 +64,7 @@ if (teacherIds.isNotEmpty) {
 
   final response = await Supabase.instance.client
       .from('exam_papers')
-      .select('*, subjects(name), profiles!creator_id(full_name), levels(name)')
+      .select('*, subjects(name), profiles!creator_id(display_name, full_name), levels(name)')
       .eq('is_published', true)
       .eq('level_id', studentLevelId ?? '')
       .inFilter('creator_id', teacherIds.toList())
@@ -285,7 +285,7 @@ if (teacherIds.isNotEmpty) {
                         MaterialPageRoute(
                           builder: (_) => PaymentScreen(
                             teacherId: creatorId,
-                            teacherName: paper['profiles']?['full_name'] ?? 'Teacher',
+                            teacherName: paper['profiles']?['display_name'] ?? paper['profiles']?['full_name'] ?? 'Teacher',
                             subjectName: paper['subjects']?['name'] ?? '',
                             enrollmentId: enrollment?['id'] as String? ?? '',
                           ),
@@ -469,7 +469,7 @@ class _PaperCard extends StatelessWidget {
                   Text('${paper['total_marks'] ?? 0} marks • ${paper['duration_minutes'] ?? 0} min',
                       style: TextStyle(fontSize: 11, color: canAccess ? Colors.grey : Colors.grey.shade400)),
                   if (paper['profiles'] != null)
-                    Text('By: ${paper['profiles']['full_name'] ?? ''}',
+                    Text('By: ${paper['profiles']['display_name'] ?? paper['profiles']['full_name'] ?? ''}',
                         style: TextStyle(fontSize: 11, color: canAccess ? const Color(0xFF1A237E) : Colors.grey)),
                   if (statusText.isNotEmpty) ...[
                     const SizedBox(height: 4),

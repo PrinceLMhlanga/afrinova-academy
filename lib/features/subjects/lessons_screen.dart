@@ -103,7 +103,7 @@ class _LessonsScreenState extends State<LessonsScreen> {
                   itemBuilder: (context, index) {
                     final lesson = _lessons[index];
                     final teacherName =
-                        lesson['profiles']?['full_name'] ?? 'AfriNova Teacher';
+                        lesson['profiles']?['display_name'] ?? lesson['profiles']?['full_name'] ?? 'AfriNova Teacher';
 
                     return _LessonCard(
                       title: lesson['title'] ?? 'Untitled Lesson',

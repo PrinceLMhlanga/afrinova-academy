@@ -28,6 +28,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
   final _authService = AuthService();
   String _userName = '';
+  String? _userDisplayName = '';
   String _userRole = '';
   bool _isLoading = true;
   late AnimationController _animationController;
@@ -65,6 +66,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       if (profile != null && mounted) {
         setState(() {
           _userName = profile['full_name'] ?? '';
+          _userDisplayName = profile['display_name'] ?? '';
           _userRole = profile['role'] ?? 'student';
           _isLoading = false;
         });
@@ -129,6 +131,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     if (_userRole == 'admin') {
       return AdminDashboard(
         userName: _userName,
+        userDisplayName: _userDisplayName?.isNotEmpty == true ? _userDisplayName : null, 
         onLogout: _logout,
       );
     }
@@ -136,6 +139,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     if (_userRole == 'teacher') {
       return TeacherDashboard(
         userName: _userName,
+        userDisplayName: _userDisplayName?.isNotEmpty == true ? _userDisplayName : null,
         userRole: _userRole,
         onLogout: _logout,
       );
@@ -143,6 +147,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
     return _StudentHome(
       userName: _userName,
+      
       onLogout: _logout,
       animationController: _animationController,
     );

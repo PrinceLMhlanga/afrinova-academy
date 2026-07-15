@@ -9,6 +9,7 @@ import 'dart:typed_data';
 import 'package:image_picker/image_picker.dart';
 import '../teacher/drawing_canvas.dart';
 import '../teacher/graph_plotter.dart';
+import 'math_keyboard.dart';
 
 class ExamCreatorScreen extends StatefulWidget {
   const ExamCreatorScreen({super.key});
@@ -37,6 +38,11 @@ class _ExamCreatorScreenState extends State<ExamCreatorScreen> {
   List<Map<String, dynamic>> _topics = [];
   bool _isLoadingData = true;
   bool _isSaving = false;
+
+  bool _showMathKeyboard = false;
+TextEditingController? _activeMathController;
+final FocusNode _questionFocus = FocusNode();
+final List<FocusNode> _optionFocusNodes = [FocusNode(), FocusNode(), FocusNode(), FocusNode()];
 
   
 
@@ -543,7 +549,7 @@ DropdownButtonFormField<String>(
                             ),
                     ),
                   ),
-                  const SizedBox(height: 20),
+                 
                 ],
               ),
             ),
@@ -743,6 +749,12 @@ String? _pendingDiagramUrl;
 String? _pendingDrawingData;
 String? _pendingGraphData;
 
+bool _showMathKeyboard = false;
+TextEditingController? _activeMathController;
+
+final FocusNode _questionFocusNode = FocusNode();
+final List<FocusNode> _optionFocusNodes = [FocusNode(), FocusNode(), FocusNode(), FocusNode()];
+
 @override
 void initState() {
   super.initState();
@@ -768,7 +780,40 @@ void initState() {
     _pendingDrawingData = q.drawingData;
     _pendingGraphData = q.graphData;
   }
+
+  _questionFocusNode.addListener(_onFocusChange);
+    for (final node in _optionFocusNodes) {
+      node.addListener(_onFocusChange);
+    }
 }
+void _onFocusChange() {
+    // When a text field gains focus, set it as the active controller for math keyboard
+    if (_questionFocusNode.hasFocus) {
+      setState(() => _activeMathController = _questionController);
+    } else {
+      for (int i = 0; i < _optionFocusNodes.length; i++) {
+        if (_optionFocusNodes[i].hasFocus) {
+          setState(() => _activeMathController = _optionControllers[i]);
+          break;
+        }
+      }
+    }
+  }
+
+  // Toggle math keyboard for a specific controller
+  void _toggleMathKeyboard(TextEditingController controller) {
+    setState(() {
+      if (_activeMathController == controller && _showMathKeyboard) {
+        // If same controller and keyboard is showing, hide it
+        _showMathKeyboard = false;
+        _activeMathController = null;
+      } else {
+        // Show keyboard for this controller
+        _activeMathController = controller;
+        _showMathKeyboard = true;
+      }
+    });
+  }
 
 // Add methods to handle media pickers locally:
 Future<void> _pickDiagram() async {
@@ -860,6 +905,12 @@ void _save() {
 
   @override
   void dispose() {
+    _questionFocusNode.removeListener(_onFocusChange);
+    _questionFocusNode.dispose();
+    for (final node in _optionFocusNodes) {
+      node.removeListener(_onFocusChange);
+      node.dispose();
+    }
     _questionController.dispose();
     _marksController.dispose();
     _explanationController.dispose();
@@ -929,18 +980,29 @@ void _save() {
               const SizedBox(height: 16),
 
               // Question Text
+              // Question Text
+// Question Text
               TextFormField(
-                controller: _questionController,
-                maxLines: 3,
-                decoration: InputDecoration(
-                  labelText: 'Question',
-                  hintText: 'Enter your question',
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12)),
+              controller: _questionController,
+              maxLines: 3,
+              focusNode: _questionFocusNode,
+              decoration: InputDecoration(
+                labelText: 'Question',
+                hintText: 'Enter your question',
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                suffixIcon: IconButton(
+                  icon: Icon(
+                    Icons.functions, 
+                    size: 18,
+                    color: _activeMathController == _questionController && _showMathKeyboard
+                        ? const Color(0xFF1A237E)
+                        : Colors.grey,
+                  ),
+                  onPressed: () => _toggleMathKeyboard(_questionController),
                 ),
-                validator: (v) =>
-                    v!.isEmpty ? 'Enter a question' : null,
               ),
+              validator: (v) => v!.isEmpty ? 'Enter a question' : null,
+            ),
               const SizedBox(height: 16),
 
               // Marks
@@ -956,45 +1018,51 @@ void _save() {
               const SizedBox(height: 16),
 
               // Options for Multiple Choice
-              // Options for Multiple Choice
-if (_questionType == 'multiple_choice') ...[
-  const Text('Options (mark the correct one):',
-      style: TextStyle(fontWeight: FontWeight.w600)),
-  const SizedBox(height: 8),
-  ...List.generate(4, (i) {
-    final hasText = _optionControllers[i].text.trim().isNotEmpty;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        children: [
-          Radio<String>(
-            value: _optionControllers[i].text,
-            groupValue: _correctAnswer,
-            // ✅ Enabled only if this option has text
-            onChanged: hasText
-                ? (v) => setState(() => _correctAnswer = v ?? '')
-                : null,
-            activeColor: const Color(0xFF4CAF50),
-          ),
-          Expanded(
-            child: TextFormField(
-              controller: _optionControllers[i],
-              decoration: InputDecoration(
-                hintText: 'Option ${String.fromCharCode(65 + i)}',
-                border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10)),
-                contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 10),
-              ),
-              // ✅ No auto-select — just refresh UI so radio enables
-              onChanged: (_) => setState(() {}),
-            ),
-          ),
-        ],
-      ),
-    );
-  }),
-],
+              if (_questionType == 'multiple_choice') ...[
+              const Text('Options (mark the correct one):',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              ...List.generate(4, (i) {
+                final hasText = _optionControllers[i].text.trim().isNotEmpty;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    children: [
+                      Radio<String>(
+                        value: _optionControllers[i].text,
+                        groupValue: _correctAnswer,
+                        onChanged: hasText
+                            ? (v) => setState(() => _correctAnswer = v ?? '')
+                            : null,
+                        activeColor: const Color(0xFF4CAF50),
+                      ),
+                      Expanded(
+                        child: TextFormField(
+                          controller: _optionControllers[i],
+                          focusNode: _optionFocusNodes[i],
+                          decoration: InputDecoration(
+                            hintText: 'Option ${String.fromCharCode(65 + i)}',
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                            suffixIcon: IconButton(
+                              icon: Icon(
+                                Icons.functions, 
+                                size: 14,
+                                color: _activeMathController == _optionControllers[i] && _showMathKeyboard
+                                    ? const Color(0xFF1A237E)
+                                    : Colors.grey,
+                              ),
+                              onPressed: () => _toggleMathKeyboard(_optionControllers[i]),
+                            ),
+                          ),
+                          onChanged: (_) => setState(() {}),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+            ],
               // True/False
               if (_questionType == 'true_false') ...[
                 const Text('Correct Answer:',
@@ -1069,8 +1137,24 @@ Row(
         ),
       ),
     ),
+
+     
   ],
 ),
+// Math keyboard (appears when toggled)
+              if (_showMathKeyboard && _activeMathController != null) ...[
+                const SizedBox(height: 12),
+                SizedBox(
+                  height: 220,
+                  child: MathKeyboard(
+                    controller: _activeMathController!,
+                    onClose: () => setState(() {
+                      _showMathKeyboard = false;
+                      _activeMathController = null;
+                    }),
+                  ),
+                ),
+              ],
 
 // ✅ Show pending media indicators
 if (_pendingDiagramUrl != null || 
@@ -1141,6 +1225,8 @@ TextFormField(
       ),
     );
   }
+
+  
 }
 
 class _TrueFalseCard extends StatelessWidget {

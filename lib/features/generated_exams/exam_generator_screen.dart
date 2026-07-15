@@ -69,11 +69,11 @@ class _ExamGeneratorScreenState extends State<ExamGeneratorScreen> {
 
   Future<void> _loadTopics(String subjectId) async {
     try {
-      // ✅ Use filter instead of eq after select
       final response = await Supabase.instance.client
           .from('topics')
           .select()
           .eq('subject_id', subjectId)
+          .eq('level_id', _studentLevelId ?? '')  // ✅ Filter by student's level
           .order('display_order', ascending: true);
 
       if (mounted) setState(() => _topics = List<Map<String, dynamic>>.from(response));

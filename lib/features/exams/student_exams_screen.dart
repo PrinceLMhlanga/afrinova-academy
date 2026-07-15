@@ -62,7 +62,7 @@ if (teacherIds.isNotEmpty) {
 
   final response = await Supabase.instance.client
       .from('exams')
-      .select('*, teacher_topics(subject_id, subjects(name)), profiles!creator_id(full_name), levels(name)')
+      .select('*, teacher_topics(subject_id, subjects(name)), profiles!creator_id(display_name, full_name), levels(name)')
       .eq('is_published', true)
       .eq('level_id', studentLevelId ?? '')
       .inFilter('creator_id', teacherIds.toList())
@@ -201,7 +201,7 @@ if (teacherIds.isNotEmpty) {
                       final canAccess = _canAccess(creatorId);
                       final statusText = _getStatusText(creatorId);
                       final statusColor = _getStatusColor(statusText);
-                      final creatorName = exam['profiles']?['full_name'] ?? 'Teacher';
+                      final creatorName = exam['profiles']?['display_name'] ?? exam['profiles']?['full_name'] ?? 'Teacher';
                       final subjectName = exam['teacher_topics']?['subjects']?['name'] ?? '';
                       final isExpired = statusText.contains('Ended');
                       final isSubscriptionExpired = statusText == 'Subscription Ended';

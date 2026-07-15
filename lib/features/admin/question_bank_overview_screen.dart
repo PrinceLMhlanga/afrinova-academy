@@ -453,19 +453,19 @@ class _QuestionBankOverviewScreenState extends State<QuestionBankOverviewScreen>
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   _DiffBadge(
-                                    label: 'Easy',
+                                    label: 'E',
                                     count: difficulties['easy'] ?? 0,
                                     color: const Color(0xFF4CAF50),
                                   ),
                                   const SizedBox(width: 6),
                                   _DiffBadge(
-                                    label: 'Med',
+                                    label: 'M',
                                     count: difficulties['medium'] ?? 0,
                                     color: const Color(0xFFFF9800),
                                   ),
                                   const SizedBox(width: 6),
                                   _DiffBadge(
-                                    label: 'Hard',
+                                    label: 'H',
                                     count: difficulties['hard'] ?? 0,
                                     color: Colors.red,
                                   ),
