@@ -30,10 +30,11 @@ class _MySubjectsScreenState extends State<MySubjectsScreen> {
 
       // Get enrollments with full trial + subscription info
       final response = await Supabase.instance.client
-          .from('enrollments')
-          .select('id, subject_id, teacher_id, status, trial_started_at, trial_ends_at, is_subscribed, subscription_expires_at, subjects(id, name, description, color_hex, icon_name)')
-          .eq('student_id', userId)
-          .inFilter('status', ['paid', 'approved']);
+    .from('enrollments')
+    .select('id, subject_id, level_id, teacher_id, status, trial_started_at, trial_ends_at, is_subscribed, subscription_expires_at, subjects(id, name, description, color_hex, icon_name)')
+    .eq('student_id', userId)
+    .inFilter('status', ['paid', 'approved']);
+
 
       // Get teacher profiles
       final teacherIds = response.map((e) => e['teacher_id'] as String).toSet().toList();
@@ -69,6 +70,8 @@ class _MySubjectsScreenState extends State<MySubjectsScreen> {
           'is_subscribed': enrollment['is_subscribed'] ?? false,
           'subscription_expires_at': enrollment['subscription_expires_at'],
           'trial_ends_at': enrollment['trial_ends_at'],
+          'level_id': enrollment['level_id'],       // ✅ Add
+          'subject_id': enrollment['subject_id'],   // ✅ Add
         });
       }
 
@@ -290,6 +293,9 @@ class _MySubjectsScreenState extends State<MySubjectsScreen> {
                                                   teacherName: teacherName,
                                                   subjectName: subject['name'] ?? '',
                                                   enrollmentId: teacher['enrollment_id'] as String,
+                                                  subjectId: teacher['subject_id'] as String?,   // ✅ Pass
+                                                  levelId: teacher['level_id'] as String?,       // ✅ Pass
+                                                  
                                                 ),
                                               ),
                                             ).then((_) => _loadMySubjects());

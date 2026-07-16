@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/paynow_service.dart';
 import '../../core/financial_service.dart';
 import '../../core/auth_service.dart';
@@ -10,6 +11,8 @@ class PaymentScreen extends StatefulWidget {
   final String teacherName;
   final String subjectName;
   final String enrollmentId;
+  final String? subjectId;   // ✅ For loading teacher pricing
+  final String? levelId;     // ✅ For loading teacher pricing
 
   const PaymentScreen({
     super.key,
@@ -17,6 +20,8 @@ class PaymentScreen extends StatefulWidget {
     required this.teacherName,
     required this.subjectName,
     required this.enrollmentId,
+    this.subjectId,
+    this.levelId,
   });
 
   @override
@@ -36,9 +41,14 @@ class _PaymentScreenState extends State<PaymentScreen> {
   String? _instructions;
   String? _pollUrl;
   String? _reference;
+  
+  // Pricing
+  List<Map<String, dynamic>> _teacherPlans = [];
   double _monthlyPrice = 10;
   double _termlyPrice = 25;
   double _amount = 10;
+  String? _selectedPlanId;
+  int _selectedDuration = 30; // 30 or 90
   Timer? _pollTimer;
 
   @override
@@ -49,14 +59,45 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   Future<void> _loadPricing() async {
     try {
-      final pricing = await _financialService.getPricing();
-      if (mounted) {
+      // First check if teacher has custom pricing
+      var pricingQuery = Supabase.instance.client
+          .from('teacher_pricing')
+          .select()
+          .eq('teacher_id', widget.teacherId)
+          .eq('is_active', true);
+
+      if (widget.subjectId != null) {
+        pricingQuery = pricingQuery.or('subject_id.eq.${widget.subjectId},subject_id.is.null');
+      }
+      if (widget.levelId != null) {
+        pricingQuery = pricingQuery.or('level_id.eq.${widget.levelId},level_id.is.null');
+      }
+
+      final teacherPlans = await pricingQuery;
+
+      if (teacherPlans.isNotEmpty && mounted) {
+        // Use teacher's custom pricing
+        final firstPlan = teacherPlans.first;
         setState(() {
-          _monthlyPrice = pricing['monthly'] ?? 10;
-          _termlyPrice = pricing['termly'] ?? 25;
+          _teacherPlans = List<Map<String, dynamic>>.from(teacherPlans);
+          _monthlyPrice = (firstPlan['price_monthly'] as num?)?.toDouble() ?? 10;
+          _termlyPrice = (firstPlan['price_termly'] as num?)?.toDouble() ?? 25;
           _amount = _monthlyPrice;
+          _selectedPlanId = firstPlan['id'] as String?;
+          _selectedDuration = 30;
           _isLoadingPricing = false;
         });
+      } else {
+        // Fall back to platform pricing
+        final pricing = await _financialService.getPricing();
+        if (mounted) {
+          setState(() {
+            _monthlyPrice = pricing['monthly'] ?? 10;
+            _termlyPrice = pricing['termly'] ?? 25;
+            _amount = _monthlyPrice;
+            _isLoadingPricing = false;
+          });
+        }
       }
     } catch (_) {
       if (mounted) setState(() => _isLoadingPricing = false);
@@ -238,9 +279,12 @@ class _PaymentScreenState extends State<PaymentScreen> {
       }
     });
   }
+
+
   @override
   Widget build(BuildContext context) {
-    final termlySavings = (_monthlyPrice * 3 - _termlyPrice).toStringAsFixed(2);
+    final termlySavings = (_monthlyPrice * 3 - _termlyPrice).toStringAsFixed(0);
+    final hasCustomPlans = _teacherPlans.isNotEmpty;
 
     return Scaffold(
       appBar: AppBar(
@@ -283,103 +327,102 @@ class _PaymentScreenState extends State<PaymentScreen> {
                       style: const TextStyle(fontSize: 13, color: Colors.grey)),
                   const SizedBox(height: 16),
 
-                  // Monthly plan
-                  GestureDetector(
-                    onTap: () => setState(() => _amount = _monthlyPrice),
-                    child: Container(
-                      margin: const EdgeInsets.only(bottom: 10),
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: _amount == _monthlyPrice ? const Color(0xFF1A237E).withOpacity(0.05) : Colors.white,
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
-                          color: _amount == _monthlyPrice ? const Color(0xFF1A237E) : Colors.grey.shade300,
-                          width: _amount == _monthlyPrice ? 2 : 1,
-                        ),
-                      ),
-                      child: Row(children: [
-                        Radio<double>(value: _monthlyPrice, groupValue: _amount,
-                            onChanged: (v) => setState(() => _amount = v ?? _monthlyPrice),
-                            activeColor: const Color(0xFF1A237E)),
-                        const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Text('Monthly Plan', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                          Text('30 days access', style: TextStyle(color: Colors.grey, fontSize: 13)),
-                        ])),
-                        Text('\$${_monthlyPrice.toStringAsFixed(2)}',
-                            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Color(0xFF1A237E))),
-                      ]),
-                    ),
-                  ),
-
-                  // Termly plan
-                  GestureDetector(
-                    onTap: () => setState(() => _amount = _termlyPrice),
-                    child: Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: _amount == _termlyPrice ? const Color(0xFF4CAF50).withOpacity(0.05) : Colors.white,
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
-                          color: _amount == _termlyPrice ? const Color(0xFF4CAF50) : Colors.grey.shade300,
-                          width: _amount == _termlyPrice ? 2 : 1,
-                        ),
-                      ),
-                      child: Row(children: [
-                        Radio<double>(value: _termlyPrice, groupValue: _amount,
-                            onChanged: (v) => setState(() => _amount = v ?? _termlyPrice),
-                            activeColor: const Color(0xFF4CAF50)),
-                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Row(children: [
-                            const Text('Termly Plan', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                            const SizedBox(width: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(color: const Color(0xFF4CAF50), borderRadius: BorderRadius.circular(4)),
-                              child: Text('SAVE \$$termlySavings',
-                                  style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-                            ),
-                          ]),
-                          const Text('90 days access', style: TextStyle(color: Colors.grey, fontSize: 13)),
-                        ])),
-                        Text('\$${_termlyPrice.toStringAsFixed(2)}',
-                            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Color(0xFF4CAF50))),
-                      ]),
-                    ),
-                  ),
+                  // ✅ Show teacher's custom plans
+                  if (hasCustomPlans)
+                    ..._teacherPlans.map((plan) => _buildCustomPlanCard(plan, termlySavings))
+                  else ...[
+                    // Platform default plans
+                    _buildDefaultMonthlyCard(),
+                    _buildDefaultTermlyCard(termlySavings),
+                  ],
+                  const SizedBox(height: 16),
+                  Container(
+  padding: const EdgeInsets.all(14),
+  decoration: BoxDecoration(
+    color: Colors.grey.shade50,
+    borderRadius: BorderRadius.circular(12),
+    border: Border.all(color: Colors.grey.shade200),
+  ),
+  child: Column(
+    children: [
+      Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          const Text('Subscription', style: TextStyle(fontSize: 13)),
+          Text('\$${_amount.toStringAsFixed(2)}', style: const TextStyle(fontSize: 13)),
+        ],
+      ),
+      const SizedBox(height: 6),
+      Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          const Text('PayNow processing fee', style: TextStyle(fontSize: 13, color: Colors.grey)),
+          const Text('Paid by customer', style: TextStyle(fontSize: 13, color: Colors.grey)),
+        ],
+      ),
+      const Divider(height: 16),
+      Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          const Text('You pay (approx.)', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+          Text('≈ \$${(_amount * 1.025).toStringAsFixed(2)}',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: const Color(0xFF1A237E))),
+        ],
+      ),
+    ],
+  ),
+),
+const SizedBox(height: 8),
+Container(
+  padding: const EdgeInsets.all(10),
+  decoration: BoxDecoration(
+    color: Colors.orange.shade50,
+    borderRadius: BorderRadius.circular(8),
+    border: Border.all(color: Colors.orange.shade200),
+  ),
+  child: const Row(
+    children: [
+      Icon(Icons.info_outline, color: Colors.orange, size: 16),
+      SizedBox(width: 8),
+      Expanded(
+        child: Text(
+          'PayNow processing fees are added at checkout. The amount shown on your phone will include the fee.',
+          style: TextStyle(fontSize: 11, color: Colors.orange),
+        ),
+      ),
+    ],
+  ),
+),
 
                   const SizedBox(height: 20),
+                  // Phone + Email fields (same as before)
                   TextFormField(
-  controller: _phoneController,
-  keyboardType: TextInputType.phone,
-  decoration: InputDecoration(
-    labelText: 'EcoCash Number', 
-    hintText: '77XXXXXXX',
-    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-    prefixIcon: const Icon(Icons.phone_android), 
-    prefixText: '+263 ',
-  ),
-  // Auto-remove leading zeros
-  onChanged: (value) {
-    // If user types 07..., remove the leading 0
-    String clean = value.replaceAll(RegExp(r'[\s\-]'), '');
-    if (clean.startsWith('0')) {
-      clean = clean.substring(1);
-      // Update controller without leading zero
-      _phoneController.value = TextEditingValue(
-        text: clean,
-        selection: TextSelection.collapsed(offset: clean.length),
-      );
-    }
-    
-    // Limit to 9 digits
-    if (clean.replaceAll(RegExp(r'[\s\-]'), '').length > 9) {
-      _phoneController.value = TextEditingValue(
-        text: clean.substring(0, 9),
-        selection: TextSelection.collapsed(offset: 9),
-      );
-    }
-  },
-),
+                    controller: _phoneController,
+                    keyboardType: TextInputType.phone,
+                    decoration: InputDecoration(
+                      labelText: 'EcoCash Number', 
+                      hintText: '77XXXXXXX',
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      prefixIcon: const Icon(Icons.phone_android), 
+                      prefixText: '+263 ',
+                    ),
+                    onChanged: (value) {
+                      String clean = value.replaceAll(RegExp(r'[\s\-]'), '');
+                      if (clean.startsWith('0')) {
+                        clean = clean.substring(1);
+                        _phoneController.value = TextEditingValue(
+                          text: clean,
+                          selection: TextSelection.collapsed(offset: clean.length),
+                        );
+                      }
+                      if (clean.replaceAll(RegExp(r'[\s\-]'), '').length > 9) {
+                        _phoneController.value = TextEditingValue(
+                          text: clean.substring(0, 9),
+                          selection: TextSelection.collapsed(offset: 9),
+                        );
+                      }
+                    },
+                  ),
                   const SizedBox(height: 10),
                   TextFormField(
                     controller: _emailController,
@@ -406,6 +449,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                   ),
                 ],
 
+                // ... processing, waiting, completed states (same as before)
                 if (_status == 'processing')
                   const Center(child: Padding(padding: EdgeInsets.all(60), child: Column(children: [
                     CircularProgressIndicator(color: Color(0xFF1A237E)),
@@ -438,8 +482,216 @@ class _PaymentScreenState extends State<PaymentScreen> {
                     const SizedBox(height: 12),
                     Text('You now have full access to ${widget.subjectName}', textAlign: TextAlign.center, style: const TextStyle(fontSize: 16, color: Colors.grey)),
                   ]))),
+
               ]),
             ),
+    );
+  }
+
+  Widget _buildCustomPlanCard(Map<String, dynamic> plan, String termlySavings) {
+    final planName = plan['plan_name'] ?? 'Plan';
+    final description = plan['description'] as String?;
+    final features = List<String>.from(plan['features'] ?? []);
+    final monthly = (plan['price_monthly'] as num?)?.toDouble() ?? 0;
+    final termly = (plan['price_termly'] as num?)?.toDouble() ?? 0;
+    final isSelected = _selectedPlanId == plan['id'];
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isSelected ? const Color(0xFF1A237E).withOpacity(0.05) : Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isSelected ? const Color(0xFF1A237E) : Colors.grey.shade300,
+          width: isSelected ? 2 : 1,
+        ),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A237E).withOpacity(0.1),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text(planName, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF1A237E))),
+          ),
+          if (plan['is_default'] == true) ...[
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(color: const Color(0xFF4CAF50).withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
+              child: const Text('Recommended', style: TextStyle(fontSize: 9, color: Color(0xFF4CAF50))),
+            ),
+          ],
+        ]),
+        if (description != null && description.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Text(description, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+        ],
+        const SizedBox(height: 12),
+        // Pricing options
+        Row(children: [
+          if (monthly > 0)
+            Expanded(
+              child: GestureDetector(
+                onTap: () {
+                  setState(() {
+                    _amount = monthly;
+                    _selectedPlanId = plan['id'] as String?;
+                    _selectedDuration = 30;
+                  });
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  decoration: BoxDecoration(
+                    color: _amount == monthly && _selectedDuration == 30
+                        ? const Color(0xFF1A237E).withOpacity(0.08)
+                        : Colors.grey.shade50,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: _amount == monthly && _selectedDuration == 30
+                          ? const Color(0xFF1A237E)
+                          : Colors.grey.shade300,
+                      width: _amount == monthly && _selectedDuration == 30 ? 2 : 1,
+                    ),
+                  ),
+                  child: Column(children: [
+                    Text('\$${monthly.toStringAsFixed(2)}', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: const Color(0xFF1A237E))),
+                    const Text('/month', style: TextStyle(fontSize: 11, color: Colors.grey)),
+                  ]),
+                ),
+              ),
+            ),
+          if (monthly > 0 && termly > 0) const SizedBox(width: 10),
+          if (termly > 0)
+            Expanded(
+              child: GestureDetector(
+                onTap: () {
+                  setState(() {
+                    _amount = termly;
+                    _selectedPlanId = plan['id'] as String?;
+                    _selectedDuration = 90;
+                  });
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  decoration: BoxDecoration(
+                    color: _amount == termly && _selectedDuration == 90
+                        ? const Color(0xFF4CAF50).withOpacity(0.08)
+                        : Colors.grey.shade50,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: _amount == termly && _selectedDuration == 90
+                          ? const Color(0xFF4CAF50)
+                          : Colors.grey.shade300,
+                      width: _amount == termly && _selectedDuration == 90 ? 2 : 1,
+                    ),
+                  ),
+                  child: Column(children: [
+                    Text('\$${termly.toStringAsFixed(2)}', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF4CAF50))),
+                    const Text('/term', style: TextStyle(fontSize: 11, color: Colors.grey)),
+                    const SizedBox(height: 2),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(color: const Color(0xFF4CAF50).withOpacity(0.15), borderRadius: BorderRadius.circular(4)),
+                      child: Text('Save \$${(monthly * 3 - termly).toStringAsFixed(2)}', style: const TextStyle(fontSize: 9, color: Color(0xFF4CAF50))),
+                    ),
+                  ]),
+                ),
+              ),
+            ),
+        ]),
+        if (features.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Wrap(spacing: 4, runSpacing: 4,
+            children: features.map((f) => Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(8)),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.check, size: 10, color: Color(0xFF4CAF50)),
+                const SizedBox(width: 3),
+                Text(f, style: const TextStyle(fontSize: 10)),
+              ]),
+            )).toList(),
+          ),
+        ],
+      ]),
+    );
+  }
+
+  Widget _buildDefaultMonthlyCard() {
+    return GestureDetector(
+      onTap: () => setState(() { _amount = _monthlyPrice; _selectedDuration = 30; }),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: _amount == _monthlyPrice && _selectedDuration == 30
+              ? const Color(0xFF1A237E).withOpacity(0.05)
+              : Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: _amount == _monthlyPrice && _selectedDuration == 30
+                ? const Color(0xFF1A237E)
+                : Colors.grey.shade300,
+            width: _amount == _monthlyPrice && _selectedDuration == 30 ? 2 : 1,
+          ),
+        ),
+        child: Row(children: [
+          Radio<double>(value: _monthlyPrice, groupValue: _amount,
+              onChanged: (v) => setState(() { _amount = v ?? _monthlyPrice; _selectedDuration = 30; }),
+              activeColor: const Color(0xFF1A237E)),
+          const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Monthly Plan', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            Text('30 days access', style: TextStyle(color: Colors.grey, fontSize: 13)),
+          ])),
+          Text('\$${_monthlyPrice.toStringAsFixed(2)}',
+              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Color(0xFF1A237E))),
+        ]),
+      ),
+    );
+  }
+
+  Widget _buildDefaultTermlyCard(String termlySavings) {
+    return GestureDetector(
+      onTap: () => setState(() { _amount = _termlyPrice; _selectedDuration = 90; }),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: _amount == _termlyPrice && _selectedDuration == 90
+              ? const Color(0xFF4CAF50).withOpacity(0.05)
+              : Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: _amount == _termlyPrice && _selectedDuration == 90
+                ? const Color(0xFF4CAF50)
+                : Colors.grey.shade300,
+            width: _amount == _termlyPrice && _selectedDuration == 90 ? 2 : 1,
+          ),
+        ),
+        child: Row(children: [
+          Radio<double>(value: _termlyPrice, groupValue: _amount,
+              onChanged: (v) => setState(() { _amount = v ?? _termlyPrice; _selectedDuration = 90; }),
+              activeColor: const Color(0xFF4CAF50)),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              const Text('Termly Plan', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(color: const Color(0xFF4CAF50), borderRadius: BorderRadius.circular(4)),
+                child: Text('SAVE \$$termlySavings',
+                    style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+              ),
+            ]),
+            const Text('90 days access', style: TextStyle(color: Colors.grey, fontSize: 13)),
+          ])),
+          Text('\$${_termlyPrice.toStringAsFixed(0)}',
+              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Color(0xFF4CAF50))),
+        ]),
+      ),
     );
   }
 }

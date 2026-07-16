@@ -20,6 +20,7 @@ import 'student_performance_screen.dart';
 import 'wallet_screen.dart';
 import 'payout_account_screen.dart';
 import 'my_classes_screen.dart';
+import 'teacher_pricing_screen.dart';
 
 // ===== ADMIN ACTION DATA CLASS =====
 class AdminActionData {
@@ -574,6 +575,17 @@ class _TeacherDashboardState extends State<TeacherDashboard>
                           );
                         },
                       ),
+                      _FeatureItem(
+      icon: Icons.price_change,           // ✅ New
+      label: 'My Pricing',                // ✅ New
+      color: const Color(0xFFFF9800),     // ✅ New
+      onTap: () {                         // ✅ New
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const TeacherPricingScreen()),
+        );
+      },
+    ),
                       _FeatureItem(
                         icon: Icons.account_balance_rounded,
                         label: 'Payout Accounts',
