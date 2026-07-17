@@ -1,5 +1,5 @@
 export default async function handler(req, res) {
-  // Allow both www and non-www
+  // CORS headers
   const origin = req.headers.origin || '*';
   res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -7,7 +7,7 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.setHeader('Access-Control-Max-Age', '86400');
 
-  // Handle preflight OPTIONS request FIRST
+  // Handle preflight OPTIONS request
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
@@ -31,7 +31,6 @@ export default async function handler(req, res) {
 
     const amountStr = Number(amount).toFixed(2);
     const autoEmail = email?.trim() || `${mobileNumber}@mobile.paynow.co.zw`;
-
     const integrationId = process.env.PAYNOW_INTEGRATION_ID;
     const integrationKey = process.env.PAYNOW_INTEGRATION_KEY;
 
@@ -43,46 +42,56 @@ export default async function handler(req, res) {
       });
     }
 
-    // ✅ CORRECT HASH GENERATION per PayNow docs
-    // 1. Concatenate values in order WITHOUT URL encoding
-    const values = [
-      integrationId,
-      reference,
-      amountStr,
-      '',                              // additionalinfo (empty)
-      'https://afrinova-academy.com/payment/complete',  // returnurl
-      'https://rwheufzhixqqifoleltu.supabase.co/functions/v1/paynow-webhook',  // resulturl
-      'Message',                       // status
-      mobileNumber.trim(),            // phone
-      'ecocash',                      // method
-    ];
-    
-    // Join all values into one string
-    const concatString = values.join('');
-    
+    // Build object with ALL fields in correct order
+    const fieldsToHash = {
+      id: integrationId,
+      reference: reference,
+      amount: amountStr,
+      additionalinfo: '',
+      returnurl: 'https://afrinova-academy.com/payment/complete',
+      resulturl: 'https://rwheufzhixqqifoleltu.supabase.co/functions/v1/paynow-webhook',
+      authemail: autoEmail,
+      phone: mobileNumber.trim(),
+      method: 'ecocash',
+      status: 'Message'
+    };
+
+    // Concatenate all values in strict sequence
+    const concatString = 
+      fieldsToHash.id +
+      fieldsToHash.reference +
+      fieldsToHash.amount +
+      fieldsToHash.additionalinfo +
+      fieldsToHash.returnurl +
+      fieldsToHash.resulturl +
+      fieldsToHash.authemail +
+      fieldsToHash.phone +
+      fieldsToHash.method +
+      fieldsToHash.status;
+
     // Append integration key
     const stringToHash = concatString + integrationKey;
     
     console.log('Hash input:', stringToHash);
-    
-    // Create SHA512 hash (uppercase hex)
+
+    // Generate SHA512 hash (uppercase)
     const crypto = require('crypto');
     const hash = crypto.createHash('sha512').update(stringToHash).digest('hex').toUpperCase();
     
     console.log('Generated hash:', hash);
 
-    // Build form data with hash
+    // Build form data using EXACT same values
     const formData = new URLSearchParams();
-    formData.append('id', integrationId);
-    formData.append('reference', reference);
-    formData.append('amount', amountStr);
-    formData.append('authemail', autoEmail);
-    formData.append('additionalinfo', '');
-    formData.append('returnurl', 'https://afrinova-academy.com/payment/complete');
-    formData.append('resulturl', 'https://rwheufzhixqqifoleltu.supabase.co/functions/v1/paynow-webhook');
-    formData.append('status', 'Message');
-    formData.append('phone', mobileNumber.trim());
-    formData.append('method', 'ecocash');
+    formData.append('id', fieldsToHash.id);
+    formData.append('reference', fieldsToHash.reference);
+    formData.append('amount', fieldsToHash.amount);
+    formData.append('additionalinfo', fieldsToHash.additionalinfo);
+    formData.append('returnurl', fieldsToHash.returnurl);
+    formData.append('resulturl', fieldsToHash.resulturl);
+    formData.append('authemail', fieldsToHash.authemail);
+    formData.append('phone', fieldsToHash.phone);
+    formData.append('method', fieldsToHash.method);
+    formData.append('status', fieldsToHash.status);
     formData.append('hash', hash);
 
     console.log('Sending to PayNow...');
