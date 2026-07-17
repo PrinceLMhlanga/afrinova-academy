@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:livekit_client/livekit_client.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/auth_service.dart';
+import 'dart:convert';  // ✅ Add this for jsonDecode
 
 class LiveClassroomScreen extends StatefulWidget {
   final String roomName;
@@ -34,6 +35,9 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
   bool _showParticipants = false;
   final TextEditingController _chatController = TextEditingController();
   final List<_ChatMessage> _messages = [];
+  // ✅ Add this: Map to store participant names
+  final Map<String, String> _participantNames = {};
+  String? _myName;
 
   @override
   void initState() {
@@ -68,6 +72,11 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
       final profile = await _authService.getProfile();
       final userId = _authService.currentUserId;
       final userName = profile?['display_name'] ?? profile?['full_name'] ?? (widget.isTeacher ? 'Teacher' : 'Student');
+      _myName = userName;
+      _participantNames[userId ?? 'unknown'] = userName;
+
+      // ✅ Get all participants' names from Supabase
+      await _loadParticipantNames();
 
       final tokenResponse = await Supabase.instance.client.functions.invoke(
         'generate-livekit-token',
@@ -107,6 +116,77 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
         Navigator.of(context).pop();
       }
     }
+  }
+
+  // ✅ Add this method to load participant names
+  Future<void> _loadParticipantNames() async {
+    try {
+      // Get the lesson to find enrolled students
+      final lesson = await Supabase.instance.client
+          .from('live_lessons')
+          .select('teacher_id, enrollments(student_id, profiles(display_name, full_name))')
+          .eq('id', widget.lessonId)
+          .single();
+
+      // Add teacher name
+      if (lesson['teacher_id'] != null) {
+        final teacherProfile = await Supabase.instance.client
+            .from('profiles')
+            .select('display_name, full_name')
+            .eq('id', lesson['teacher_id'] as String)
+            .single();
+        
+        final teacherName = teacherProfile?['display_name'] ?? teacherProfile?['full_name'] ?? 'Teacher';
+        _participantNames[lesson['teacher_id'] as String] = teacherName;
+      }
+
+      // Add student names from enrollments
+      final enrollments = lesson['enrollments'] as List? ?? [];
+      for (final enrollment in enrollments) {
+        final student = enrollment['profiles'];
+        if (student != null) {
+          final studentId = enrollment['student_id'] as String;
+          final studentName = student['display_name'] ?? student['full_name'] ?? 'Student';
+          _participantNames[studentId] = studentName;
+        }
+      }
+    } catch (e) {
+      debugPrint('Error loading participant names: $e');
+    }
+  }
+
+  // ✅ Add this helper method
+  String _getParticipantName(Participant participant) {
+    final identity = participant.identity ?? '';
+    
+    // First check our name map
+    if (_participantNames.containsKey(identity)) {
+      return _participantNames[identity]!;
+    }
+    
+    // Check if it's the local participant
+    if (_myName != null && participant == _room.localParticipant) {
+      return _myName!;
+    }
+    
+    // Check participant metadata
+    final metadata = participant.metadata;
+    if (metadata != null && metadata.isNotEmpty) {
+      try {
+        final meta = jsonDecode(metadata);
+        if (meta['name'] != null) {
+          _participantNames[identity] = meta['name'];
+          return meta['name'];
+        }
+      } catch (_) {}
+    }
+    
+    // Fallback: show role instead of UUID
+    if (identity == _room.localParticipant?.identity) {
+      return widget.isTeacher ? 'You (Teacher)' : 'You (Student)';
+    }
+    
+    return widget.isTeacher ? 'Student' : 'Teacher';
   }
 
   void _updateParticipants() {
@@ -178,15 +258,18 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
   }
 
   void _sendMessage() {
-    if (_chatController.text.trim().isEmpty) return;
-    _messages.add(_ChatMessage(
-      sender: _room.localParticipant?.identity ?? 'You',
-      message: _chatController.text.trim(),
-      isMe: true,
-    ));
-    _chatController.clear();
-    setState(() {});
-  }
+  if (_chatController.text.trim().isEmpty) return;
+  
+  final senderName = _myName ?? 'You';
+  
+  _messages.add(_ChatMessage(
+    sender: senderName,
+    message: _chatController.text.trim(),
+    isMe: true,
+  ));
+  _chatController.clear();
+  setState(() {});
+}
 
   @override
   void dispose() {
@@ -284,6 +367,7 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
     participant: _mainFocusParticipant!,
     isMain: true,
     localParticipant: _room.localParticipant,
+    getName: _getParticipantName, 
   ),
                             _buildIdentityOverlay(_mainFocusParticipant, isMain: true),
                           ],
@@ -327,6 +411,7 @@ if (_allParticipants.length > 1)
                       participant: participant,
                       isMain: false,
                       localParticipant: _room.localParticipant,
+                      getName: _getParticipantName, 
                     ),
                     _buildIdentityOverlay(participant, isMain: false),
                   ],
@@ -411,33 +496,43 @@ if (_allParticipants.length > 1)
   
 
   Widget _buildIdentityOverlay(Participant? participant, {required bool isMain}) {
-    final name = participant?.identity ?? 'Connecting...';
-    final isMicMuted = !(participant?.isMicrophoneEnabled() ?? true);
+  final name = participant != null ? _getParticipantName(participant) : 'Connecting...';
+  final isMicMuted = !(participant?.isMicrophoneEnabled() ?? true);
 
-    return Positioned(
-      bottom: 8, left: 8, right: 8,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.6),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text(name, style: TextStyle(color: Colors.white, fontSize: isMain ? 12 : 10)),
+  return Positioned(
+    bottom: 8, left: 8, right: 8,
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: Colors.black.withOpacity(0.6),
+            borderRadius: BorderRadius.circular(6),
           ),
-          if (isMicMuted)
-            Container(
-              padding: const EdgeInsets.all(4),
-              decoration: BoxDecoration(color: Colors.red.withOpacity(0.8), shape: BoxShape.circle),
-              child: const Icon(Icons.mic_off, color: Colors.white, size: 12),
+          child: Text(
+            name, 
+            style: TextStyle(
+              color: Colors.white, 
+              fontSize: isMain ? 12 : 10,
             ),
-        ],
-      ),
-    );
-  }
-
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        if (isMicMuted)
+          Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: Colors.red.withOpacity(0.8), 
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.mic_off, color: Colors.white, size: 12),
+          ),
+      ],
+    ),
+  );
+}
   Widget _buildControlButton({
     required IconData icon,
     required Color color,
@@ -533,12 +628,14 @@ if (_allParticipants.length > 1)
 class _ParticipantVideoTile extends StatefulWidget {
   final Participant participant;
   final bool isMain;
-  final Participant? localParticipant;  // ✅ Add this
+  final Participant? localParticipant;
+  final String Function(Participant) getName;  // ✅ Add this
 
   const _ParticipantVideoTile({
     required this.participant,
     this.isMain = false,
-    this.localParticipant,  // ✅ Add this
+    this.localParticipant,
+    required this.getName,  // ✅ Add this
   });
 
   @override
@@ -592,7 +689,6 @@ class _ParticipantVideoTileState extends State<_ParticipantVideoTile> {
       return _buildAvatar(participant, isMain);
     }
 
-    // ✅ For LOCAL participant: NEVER show their own screen share
     if (isLocal) {
       try {
         final cameraPub = videoPubs.cast<TrackPublication>().firstWhere(
@@ -607,7 +703,6 @@ class _ParticipantVideoTileState extends State<_ParticipantVideoTile> {
       return _buildAvatar(participant, isMain);
     }
 
-    // ✅ For REMOTE participants: Show screen share if available
     try {
       final screenPub = videoPubs.cast<TrackPublication>().firstWhere(
         (p) => p.source == TrackSource.screenShareVideo,
@@ -618,7 +713,6 @@ class _ParticipantVideoTileState extends State<_ParticipantVideoTile> {
       }
     } catch (_) {}
 
-    // ✅ Show camera for remote participants
     try {
       final cameraPub = videoPubs.cast<TrackPublication>().firstWhere(
         (p) => p.source == TrackSource.camera,
@@ -633,12 +727,14 @@ class _ParticipantVideoTileState extends State<_ParticipantVideoTile> {
   }
 
   Widget _buildAvatar(Participant participant, bool isMain) {
+    final name = widget.getName(participant);  // ✅ Use the passed function
+    
     return Center(
       child: CircleAvatar(
         radius: isMain ? 50 : 20,
         backgroundColor: Colors.blueAccent.withOpacity(0.1),
         child: Text(
-          (participant.identity ?? '?')[0].toUpperCase(),
+          name.isNotEmpty ? name[0].toUpperCase() : '?',
           style: TextStyle(
             color: Colors.blueAccent,
             fontWeight: FontWeight.bold,
@@ -649,6 +745,7 @@ class _ParticipantVideoTileState extends State<_ParticipantVideoTile> {
     );
   }
 }
+
 class _ChatMessage {
   final String sender;
   final String message;
