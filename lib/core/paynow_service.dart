@@ -11,7 +11,8 @@ class PayNowService {
   String? _integrationKey;
   
   // Your Vercel API URL
-  static const String _vercelApiUrl = 'https://afrinova-academy.com/api/paynow';
+  // Change this line in paynow_service.dart
+static const String _vercelApiUrl = 'https://www.afrinova-academy.com/api/paynow';
 
   Future<void> _loadSettings() async {
     if (_integrationId != null) return;
@@ -71,27 +72,34 @@ class PayNowService {
   }
 
   Future<PayNowResponse> _initiateViaVercel(
-    String reference,
-    double amount,
-    String mobileNumber,
-    String email,
-  ) async {
-    try {
-      final response = await http.post(
-        Uri.parse(_vercelApiUrl),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'reference': reference,
-          'amount': amount,
-          'mobileNumber': mobileNumber,
-          'email': email,
-        }),
-      );
+  String reference,
+  double amount,
+  String mobileNumber,
+  String email,
+) async {
+  try {
+    // Use the constant instead of hardcoded URL
+    final body = jsonEncode({
+      'reference': reference,
+      'amount': amount,
+      'mobileNumber': mobileNumber,
+      'email': email,
+    });
 
-      if (response.statusCode != 200) {
-        return PayNowResponse(success: false, error: 'Payment service error');
-      }
+    debugPrint('🔵 Attempting Vercel API call...');
+    debugPrint('🔵 URL: $_vercelApiUrl');
+    debugPrint('🔵 Body: $body');
 
+    final response = await http.post(
+      Uri.parse(_vercelApiUrl),  // ✅ Use the constant
+      headers: {'Content-Type': 'application/json'},
+      body: body,
+    );
+
+    debugPrint('🔵 Status code: ${response.statusCode}');
+    debugPrint('🔵 Response body: ${response.body}');
+
+    if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
       return PayNowResponse(
         success: data['success'] ?? false,
@@ -99,11 +107,30 @@ class PayNowService {
         pollUrl: data['pollUrl'],
         error: data['error'],
       );
-    } catch (e) {
-      return PayNowResponse(success: false, error: 'Failed to connect to payment service');
+    } else {
+      debugPrint('🔴 Non-200 status: ${response.statusCode}');
+      return PayNowResponse(
+        success: false, 
+        error: 'Server error: ${response.statusCode}'
+      );
     }
+  } catch (e, stackTrace) {
+    debugPrint('🔴 EXCEPTION: ${e.runtimeType}');
+    debugPrint('🔴 ERROR: $e');
+    
+    if (e.toString().contains('SocketException')) {
+      return PayNowResponse(success: false, error: 'Network error: Cannot reach server');
+    }
+    if (e.toString().contains('HandshakeException')) {
+      return PayNowResponse(success: false, error: 'SSL/HTTPS error');
+    }
+    if (e.toString().contains('XmlHttpRequest') || e.toString().contains('Failed to fetch')) {
+      return PayNowResponse(success: false, error: 'CORS or browser security error');
+    }
+    
+    return PayNowResponse(success: false, error: 'Failed: ${e.toString()}');
   }
-
+}
   Future<PayNowResponse> _initiateDirect(
     String reference,
     double amount,

@@ -1,10 +1,13 @@
 export default async function handler(req, res) {
-  // Enable CORS for all origins
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  // Allow both www and non-www
+  const origin = req.headers.origin || '*';
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Max-Age', '86400');
 
-  // Handle preflight OPTIONS request
+  // Handle preflight OPTIONS request FIRST
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
@@ -20,7 +23,6 @@ export default async function handler(req, res) {
   try {
     const { reference, amount, mobileNumber, email } = req.body;
     
-    // Validate required fields
     if (!reference || !amount || !mobileNumber) {
       return res.status(400).json({ 
         success: false, 
@@ -31,7 +33,6 @@ export default async function handler(req, res) {
     const amountStr = Number(amount).toFixed(2);
     const autoEmail = email?.trim() || `${mobileNumber}@mobile.paynow.co.zw`;
 
-    // Get credentials from Vercel environment variables
     const integrationId = process.env.PAYNOW_INTEGRATION_ID;
     const integrationKey = process.env.PAYNOW_INTEGRATION_KEY;
 
@@ -43,30 +44,28 @@ export default async function handler(req, res) {
       });
     }
 
-    // Build hash string (PayNow uses SHA512)
     const crypto = require('crypto');
     const hashInput = 
       integrationId + 
       reference + 
       amountStr + 
-      '' + // additionalinfo is empty
-      'https://afrinova.academy/payment/complete' + // returnurl
-      'https://rwheufzhixqqifoleltu.supabase.co/functions/v1/paynow-webhook' + // resulturl
-      'Message' + // status
+      '' + 
+      'https://afrinova-academy.com/payment/complete' + 
+      'https://rwheufzhixqqifoleltu.supabase.co/functions/v1/paynow-webhook' + 
+      'Message' + 
       mobileNumber.trim() + 
-      'ecocash' + // method
+      'ecocash' + 
       integrationKey;
     
     const hash = crypto.createHash('sha512').update(hashInput).digest('hex').toUpperCase();
 
-    // Build form data exactly as PayNow expects
     const formData = new URLSearchParams({
       id: integrationId,
       reference: reference,
       amount: amountStr,
       authemail: autoEmail,
       additionalinfo: '',
-      returnurl: 'https://afrinova.academy/payment/complete',
+      returnurl: 'https://afrinova-academy.com/payment/complete',
       resulturl: 'https://rwheufzhixqqifoleltu.supabase.co/functions/v1/paynow-webhook',
       status: 'Message',
       phone: mobileNumber.trim(),
@@ -74,9 +73,8 @@ export default async function handler(req, res) {
       hash: hash,
     });
 
-    console.log('Sending to PayNow:', formData.toString());
+    console.log('Sending to PayNow...');
 
-    // Send to PayNow
     const paynowResponse = await fetch('https://www.paynow.co.zw/interface/remotetransaction', {
       method: 'POST',
       headers: { 
@@ -89,7 +87,6 @@ export default async function handler(req, res) {
     const responseText = await paynowResponse.text();
     console.log('PayNow Response:', responseText);
     
-    // Parse PayNow response (URL-encoded format)
     const lines = responseText.split(/[\r\n&]+/);
     let pollUrl = '', success = false, error = '';
     
@@ -102,10 +99,6 @@ export default async function handler(req, res) {
       if (key === 'pollurl') pollUrl = value;
       if (key === 'status') success = value.toLowerCase() === 'ok';
       if (key === 'error') error = value;
-    }
-
-    if (!success) {
-      console.error('PayNow error:', error || 'Unknown error');
     }
 
     return res.status(200).json({ 
