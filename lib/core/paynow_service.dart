@@ -33,9 +33,9 @@ static const String _vercelApiUrl = 'https://www.afrinova-academy.com/api/paynow
   }
 
   String _generateHash(Map<String, String> items) {
-  // Order matters! Must match PayNow's expected order
+  // ✅ CORRECT ORDER for mobile payments
   final orderedKeys = [
-    'id', 'reference', 'amount', 'additionalinfo', 
+    'id', 'reference', 'amount', 'authemail', 'additionalinfo',
     'returnurl', 'resulturl', 'status', 'phone', 'method'
   ];
   

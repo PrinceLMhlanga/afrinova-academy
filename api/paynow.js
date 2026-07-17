@@ -7,7 +7,6 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.setHeader('Access-Control-Max-Age', '86400');
 
-  // Handle preflight OPTIONS request
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
@@ -42,56 +41,53 @@ export default async function handler(req, res) {
       });
     }
 
-    // Build object with ALL fields in correct order
-    const fieldsToHash = {
+    // ✅ CORRECT ORDER for mobile payments (from PayNow C# example)
+    const items = {
       id: integrationId,
       reference: reference,
       amount: amountStr,
+      authemail: autoEmail,
       additionalinfo: '',
       returnurl: 'https://afrinova-academy.com/payment/complete',
       resulturl: 'https://rwheufzhixqqifoleltu.supabase.co/functions/v1/paynow-webhook',
-      authemail: autoEmail,
+      status: 'Message',
       phone: mobileNumber.trim(),
-      method: 'ecocash',
-      status: 'Message'
+      method: 'ecocash'
     };
 
-    // Concatenate all values in strict sequence
+    // Concatenate values in CORRECT ORDER
     const concatString = 
-      fieldsToHash.id +
-      fieldsToHash.reference +
-      fieldsToHash.amount +
-      fieldsToHash.additionalinfo +
-      fieldsToHash.returnurl +
-      fieldsToHash.resulturl +
-      fieldsToHash.authemail +
-      fieldsToHash.phone +
-      fieldsToHash.method +
-      fieldsToHash.status;
+      items.id +
+      items.reference +
+      items.amount +
+      items.authemail +
+      items.additionalinfo +
+      items.returnurl +
+      items.resulturl +
+      items.status +
+      items.phone +
+      items.method;
 
-    // Append integration key
+    // Append integration key and hash
     const stringToHash = concatString + integrationKey;
-    
-    console.log('Hash input:', stringToHash);
-
-    // Generate SHA512 hash (uppercase)
     const crypto = require('crypto');
     const hash = crypto.createHash('sha512').update(stringToHash).digest('hex').toUpperCase();
-    
+
+    console.log('Hash input:', stringToHash);
     console.log('Generated hash:', hash);
 
-    // Build form data using EXACT same values
+    // Build form data
     const formData = new URLSearchParams();
-    formData.append('id', fieldsToHash.id);
-    formData.append('reference', fieldsToHash.reference);
-    formData.append('amount', fieldsToHash.amount);
-    formData.append('additionalinfo', fieldsToHash.additionalinfo);
-    formData.append('returnurl', fieldsToHash.returnurl);
-    formData.append('resulturl', fieldsToHash.resulturl);
-    formData.append('authemail', fieldsToHash.authemail);
-    formData.append('phone', fieldsToHash.phone);
-    formData.append('method', fieldsToHash.method);
-    formData.append('status', fieldsToHash.status);
+    formData.append('id', items.id);
+    formData.append('reference', items.reference);
+    formData.append('amount', items.amount);
+    formData.append('authemail', items.authemail);
+    formData.append('additionalinfo', items.additionalinfo);
+    formData.append('returnurl', items.returnurl);
+    formData.append('resulturl', items.resulturl);
+    formData.append('status', items.status);
+    formData.append('phone', items.phone);
+    formData.append('method', items.method);
     formData.append('hash', hash);
 
     console.log('Sending to PayNow...');
