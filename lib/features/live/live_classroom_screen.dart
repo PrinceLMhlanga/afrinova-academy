@@ -108,27 +108,34 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
   }
 
   void _updateParticipants() {
-    if (!mounted) return;
-    setState(() {
-      // Safely get all participants including local
-      final localParticipant = _room.localParticipant;
-      _allParticipants = [
-        if (localParticipant != null) localParticipant,
-        ..._room.remoteParticipants.values,
-      ];
+  if (!mounted) return;
+  setState(() {
+    final localParticipant = _room.localParticipant;
+    _allParticipants = [
+      if (localParticipant != null) localParticipant,
+      ..._room.remoteParticipants.values,
+    ];
 
-      if (_allParticipants.isNotEmpty) {
-        // Focus on teacher, or first screen sharer, or first participant
+    if (_allParticipants.isNotEmpty) {
+      // First check if anyone is screen sharing
+      final screenSharer = _allParticipants.firstWhere(
+        (p) => p.isScreenShareEnabled(),
+        orElse: () => _allParticipants.first,
+      );
+      
+      // If screen sharing is happening, focus on the screen sharer
+      if (screenSharer.isScreenShareEnabled()) {
+        _mainFocusParticipant = screenSharer;
+      } else {
+        // Otherwise focus on teacher or first participant
         _mainFocusParticipant = _allParticipants.firstWhere(
           (p) => p.identity?.contains('teacher') == true,
-          orElse: () => _allParticipants.firstWhere(
-            (p) => p.isScreenShareEnabled(),
-            orElse: () => _allParticipants.first,
-          ),
+          orElse: () => _allParticipants.first,
         );
       }
-    });
-  }
+    }
+  });
+}
 
   Future<void> _endLesson() async {
     final confirm = await showDialog<bool>(
@@ -385,24 +392,61 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
     );
   }
 
-  Widget _buildVideoWidget(Participant? participant) {
-    if (participant != null && participant.isCameraEnabled() && participant.videoTrackPublications.isNotEmpty) {
-      final track = participant.videoTrackPublications.first.track;
-      if (track is VideoTrack) {
-        return VideoTrackRenderer(track);
-      }
-    }
-    return Center(
-      child: CircleAvatar(
-        radius: 40,
-        backgroundColor: Colors.blueAccent.withOpacity(0.1),
-        child: Text(
-          (participant?.identity ?? '?')[0].toUpperCase(),
-          style: const TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 28),
-        ),
-      ),
-    );
+ Widget _buildVideoWidget(Participant? participant) {
+  if (participant == null) {
+    return _buildAvatar('?');
   }
+
+  // Log for debugging
+  print('Participant ${participant.identity} - Video tracks: ${participant.videoTrackPublications.length}');
+  
+  for (var pub in participant.videoTrackPublications) {
+    print('  Track: ${pub.track?.sid}, isScreenShare: ${pub.isScreenShare}, subscribed: ${pub.subscribed}');
+  }
+
+  // Priority 1: Screen share track
+  final screenTracks = participant.videoTrackPublications
+      .where((pub) => pub.isScreenShare && pub.subscribed)
+      .toList();
+  
+  if (screenTracks.isNotEmpty) {
+    final track = screenTracks.first.track;
+    if (track is VideoTrack) {
+      print('Rendering screen share track for ${participant.identity}');
+      return VideoTrackRenderer(track);
+    }
+  }
+
+  // Priority 2: Camera track
+  final cameraTracks = participant.videoTrackPublications
+      .where((pub) => !pub.isScreenShare && pub.subscribed)
+      .toList();
+  
+  if (cameraTracks.isNotEmpty) {
+    final track = cameraTracks.first.track;
+    if (track is VideoTrack) {
+      print('Rendering camera track for ${participant.identity}');
+      return VideoTrackRenderer(track);
+    }
+  }
+
+  // Fallback: avatar
+  print('No video tracks for ${participant.identity}, showing avatar');
+  return _buildAvatar(participant.identity ?? '?');
+}
+
+Widget _buildAvatar(String text) {
+  return Center(
+    child: CircleAvatar(
+      radius: 40,
+      backgroundColor: Colors.blueAccent.withOpacity(0.1),
+      child: Text(
+        text[0].toUpperCase(),
+        style: const TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 28),
+      ),
+    ),
+  );
+}
 
   Widget _buildIdentityOverlay(Participant? participant, {required bool isMain}) {
     final name = participant?.identity ?? 'Connecting...';
