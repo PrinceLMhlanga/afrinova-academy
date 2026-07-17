@@ -1,10 +1,14 @@
 {
-  "buildCommand": "flutter build web --release",
-  "outputDirectory": "build/web",
-  "installCommand": "flutter pub get",
+  "functions": {
+    "api/paynow.js": {
+      "memory": 256,
+      "maxDuration": 30
+    }
+  },
   "rewrites": [
-    { "source": "/(.*)", "destination": "/index.html" },
-    { "source": "/api/paynow", "destination": "https://www.paynow.co.zw/interface/remotetransaction" },
-    { "source": "/api/paynow-poll/:path*", "destination": "https://www.paynow.co.zw/interface/:path*" }
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
   ]
 }
