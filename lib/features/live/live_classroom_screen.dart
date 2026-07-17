@@ -266,7 +266,11 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
                         color: const Color(0xFF252525),
                         child: Stack(
                           children: [
-                            _buildVideoWidget(_mainFocusParticipant),
+                            if (_mainFocusParticipant != null)
+  _ParticipantVideoTile(
+    participant: _mainFocusParticipant!,
+    isMain: true,
+  ),
                             _buildIdentityOverlay(_mainFocusParticipant, isMain: true),
                           ],
                         ),
@@ -304,7 +308,10 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
                                 color: const Color(0xFF1E1E1E),
                                 child: Stack(
                                   children: [
-                                    _buildVideoWidget(participant),
+                                    _ParticipantVideoTile(
+  participant: participant,
+  isMain: false,
+),
                                     _buildIdentityOverlay(participant, isMain: false),
                                   ],
                                 ),
@@ -385,24 +392,7 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
     );
   }
 
-  Widget _buildVideoWidget(Participant? participant) {
-    if (participant != null && participant.isCameraEnabled() && participant.videoTrackPublications.isNotEmpty) {
-      final track = participant.videoTrackPublications.first.track;
-      if (track is VideoTrack) {
-        return VideoTrackRenderer(track);
-      }
-    }
-    return Center(
-      child: CircleAvatar(
-        radius: 40,
-        backgroundColor: Colors.blueAccent.withOpacity(0.1),
-        child: Text(
-          (participant?.identity ?? '?')[0].toUpperCase(),
-          style: const TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 28),
-        ),
-      ),
-    );
-  }
+  
 
   Widget _buildIdentityOverlay(Participant? participant, {required bool isMain}) {
     final name = participant?.identity ?? 'Connecting...';
@@ -519,6 +509,101 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// Add this new widget at the bottom of the file
+class _ParticipantVideoTile extends StatefulWidget {
+  final Participant participant;
+  final bool isMain;
+
+  const _ParticipantVideoTile({
+    required this.participant,
+    this.isMain = false,
+  });
+
+  @override
+  State<_ParticipantVideoTile> createState() => _ParticipantVideoTileState();
+}
+
+class _ParticipantVideoTileState extends State<_ParticipantVideoTile> {
+  late final EventsListener<ParticipantEvent> _listener;
+
+  @override
+  void initState() {
+    super.initState();
+    // ✅ Listen for track changes on this participant
+    _listener = widget.participant.createListener();
+    
+    _listener.on<TrackSubscribedEvent>((event) {
+      if (mounted) setState(() {});
+    });
+    
+    _listener.on<TrackUnsubscribedEvent>((event) {
+      if (mounted) setState(() {});
+    });
+    
+    _listener.on<TrackMutedEvent>((event) {
+      if (mounted) setState(() {});
+    });
+    
+    _listener.on<TrackUnmutedEvent>((event) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _listener.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _buildVideoContent(widget.participant, widget.isMain);
+  }
+
+  Widget _buildVideoContent(Participant participant, bool isMain) {
+    // ✅ Check screen share first
+    // ✅ Fix - only use screenShareVideo
+final screenPub = participant.videoTrackPublications.firstWhere(
+  (p) => p.source == TrackSource.screenShareVideo,
+  orElse: () => participant.videoTrackPublications.first,
+);
+
+    // If screen share is active and subscribed, show it
+    if (participant.isScreenShareEnabled() && 
+        screenPub.track != null && 
+        screenPub.subscribed) {
+      return VideoTrackRenderer(screenPub.track as VideoTrack);
+    }
+
+    // Regular camera
+    final cameraPub = participant.videoTrackPublications.firstWhere(
+      (p) => p.source == TrackSource.camera,
+      orElse: () => participant.videoTrackPublications.first,
+    );
+
+    if (participant.isCameraEnabled() && 
+        cameraPub.track != null) {
+      return VideoTrackRenderer(cameraPub.track as VideoTrack);
+    }
+
+    // Fallback avatar
+    return Center(
+      child: CircleAvatar(
+        radius: isMain ? 50 : 20,
+        backgroundColor: Colors.blueAccent.withOpacity(0.1),
+        child: Text(
+          (participant.identity ?? '?')[0].toUpperCase(),
+          style: TextStyle(
+            color: Colors.blueAccent,
+            fontWeight: FontWeight.bold,
+            fontSize: isMain ? 28 : 14,
+          ),
+        ),
       ),
     );
   }

@@ -340,40 +340,7 @@ class _AITutorScreenState extends State<AITutorScreen>
       foregroundColor: Colors.white,
       elevation: 0,
       actions: [
-        // Model selector (like ChatGPT)
-        PopupMenuButton<String>(
-          icon: Container(
-            padding: const EdgeInsets.all(6),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: const Icon(Icons.model_training_rounded, size: 20),
-          ),
-          onSelected: (value) {},
-          itemBuilder: (context) => [
-            const PopupMenuItem(
-              value: 'gpt-4',
-              child: Row(
-                children: [
-                  Icon(Icons.check_circle, size: 16, color: Color(0xFF1A237E)),
-                  SizedBox(width: 8),
-                  Text('GPT-4'),
-                ],
-              ),
-            ),
-            const PopupMenuItem(
-              value: 'gpt-3.5',
-              child: Row(
-                children: [
-                  SizedBox(width: 24),
-                  Text('GPT-3.5 Turbo'),
-                ],
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(width: 4),
+     
         IconButton(
           icon: Container(
             padding: const EdgeInsets.all(6),
