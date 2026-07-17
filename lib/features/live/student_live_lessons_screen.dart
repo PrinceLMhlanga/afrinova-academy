@@ -4,6 +4,7 @@ import '../../core/live_lesson_service.dart';
 import '../../core/auth_service.dart';
 import '../payment/payment_screen.dart';
 import '../../core/access_checker.dart'; 
+import '../live/live_classroom_screen.dart';
 
 class StudentLiveLessonsScreen extends StatefulWidget {
   const StudentLiveLessonsScreen({super.key});
@@ -176,17 +177,18 @@ class _StudentLiveLessonsScreenState extends State<StudentLiveLessonsScreen> {
     } catch (_) { return ''; }
   }
 
-  Future<void> _joinLesson(Map<String, dynamic> lesson) async {
-    final profile = await _authService.getProfile();
-    final studentName = profile?['full_name'] ?? "Student";
-    await _liveService.joinLesson(
-      context: context,
-      roomName: lesson['room_id'] as String,
-      userName: studentName,
-      lessonId: lesson['id'] as String,
-      isTeacher: false,
-    );
-  }
+ Future<void> _joinLesson(Map<String, dynamic> lesson) async {
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => LiveClassroomScreen(
+        roomName: lesson['room_id'] as String,
+        lessonId: lesson['id'] as String,
+        isTeacher: false,
+      ),
+    ),
+  );
+}
 
   @override
   Widget build(BuildContext context) {

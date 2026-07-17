@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/live_lesson_service.dart';
 import '../../core/auth_service.dart';
-import 'package:url_launcher/url_launcher.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+
+import '../live/live_classroom_screen.dart'; 
 
 class GoLiveScreen extends StatefulWidget {
   final String? preSelectedLevelId;
@@ -162,30 +162,30 @@ class _GoLiveScreenState extends State<GoLiveScreen> {
       if (lessonId == null || roomId == null) throw Exception('Failed to create lesson');
 
       if (joinImmediately) {
-  await _liveService.updateStatus(lessonId, 'live');
-  
-  if (kIsWeb) {
-    // Open Jitsi in new tab
-    final uri = Uri.parse('https://meet.ffmuc.net/$roomId#userInfo.displayName=Teacher&config.prejoinPageEnabled=false');
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
-    
-    // ✅ Show End Lesson button
-    if (mounted) {
-      _showEndLessonDialog(lessonId);
-    }
-  } else {
-    // Mobile - join in-app
-    if (mounted) {
-      await _liveService.joinLesson(
-        context: context,
-        roomName: roomId,
-        userName: 'Teacher',
-        lessonId: lessonId,
-        isTeacher: true,
-      );
-    }
-  }
-}
+        // ✅ Update status to live
+        await _liveService.updateStatus(lessonId, 'live');
+        
+        // ✅ Navigate to LiveKit classroom
+        if (mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => LiveClassroomScreen(
+                roomName: roomId,
+                lessonId: lessonId,
+                isTeacher: true,
+              ),
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Lesson scheduled! ✅'), backgroundColor: Color(0xFF4CAF50)),
+          );
+          Navigator.pop(context, true);
+        }
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
