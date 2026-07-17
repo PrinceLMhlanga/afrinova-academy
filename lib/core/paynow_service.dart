@@ -33,16 +33,21 @@ static const String _vercelApiUrl = 'https://www.afrinova-academy.com/api/paynow
   }
 
   String _generateHash(Map<String, String> items) {
-    final concat = items.entries
-        .where((e) => e.key.toLowerCase() != 'hash')
-        .map((e) => e.value)
-        .join('');
+  // Order matters! Must match PayNow's expected order
+  final orderedKeys = [
+    'id', 'reference', 'amount', 'additionalinfo', 
+    'returnurl', 'resulturl', 'status', 'phone', 'method'
+  ];
+  
+  final concat = orderedKeys
+      .map((key) => items[key] ?? '')
+      .join('');
 
-    final stringToHash = '$concat$_integrationKey';
-    final bytes = utf8.encode(stringToHash);
-    final digest = sha512.convert(bytes);
-    return digest.toString().toUpperCase();
-  }
+  final stringToHash = '$concat$_integrationKey';
+  final bytes = utf8.encode(stringToHash);
+  final digest = sha512.convert(bytes);
+  return digest.toString().toUpperCase();
+}
 
   // Keep this method - it's what PaymentScreen calls
   Future<PayNowResponse> initiateMobilePayment({

@@ -12,7 +12,6 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  // Only allow POST requests
   if (req.method !== 'POST') {
     return res.status(405).json({ 
       success: false, 
@@ -26,7 +25,7 @@ export default async function handler(req, res) {
     if (!reference || !amount || !mobileNumber) {
       return res.status(400).json({ 
         success: false, 
-        error: 'Missing required fields: reference, amount, mobileNumber' 
+        error: 'Missing required fields' 
       });
     }
 
@@ -44,34 +43,47 @@ export default async function handler(req, res) {
       });
     }
 
-    const crypto = require('crypto');
-    const hashInput = 
-      integrationId + 
-      reference + 
-      amountStr + 
-      '' + 
-      'https://afrinova-academy.com/payment/complete' + 
-      'https://rwheufzhixqqifoleltu.supabase.co/functions/v1/paynow-webhook' + 
-      'Message' + 
-      mobileNumber.trim() + 
-      'ecocash' + 
-      integrationKey;
+    // ✅ CORRECT HASH GENERATION per PayNow docs
+    // 1. Concatenate values in order WITHOUT URL encoding
+    const values = [
+      integrationId,
+      reference,
+      amountStr,
+      '',                              // additionalinfo (empty)
+      'https://afrinova-academy.com/payment/complete',  // returnurl
+      'https://rwheufzhixqqifoleltu.supabase.co/functions/v1/paynow-webhook',  // resulturl
+      'Message',                       // status
+      mobileNumber.trim(),            // phone
+      'ecocash',                      // method
+    ];
     
-    const hash = crypto.createHash('sha512').update(hashInput).digest('hex').toUpperCase();
+    // Join all values into one string
+    const concatString = values.join('');
+    
+    // Append integration key
+    const stringToHash = concatString + integrationKey;
+    
+    console.log('Hash input:', stringToHash);
+    
+    // Create SHA512 hash (uppercase hex)
+    const crypto = require('crypto');
+    const hash = crypto.createHash('sha512').update(stringToHash).digest('hex').toUpperCase();
+    
+    console.log('Generated hash:', hash);
 
-    const formData = new URLSearchParams({
-      id: integrationId,
-      reference: reference,
-      amount: amountStr,
-      authemail: autoEmail,
-      additionalinfo: '',
-      returnurl: 'https://afrinova-academy.com/payment/complete',
-      resulturl: 'https://rwheufzhixqqifoleltu.supabase.co/functions/v1/paynow-webhook',
-      status: 'Message',
-      phone: mobileNumber.trim(),
-      method: 'ecocash',
-      hash: hash,
-    });
+    // Build form data with hash
+    const formData = new URLSearchParams();
+    formData.append('id', integrationId);
+    formData.append('reference', reference);
+    formData.append('amount', amountStr);
+    formData.append('authemail', autoEmail);
+    formData.append('additionalinfo', '');
+    formData.append('returnurl', 'https://afrinova-academy.com/payment/complete');
+    formData.append('resulturl', 'https://rwheufzhixqqifoleltu.supabase.co/functions/v1/paynow-webhook');
+    formData.append('status', 'Message');
+    formData.append('phone', mobileNumber.trim());
+    formData.append('method', 'ecocash');
+    formData.append('hash', hash);
 
     console.log('Sending to PayNow...');
 
@@ -87,6 +99,7 @@ export default async function handler(req, res) {
     const responseText = await paynowResponse.text();
     console.log('PayNow Response:', responseText);
     
+    // Parse response
     const lines = responseText.split(/[\r\n&]+/);
     let pollUrl = '', success = false, error = '';
     
