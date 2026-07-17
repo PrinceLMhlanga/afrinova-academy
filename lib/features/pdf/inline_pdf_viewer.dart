@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
-import 'dart:ui_web' as ui;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_pdfview/flutter_pdfview.dart';
-import 'package:universal_html/html.dart' as html;
 import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:universal_html/html.dart' as html;
+
+// ✅ Conditional import for web platform
+import 'inline_pdf_viewer_stub.dart'
+    if (dart.library.html) 'inline_pdf_viewer_web.dart';
 
 class InlinePdfViewer extends StatefulWidget {
   final String pdfUrl;
@@ -38,13 +41,10 @@ class _InlinePdfViewerState extends State<InlinePdfViewer> {
   Future<void> _loadPdf() async {
     try {
       if (kIsWeb) {
-        // Web: Just load directly - no download needed
         setState(() => _isLoading = false);
       } else if (Platform.isAndroid || Platform.isIOS) {
-        // Mobile: Download for native viewer
         await _downloadForNative();
       } else {
-        // Desktop: Open in browser
         await _openExternally();
       }
     } catch (e) {
@@ -116,21 +116,11 @@ class _InlinePdfViewerState extends State<InlinePdfViewer> {
     }
   }
 
-  // ✅ Web: Inline viewer using iframe/embed
+  // ✅ Web viewer - now uses the conditional import
   Widget _buildWebViewer() {
-    // Register the iframe
     final viewId = 'pdf-viewer-${DateTime.now().millisecondsSinceEpoch}';
     
-    // ignore: undefined_prefixed_name
-    ui.platformViewRegistry.registerViewFactory(viewId, (int viewId) {
-      final iframe = html.IFrameElement()
-        ..src = widget.pdfUrl
-        ..style.width = '100%'
-        ..style.height = '100%'
-        ..style.border = 'none'
-        ..style.borderRadius = '8px';
-      return iframe;
-    });
+    registerPdfViewer(viewId, widget.pdfUrl);
 
     return Container(
       decoration: BoxDecoration(
@@ -141,7 +131,6 @@ class _InlinePdfViewerState extends State<InlinePdfViewer> {
     );
   }
 
-  // ✅ Mobile: Native PDF viewer
   Widget _buildNativeViewer() {
     if (_localPath == null) {
       return const Center(child: Text('PDF file not available'));
@@ -153,9 +142,6 @@ class _InlinePdfViewerState extends State<InlinePdfViewer> {
       swipeHorizontal: false,
       autoSpacing: true,
       pageFling: true,
-      pageSnap: true,
-      defaultPage: 0,
-      fitPolicy: FitPolicy.WIDTH,
       onRender: (pages) {
         if (mounted) setState(() => _totalPages = pages ?? 0);
       },
@@ -173,7 +159,6 @@ class _InlinePdfViewerState extends State<InlinePdfViewer> {
     );
   }
 
-  // ✅ Desktop: Prompt to open in browser
   Widget _buildOpenInBrowserPrompt() {
     return Center(
       child: Padding(

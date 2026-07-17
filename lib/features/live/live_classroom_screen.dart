@@ -55,6 +55,8 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
             event is TrackUnmutedEvent ||
             event is TrackPublishedEvent ||
             event is TrackUnpublishedEvent ||
+            event is TrackSubscribedEvent ||      // ✅ Add this
+            event is TrackUnsubscribedEvent ||    // ✅ Add this
             event is RoomDisconnectedEvent) {
           _updateParticipants();
         }
@@ -110,7 +112,6 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
   void _updateParticipants() {
     if (!mounted) return;
     setState(() {
-      // Safely get all participants including local
       final localParticipant = _room.localParticipant;
       _allParticipants = [
         if (localParticipant != null) localParticipant,
@@ -118,14 +119,15 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
       ];
 
       if (_allParticipants.isNotEmpty) {
-        // Focus on teacher, or first screen sharer, or first participant
-        _mainFocusParticipant = _allParticipants.firstWhere(
-          (p) => p.identity?.contains('teacher') == true,
+        // ✅ Priority 1: Someone ELSE sharing screen (not me)
+        final screenSharer = _allParticipants.firstWhere(
+          (p) => p.isScreenShareEnabled() && p != localParticipant,
           orElse: () => _allParticipants.firstWhere(
-            (p) => p.isScreenShareEnabled(),
+            (p) => (p.identity ?? '').contains('teacher'),
             orElse: () => _allParticipants.first,
           ),
         );
+        _mainFocusParticipant = screenSharer;
       }
     });
   }

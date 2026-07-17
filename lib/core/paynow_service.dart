@@ -1,24 +1,18 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
+
 
 class PayNowService {
   final SupabaseClient _client = Supabase.instance.client;
-
   String? _integrationId;
   String? _integrationKey;
-
-  String get _baseUrl => 'https://www.paynow.co.zw/interface';
-  String get _resultUrl => const String.fromEnvironment(
-        'PAYNOW_WEBHOOK_URL',
-        defaultValue: 'https://rwheufzhixqqifoleltu.supabase.co/functions/v1/paynow-webhook',
-      );
-  String get _returnUrl => const String.fromEnvironment(
-        'PAYNOW_RETURN_URL',
-        defaultValue: 'https://afrinova.academy/payment/complete',
-      );
+  
+  // Your Vercel API URL
+  static const String _vercelApiUrl = 'https://afrinova-academy.com/api/paynow';
 
   Future<void> _loadSettings() async {
     if (_integrationId != null) return;
@@ -26,7 +20,7 @@ class PayNowService {
     final response = await _client
         .from('platform_settings')
         .select('key, value')
-        .inFilter('key', ['paynow_integration_id', 'paynow_integration_key']);
+        .or('key.eq.paynow_integration_id,key.eq.paynow_integration_key');
 
     for (final row in response) {
       if (row['key'] == 'paynow_integration_id') {
@@ -47,11 +41,10 @@ class PayNowService {
     final stringToHash = '$concat$_integrationKey';
     final bytes = utf8.encode(stringToHash);
     final digest = sha512.convert(bytes);
-
     return digest.toString().toUpperCase();
   }
 
-  Future<PayNowResponse> initiateMobilePayment({
+  Future<PayNowResponse> initiatePayment({
     required String reference,
     required double amount,
     required String mobileNumber,
@@ -65,46 +58,111 @@ class PayNowService {
         return PayNowResponse(success: false, error: 'PayNow credentials are not configured.');
       }
 
-      final amountStr = amount.toStringAsFixed(2);
-      final autoEmail = email.trim().isNotEmpty ? email.trim() : '$mobileNumber@mobile.paynow.co.zw';
-
-      final items = <String, String>{
-        'id': _integrationId ?? '',
-        'reference': reference,
-        'amount': amountStr,
-        'authemail': autoEmail,
-        'additionalinfo': '',
-        'returnurl': _returnUrl,
-        'resulturl': _resultUrl,
-        'status': 'Message',
-        'phone': mobileNumber.trim(),
-        'method': carrier,
-      };
-
-      final hash = _generateHash(items);
-      items['hash'] = hash;
-
-      final postData = items.entries
-          .map((e) => '${e.key}=${Uri.encodeComponent(e.value)}')
-          .join('&');
-
-      debugPrint('PayNow Request: $postData');
-
-      final response = await http
-          .post(
-            Uri.parse('$_baseUrl/remotetransaction'),
-            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-            body: postData,
-          )
-          .timeout(const Duration(seconds: 20));
-
-      debugPrint('PayNow Response: ${response.body}');
-
-      return _parseInitiateResponse(response.body, reference);
+      // Use Vercel API for web, direct for mobile
+      if (kIsWeb) {
+        return _initiateViaVercel(reference, amount, mobileNumber, email);
+      } else {
+        return _initiateDirect(reference, amount, mobileNumber, email, carrier);
+      }
     } catch (e) {
       debugPrint('PayNow error: $e');
       return PayNowResponse(success: false, error: e.toString());
     }
+  }
+
+  Future<PayNowResponse> _initiateViaVercel(
+    String reference,
+    double amount,
+    String mobileNumber,
+    String email,
+  ) async {
+    try {
+      final response = await http.post(
+        Uri.parse(_vercelApiUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'reference': reference,
+          'amount': amount,
+          'mobileNumber': mobileNumber,
+          'email': email,
+        }),
+      );
+
+      if (response.statusCode != 200) {
+        return PayNowResponse(success: false, error: 'Payment service error');
+      }
+
+      final data = jsonDecode(response.body);
+      return PayNowResponse(
+        success: data['success'] ?? false,
+        reference: data['reference'],
+        pollUrl: data['pollUrl'],
+        error: data['error'],
+      );
+    } catch (e) {
+      return PayNowResponse(success: false, error: 'Failed to connect to payment service');
+    }
+  }
+
+  Future<PayNowResponse> _initiateDirect(
+    String reference,
+    double amount,
+    String mobileNumber,
+    String email,
+    String carrier,
+  ) async {
+    final amountStr = amount.toStringAsFixed(2);
+    final autoEmail = email.trim().isNotEmpty ? email.trim() : '$mobileNumber@mobile.paynow.co.zw';
+
+    final items = <String, String>{
+      'id': _integrationId ?? '',
+      'reference': reference,
+      'amount': amountStr,
+      'authemail': autoEmail,
+      'additionalinfo': '',
+      'returnurl': 'https://afrinova.academy/payment/complete',
+      'resulturl': 'https://rwheufzhixqqifoleltu.supabase.co/functions/v1/paynow-webhook',
+      'status': 'Message',
+      'phone': mobileNumber.trim(),
+      'method': carrier,
+    };
+
+    final hash = _generateHash(items);
+    items['hash'] = hash;
+
+    final postData = items.entries
+        .map((e) => '${e.key}=${Uri.encodeComponent(e.value)}')
+        .join('&');
+
+    final response = await http
+        .post(
+          Uri.parse('https://www.paynow.co.zw/interface/remotetransaction'),
+          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+          body: postData,
+        )
+        .timeout(const Duration(seconds: 30));
+
+    return _parseResponse(response.body, reference);
+  }
+
+  PayNowResponse _parseResponse(String body, String reference) {
+    final result = PayNowResponse(success: false, reference: reference);
+    
+    final lines = body.split(RegExp(r'[\r\n&]'));
+    for (final line in lines) {
+      if (line.isEmpty) continue;
+      final separatorIndex = line.indexOf('=');
+      if (separatorIndex < 0) continue;
+
+      final key = line.substring(0, separatorIndex).toLowerCase();
+      final value = Uri.decodeComponent(line.substring(separatorIndex + 1));
+
+      if (key == 'pollurl') result.pollUrl = value;
+      if (key == 'status') result.success = value.toLowerCase() == 'ok';
+      if (key == 'error') result.error = value;
+    }
+
+    return result;
   }
 
   Future<PayNowStatusResponse> pollTransaction(String pollUrl) async {
@@ -113,10 +171,8 @@ class PayNowService {
         return PayNowStatusResponse(paid: false, status: 'Error', error: 'Empty poll URL');
       }
 
-      final decodedUrl = Uri.decodeFull(pollUrl);
-
       final response = await http
-          .post(Uri.parse(decodedUrl), body: '')
+          .post(Uri.parse(pollUrl), body: '')
           .timeout(const Duration(seconds: 20));
 
       return _parseStatusResponse(response.body);
@@ -126,60 +182,8 @@ class PayNowService {
     }
   }
 
-  Future<String> createPendingPayment({
-    required String studentId,
-    required String teacherId,
-    required double amount,
-    String? enrollmentId,
-    String? pricingPlanId, 
-  }) async {
-    // ✅ ALWAYS create a new payment reference
-    // Each payment is unique, even for the same student+teacher
-    final reference = 'AFRINOVA-${DateTime.now().millisecondsSinceEpoch}';
-
-    await _client.from('payments').insert({
-      'student_id': studentId,
-      'teacher_id': teacherId,
-      'amount': amount,
-      'gateway_reference': reference,
-      'status': 'pending',
-      'payment_method': 'ecocash',
-      'enrollment_id': enrollmentId,
-      'pricing_plan_id': pricingPlanId,
-      'created_at': DateTime.now().toIso8601String(),
-    });
-
-    debugPrint('Created new pending payment: $reference');
-    return reference;
-  }
-
-  PayNowResponse _parseInitiateResponse(String body, String reference) {
-    final result = PayNowResponse(success: false, reference: reference);
-
-    final lines = body.split(RegExp(r'[\r\n&]'));
-    for (final line in lines) {
-      if (line.isEmpty) continue;
-      final separatorIndex = line.indexOf('=');
-      if (separatorIndex < 0) continue;
-
-      final key = line.substring(0, separatorIndex).toLowerCase();
-      final value = line.substring(separatorIndex + 1);
-
-      if (key == 'pollurl') {
-        result.pollUrl = Uri.decodeComponent(value);
-      } else if (key == 'status') {
-        result.success = Uri.decodeComponent(value).toLowerCase() == 'ok';
-      } else if (key == 'error') {
-        result.error = Uri.decodeComponent(value);
-      }
-    }
-
-    return result;
-  }
-
   PayNowStatusResponse _parseStatusResponse(String body) {
     final result = PayNowStatusResponse(paid: false, status: 'pending');
-
     final pairs = body.split('&');
     final dict = <String, String>{};
 
@@ -198,15 +202,9 @@ class PayNowService {
       result.status = status.toLowerCase();
       result.paid = status.toLowerCase() == 'paid';
     }
-    if (dict.containsKey('amount')) {
-      result.amount = double.tryParse(dict['amount']!);
-    }
-    if (dict.containsKey('reference')) {
-      result.reference = dict['reference']!;
-    }
-    if (dict.containsKey('paynowreference')) {
-      result.paynowReference = dict['paynowreference']!;
-    }
+    if (dict.containsKey('amount')) result.amount = double.tryParse(dict['amount']!);
+    if (dict.containsKey('reference')) result.reference = dict['reference']!;
+    if (dict.containsKey('paynowreference')) result.paynowReference = dict['paynowreference']!;
 
     return result;
   }

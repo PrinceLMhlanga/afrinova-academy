@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/subject_service.dart';
 import '../../core/auth_service.dart';
 import '../../core/teacher_service.dart';
+import 'package:youtube_player_iframe/youtube_player_iframe.dart';
 
 import 'web_recorder_stub.dart'
     if (dart.library.html) 'web_recorder_screen.dart' as recorder;
@@ -332,13 +333,18 @@ class _UploadLessonScreenState extends State<UploadLessonScreen> {
       final durationMin = int.tryParse(_durationController.text);
 
       if (_videoSource == 'url') {
+        final videoUrl = _videoUrlController.text.trim();
+  
+  // ✅ Check if it's a YouTube URL and extract ID for storage
+  final youtubeId = YoutubePlayerController.convertUrlToId(videoUrl);
         // Save with video URL
         await Supabase.instance.client.from('lessons').insert({
           'teacher_topic_id': topicId,
           'teacher_id': userId,
           'title': title,
           'description': description,
-          'video_url': _videoUrlController.text.trim(),
+          'video_url': videoUrl,  // Store full URL or just YouTube ID
+          'youtube_id': youtubeId,  // ✅ Store YouTube ID separately
           'duration_minutes': durationMin,
           'is_premium': _isPremium,
           'level_id': _selectedLevelId ?? null,
