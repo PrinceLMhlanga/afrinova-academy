@@ -131,6 +131,7 @@ class PayNowService {
     required String teacherId,
     required double amount,
     String? enrollmentId,
+    String? pricingPlanId, 
   }) async {
     // ✅ ALWAYS create a new payment reference
     // Each payment is unique, even for the same student+teacher
@@ -144,6 +145,7 @@ class PayNowService {
       'status': 'pending',
       'payment_method': 'ecocash',
       'enrollment_id': enrollmentId,
+      'pricing_plan_id': pricingPlanId,
       'created_at': DateTime.now().toIso8601String(),
     });
 

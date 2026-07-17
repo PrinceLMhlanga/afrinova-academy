@@ -327,6 +327,7 @@ class _MySubjectsScreenState extends State<MySubjectsScreen> {
                                                 teacherName: teacherName,
                                                 subjectName: subject['name'] ?? '',
                                                 subjectColor: color,
+                                                subjectId: teacher['subject_id'] as String,   // ✅ Pass
                                               ),
                                             ),
                                           );

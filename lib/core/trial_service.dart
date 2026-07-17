@@ -70,21 +70,42 @@ class TrialService {
   }
 
   // Activate subscription after payment
-  Future<void> activateSubscription(String enrollmentId, {int months = 1}) async {
-    final expiry = DateTime.now().add(Duration(days: 30 * months));
-    await _client.from('enrollments').update({
-      'is_subscribed': true,
-      'subscription_expires_at': expiry.toIso8601String(),
-      'status': 'paid',
-    }).eq('id', enrollmentId);
+  Future<void> activateSubscription(
+  String enrollmentId, {
+  int months = 1,
+  String? pricingPlanId,  // ✅ Add
+}) async {
+  final expiry = DateTime.now().add(Duration(days: 30 * months));
+  
+  final updates = <String, dynamic>{
+    'is_subscribed': true,
+    'subscription_expires_at': expiry.toIso8601String(),
+    'status': 'paid',
+  };
+  
+  // ✅ Load plan features if plan selected
+  if (pricingPlanId != null) {
+    final plan = await _client
+        .from('teacher_pricing')
+        .select('features')
+        .eq('id', pricingPlanId)
+        .maybeSingle();
+    
+    if (plan != null) {
+      updates['plan_features'] = plan['features'] ?? [];
+      updates['pricing_plan_id'] = pricingPlanId;
+    }
   }
+  
+  await _client.from('enrollments').update(updates).eq('id', enrollmentId);
+}
 
   // Get all trial warnings for a student (banners to show)
   Future<List<Map<String, dynamic>>> getTrialWarnings(String studentId) async {
     try {
       final enrollments = await _client
           .from('enrollments')
-          .select('id, subject_id, teacher_id, trial_ends_at, is_subscribed, subjects(name), profiles!teacher_id(full_name)')
+          .select('id, subject_id, level_id, teacher_id, trial_ends_at, is_subscribed, subjects(name), profiles!teacher_id(display_name, full_name)')
           .eq('student_id', studentId)
           .inFilter('status', ['approved', 'paid'])
           .eq('is_subscribed', false);
@@ -101,7 +122,9 @@ class TrialService {
             warnings.add({
               'enrollment_id': e['id'],
               'teacher_id': e['teacher_id'],
-              'teacher_name': e['profiles']?['full_name'] ?? 'Teacher',
+              'subject_id': e['subject_id'],     // ✅ Add
+              'level_id': e['level_id'],         // ✅ Add
+              'teacher_name': e['profiles']?['display_name'] ?? 'Teacher',
               'subject_name': e['subjects']?['name'] ?? 'Subject',
               'days_left': daysLeft > 0 ? daysLeft : 0,
               'is_expired': daysLeft <= 0,
@@ -121,7 +144,7 @@ Future<List<Map<String, dynamic>>> getSubscriptionWarnings(String studentId) asy
     try {
       final enrollments = await _client
           .from('enrollments')
-          .select('id, subject_id, teacher_id, subscription_expires_at, is_subscribed, subjects(name), profiles!teacher_id(full_name)')
+          .select('id, subject_id, level_id, teacher_id, subscription_expires_at, is_subscribed, subjects(name), profiles!teacher_id(display_name, full_name)')
           .eq('student_id', studentId)
           .eq('is_subscribed', true);
 
@@ -138,7 +161,9 @@ Future<List<Map<String, dynamic>>> getSubscriptionWarnings(String studentId) asy
             warnings.add({
               'enrollment_id': e['id'],
               'teacher_id': e['teacher_id'],
-              'teacher_name': e['profiles']?['full_name'] ?? 'Teacher',
+              'subject_id': e['subject_id'],     // ✅ Add
+              'level_id': e['level_id'],         // ✅ Add
+              'teacher_name': e['profiles']?['display_name'] ?? 'Teacher',
               'subject_name': e['subjects']?['name'] ?? 'Subject',
               'days_left': daysLeft > 0 ? daysLeft : 0,
               'is_expired': daysLeft <= 0,

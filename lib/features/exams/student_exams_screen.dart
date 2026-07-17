@@ -4,6 +4,7 @@ import '../../core/auth_service.dart';
 import '../payment/payment_screen.dart';
 import 'exam_taker_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../core/access_checker.dart';  // ✅ Add
 
 class StudentExamsScreen extends StatefulWidget {
   const StudentExamsScreen({super.key});
@@ -20,11 +21,38 @@ class _StudentExamsScreenState extends State<StudentExamsScreen> {
   Map<String, Map<String, dynamic>> _enrollments = {};
   bool _isLoading = true;
 
+  Map<String, bool> _examAccessCache = {};
+
   @override
   void initState() {
     super.initState();
     _loadData();
   }
+
+  Future<bool> _canAccessMCQ(String teacherId) async {
+  // Check cache first
+  if (_examAccessCache.containsKey(teacherId)) {
+    return _examAccessCache[teacherId]!;
+  }
+
+  try {
+    final userId = _authService.currentUserId;
+    if (userId == null) return false;
+
+    final enrollment = await Supabase.instance.client
+        .from('enrollments')
+        .select('plan_features, is_subscribed, subscription_expires_at, trial_ends_at')
+        .eq('student_id', userId)
+        .eq('teacher_id', teacherId)
+        .maybeSingle();
+
+    final hasAccess = AccessChecker.canAccessMCQ(enrollment);
+    _examAccessCache[teacherId] = hasAccess;
+    return hasAccess;
+  } catch (e) {
+    return true; // Default to true on error
+  }
+}
 
   Future<void> _loadData() async {
     try {
@@ -34,7 +62,7 @@ class _StudentExamsScreenState extends State<StudentExamsScreen> {
       // Get enrollments with full trial + subscription info
       final enrollments = await Supabase.instance.client
           .from('enrollments')
-          .select('id, teacher_id, subject_id, status, trial_ends_at, is_subscribed, subscription_expires_at, profiles!teacher_id(full_name), subjects(name)')
+          .select('id, teacher_id, subject_id, level_id, status, trial_ends_at, is_subscribed, subscription_expires_at, profiles!teacher_id(full_name), subjects(name)')
           .eq('student_id', userId)
           .inFilter('status', ['approved', 'paid']);
 
@@ -217,18 +245,34 @@ if (teacherIds.isNotEmpty) {
                         statusText: statusText,
                         statusColor: statusColor,
                         canAccess: canAccess,
+                        onCheckFeature: () => _canAccessMCQ(creatorId),
                         isExpired: isExpired,
                         isSubscriptionExpired: isSubscriptionExpired,
                         onTap: canAccess
-                            ? () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => ExamTakerScreen(exam: exam),
-                                  ),
-                                ).then((_) => _loadData());
-                              }
-                            : null,
+                        
+    ? () async {
+        final hasFeatureAccess = await _canAccessMCQ(creatorId);
+        if (hasFeatureAccess) {
+          if (context.mounted) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => ExamTakerScreen(exam: exam),
+              ),
+            ).then((_) => _loadData());
+          }
+        } else {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('MCQ Practice requires a premium plan. Upgrade to access.'),
+                backgroundColor: Colors.orange,
+              ),
+            );
+          }
+        }
+      }
+    : null,
                         onSubscribe: isExpired
                             ? () {
                                 final enrollment = _enrollments[creatorId];
@@ -240,6 +284,8 @@ if (teacherIds.isNotEmpty) {
                                       teacherName: creatorName,
                                       subjectName: subjectName,
                                       enrollmentId: enrollment?['id'] as String? ?? '',
+                                      subjectId: enrollment?['subject_id'] as String?,  // ✅
+                                      levelId: enrollment?['level_id'] as String?,      // ✅
                                     ),
                                   ),
                                 ).then((_) => _loadData());
@@ -295,6 +341,7 @@ class _ExamCard extends StatelessWidget {
   final bool isSubscriptionExpired;
   final VoidCallback? onTap;
   final VoidCallback? onSubscribe;
+  final Future<bool> Function()? onCheckFeature; 
 
   const _ExamCard({
     required this.title,
@@ -309,6 +356,7 @@ class _ExamCard extends StatelessWidget {
     required this.isSubscriptionExpired,
     this.onTap,
     this.onSubscribe,
+    this.onCheckFeature,
   });
 
   @override
@@ -358,25 +406,49 @@ class _ExamCard extends StatelessWidget {
           ],
         ),
         trailing: isExpired
-            ? GestureDetector(
-                onTap: onSubscribe,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+    ? GestureDetector(
+        onTap: onSubscribe,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xFF1A237E), Color(0xFF283593)],
+            ),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+            isSubscriptionExpired ? 'Renew' : 'Subscribe',
+            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+          ),
+        ),
+      )
+    : canAccess
+        ? FutureBuilder<bool>(
+            future: onCheckFeature?.call() ?? Future.value(true),  // ✅ Use callback
+            builder: (context, snapshot) {
+              final hasFeatureAccess = snapshot.data ?? true;
+              if (!hasFeatureAccess) {
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
                   decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFF1A237E), Color(0xFF283593)],
-                    ),
-                    borderRadius: BorderRadius.circular(8),
+                    color: Colors.orange.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: Colors.orange.shade300),
                   ),
-                  child: Text(
-                    isSubscriptionExpired ? 'Renew' : 'Subscribe',
-                    style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.lock, size: 12, color: Colors.orange),
+                      SizedBox(width: 3),
+                      Text('Upgrade', style: TextStyle(fontSize: 9, color: Colors.orange, fontWeight: FontWeight.w600)),
+                    ],
                   ),
-                ),
-              )
-            : canAccess
-                ? const Icon(Icons.play_arrow, color: Color(0xFFFF9800))
-                : const Icon(Icons.lock, color: Colors.grey, size: 20),
+                );
+              }
+              return const Icon(Icons.play_arrow, color: Color(0xFFFF9800));
+            },
+          )
+        : const Icon(Icons.lock, color: Colors.grey, size: 20),
         onTap: onTap,
       ),
     );

@@ -7,6 +7,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 class MathRenderer extends StatelessWidget {
   final String text;
   final double fontSize;
+  
   final Color? textColor;
   final TextAlign textAlign;
   final bool selectable;
@@ -17,10 +18,11 @@ class MathRenderer extends StatelessWidget {
     this.text, {
     super.key,
     this.fontSize = 16,
+    
     this.textColor,
     this.textAlign = TextAlign.start,
     this.selectable = true,
-    this.mathFontSize = 16,
+    this.mathFontSize = 20,
     this.mathColor,
   });
 

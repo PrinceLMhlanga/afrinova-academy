@@ -54,7 +54,9 @@ serve(async (req) => {
         .eq("id", existingPayment.id);
       
       paymentId = existingPayment.id;
-    } else {
+    }
+    
+    else {
       // Check if already completed
       const { data: completedPayment } = await supabase
         .from("payments")
@@ -85,6 +87,7 @@ serve(async (req) => {
         paymentId = newPayment.id;
       }
     }
+    
 
     // ✅ Get default commission from platform_settings FIRST
 const { data: defaultCommission } = await supabase

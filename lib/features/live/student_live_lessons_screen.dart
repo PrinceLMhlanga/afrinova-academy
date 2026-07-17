@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/live_lesson_service.dart';
 import '../../core/auth_service.dart';
 import '../payment/payment_screen.dart';
+import '../../core/access_checker.dart'; 
 
 class StudentLiveLessonsScreen extends StatefulWidget {
   const StudentLiveLessonsScreen({super.key});
@@ -24,6 +25,25 @@ class _StudentLiveLessonsScreenState extends State<StudentLiveLessonsScreen> {
     _loadData();
   }
 
+  Future<bool> _hasLiveLessonAccess(String teacherId, String subjectId) async {
+  try {
+    final userId = _authService.currentUserId;
+    if (userId == null) return false;
+
+    final enrollment = await Supabase.instance.client
+        .from('enrollments')
+        .select('plan_features, is_subscribed, subscription_expires_at, trial_ends_at')
+        .eq('student_id', userId)
+        .eq('teacher_id', teacherId)
+        .eq('subject_id', subjectId)
+        .maybeSingle();
+
+    return AccessChecker.canAccessLiveLessons(enrollment);
+  } catch (e) {
+    return false;
+  }
+}
+
   Future<void> _loadData() async {
     try {
       final userId = _authService.currentUserId;
@@ -32,7 +52,7 @@ class _StudentLiveLessonsScreenState extends State<StudentLiveLessonsScreen> {
       // Get enrollments with trial + subscription info
       final enrollments = await Supabase.instance.client
           .from('enrollments')
-          .select('id, teacher_id, subject_id, status, trial_ends_at, is_subscribed, subscription_expires_at')
+          .select('id, teacher_id, subject_id, level_id, status, trial_ends_at, is_subscribed, subscription_expires_at')
           .eq('student_id', userId)
           .inFilter('status', ['approved', 'paid']);
 
@@ -305,40 +325,68 @@ class _StudentLiveLessonsScreenState extends State<StudentLiveLessonsScreen> {
               Text(_formatDate(isLive ? lesson['started_at'] as String? : lesson['created_at'] as String?),
                   style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
               if (isLive)
-                isExpired
-                    ? GestureDetector(
-                        onTap: () {
-                          Navigator.push(context, MaterialPageRoute(
-                            builder: (_) => PaymentScreen(
-                              teacherId: teacherId,
-                              teacherName: teacherName,
-                              subjectName: subjectName,
-                              enrollmentId: enrollment?['id'] as String? ?? '',
-                            ),
-                          )).then((_) => _loadData());
-                        },
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(colors: [Color(0xFF1A237E), Color(0xFF283593)]),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(isSubscriptionExpired ? 'Renew' : 'Subscribe',
-                              style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
-                        ),
-                      )
-                    : canAccess
-                        ? ElevatedButton.icon(
-                            onPressed: () => _joinLesson(lesson),
-                            icon: const Icon(Icons.video_call, size: 18),
-                            label: const Text('Join Now'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.red, foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                            ),
-                          )
-                        : const Icon(Icons.lock, color: Colors.grey, size: 20),
+  isExpired
+      ? GestureDetector(
+          onTap: () {
+            Navigator.push(context, MaterialPageRoute(
+              builder: (_) => PaymentScreen(
+                teacherId: teacherId,
+                teacherName: teacherName,
+                subjectName: subjectName,
+                enrollmentId: enrollment?['id'] as String? ?? '',
+                subjectId: enrollment?['subject_id'] as String?,
+                levelId: enrollment?['level_id'] as String?,
+              ),
+            )).then((_) => _loadData());
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(colors: [Color(0xFF1A237E), Color(0xFF283593)]),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(isSubscriptionExpired ? 'Renew' : 'Subscribe',
+                style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+          ),
+        )
+      : canAccess
+          ? FutureBuilder<bool>(
+              future: _hasLiveLessonAccess(teacherId, enrollment?['subject_id'] as String? ?? ''),
+              builder: (context, snapshot) {
+                final hasFeatureAccess = snapshot.data ?? true; // Default to true if error
+                
+                if (!hasFeatureAccess) {
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.orange.shade300),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.lock, size: 14, color: Colors.orange),
+                        SizedBox(width: 4),
+                        Text('Upgrade Plan', style: TextStyle(fontSize: 11, color: Colors.orange, fontWeight: FontWeight.w600)),
+                      ],
+                    ),
+                  );
+                }
+                
+                return ElevatedButton.icon(
+                  onPressed: () => _joinLesson(lesson),
+                  icon: const Icon(Icons.video_call, size: 18),
+                  label: const Text('Join Now'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red, foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  ),
+                );
+              },
+            )
+          : const Icon(Icons.lock, color: Colors.grey, size: 20),
             ]),
           ],
         ),

@@ -179,6 +179,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         teacherId: widget.teacherId,
         amount: _amount,
         enrollmentId: widget.enrollmentId,
+        pricingPlanId: _selectedPlanId,  // ✅ Pass plan
       );
 
       _reference = reference;
@@ -253,7 +254,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
           // ✅ Activate subscription
           final trialService = TrialService();
-          await trialService.activateSubscription(widget.enrollmentId);
+          await trialService.activateSubscription(
+  widget.enrollmentId,
+  pricingPlanId: _selectedPlanId,  // ✅ Pass selected plan
+);
 
           if (mounted) {
             setState(() { _status = 'completed'; _isPaying = false; });

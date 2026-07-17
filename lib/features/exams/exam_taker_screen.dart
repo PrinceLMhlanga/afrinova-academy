@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:convert';
 import 'package:fl_chart/fl_chart.dart';
 import 'dart:math' as math;
+import '../../widgets/math_renderer.dart';
 
 class ExamTakerScreen extends StatefulWidget {
   final Map<String, dynamic> exam;
@@ -653,14 +654,11 @@ Widget _buildGraph(String? graphData) {
 
                     // Question text
                     // Question text
-Text(
+MathRenderer(
   question['question_text'] ?? '',
-  style: const TextStyle(
-    fontSize: 18,
-    fontWeight: FontWeight.w500,
-    color: Color(0xFF1A237E),
-    height: 1.4,
-  ),
+  fontSize: 18,
+  mathFontSize: 20,
+  textColor: const Color(0xFF1A237E),
 ),
 
 // ✅ Display diagram
@@ -727,19 +725,13 @@ const SizedBox(height: 24),
                                 ),
                                 const SizedBox(width: 14),
                                 Expanded(
-                                  child: Text(
-                                    option,
-                                    style: TextStyle(
-                                      fontSize: 15,
-                                      color: isSelected
-                                          ? const Color(0xFF1A237E)
-                                          : Colors.grey.shade700,
-                                      fontWeight: isSelected
-                                          ? FontWeight.w600
-                                          : FontWeight.normal,
-                                    ),
-                                  ),
-                                ),
+  child: MathRenderer(
+    option,
+    fontSize: 15,
+    mathFontSize: 17,
+    textColor: isSelected ? const Color(0xFF1A237E) : Colors.grey.shade700,
+  ),
+),
                                 if (isSelected)
                                   const Icon(Icons.check_circle,
                                       color: Color(0xFF1A237E), size: 22),
@@ -1121,15 +1113,12 @@ class ExamResultsScreen extends StatelessWidget {
                           ),
                           const SizedBox(width: 8),
                           Expanded(
-                            child: Text(
-                              'Q${index + 1}: ${question['question_text'] ?? ''}',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w600,
-                                fontSize: 14,
-                              ),
-                              maxLines: 3,
-                              overflow: TextOverflow.ellipsis,
-                            ),
+                            child: MathRenderer(
+  'Q${index + 1}: ${question['question_text'] ?? ''}',
+  fontSize: 14,
+  mathFontSize: 17,
+  textColor: const Color(0xFF1A237E),
+),
                           ),
                           Text(
                             '${question['marks'] ?? 1} pts',
@@ -1143,23 +1132,19 @@ class ExamResultsScreen extends StatelessWidget {
                         ],
                       ),
                       const SizedBox(height: 8),
-                      Text(
-                        'Your answer: $studentAnswer',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: isCorrect
-                              ? const Color(0xFF4CAF50)
-                              : Colors.red,
-                        ),
-                      ),
+                      MathRenderer(
+  'Your answer: $studentAnswer',
+  fontSize: 13,
+  mathFontSize: 15,
+  textColor: isCorrect ? const Color(0xFF4CAF50) : Colors.red,
+),
                       if (!isCorrect)
-                        Text(
-                          'Correct: $correctAnswer',
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: Color(0xFF4CAF50),
-                          ),
-                        ),
+                        MathRenderer(
+  'Correct: $correctAnswer',
+  fontSize: 13,
+  mathFontSize: 15,
+  textColor: const Color(0xFF4CAF50),
+),
                       if (question['explanation'] != null &&
                           question['explanation'].toString().isNotEmpty)
                         Padding(

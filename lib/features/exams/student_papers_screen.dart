@@ -4,6 +4,7 @@ import '../../core/auth_service.dart';
 import '../payment/payment_screen.dart';
 import 'paper_view_screen.dart';
 import 'student_paper_results_screen.dart';
+import '../../core/access_checker.dart';  // ✅ Add
 
 class StudentPapersScreen extends StatefulWidget {
   const StudentPapersScreen({super.key});
@@ -22,12 +23,38 @@ class _StudentPapersScreenState extends State<StudentPapersScreen>
   Map<String, Map<String, dynamic>> _enrollments = {};
   bool _isLoading = true;
 
+  Map<String, bool> _paperAccessCache = {};
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
     _loadData();
   }
+
+  Future<bool> _canAccessExamPrep(String teacherId) async {
+  if (_paperAccessCache.containsKey(teacherId)) {
+    return _paperAccessCache[teacherId]!;
+  }
+
+  try {
+    final userId = _authService.currentUserId;
+    if (userId == null) return false;
+
+    final enrollment = await Supabase.instance.client
+        .from('enrollments')
+        .select('plan_features, is_subscribed, subscription_expires_at, trial_ends_at')
+        .eq('student_id', userId)
+        .eq('teacher_id', teacherId)
+        .maybeSingle();
+
+    final hasAccess = AccessChecker.canAccessExamPrep(enrollment);
+    _paperAccessCache[teacherId] = hasAccess;
+    return hasAccess;
+  } catch (e) {
+    return true;
+  }
+}
 
   Future<void> _loadData() async {
     try {
@@ -269,58 +296,95 @@ if (teacherIds.isNotEmpty) {
             statusText: statusText,
             statusColor: statusColor,
             onTap: canAccess
-                ? () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => PaperViewScreen(paper: paper)),
-                    ).then((_) => _loadData());
-                  }
-                : null,
+    ? () async {
+        final hasFeatureAccess = await _canAccessExamPrep(creatorId);
+        if (hasFeatureAccess) {
+          if (context.mounted) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => PaperViewScreen(paper: paper)),
+            ).then((_) => _loadData());
+          }
+        } else {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Exam papers require a premium plan. Upgrade to access.'),
+                backgroundColor: Colors.orange,
+              ),
+            );
+          }
+        }
+      }
+    : null,
             trailing: isExpired
-                ? GestureDetector(
-                    onTap: () {
-                      final enrollment = _enrollments[creatorId];
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => PaymentScreen(
-                            teacherId: creatorId,
-                            teacherName: paper['profiles']?['display_name'] ?? paper['profiles']?['full_name'] ?? 'Teacher',
-                            subjectName: paper['subjects']?['name'] ?? '',
-                            enrollmentId: enrollment?['id'] as String? ?? '',
-                          ),
-                        ),
-                      ).then((_) => _loadData());
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(colors: [Color(0xFF1A237E), Color(0xFF283593)]),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        isSubscriptionExpired ? 'Renew' : 'Subscribe',
-                        style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  )
-                : canAccess
-                    ? ElevatedButton.icon(
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (_) => PaperViewScreen(paper: paper)),
-                          ).then((_) => _loadData());
-                        },
-                        icon: const Icon(Icons.edit_note, size: 18),
-                        label: const Text('Start'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF00897B),
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        ),
-                      )
-                    : const Icon(Icons.lock, color: Colors.grey, size: 20),
+    ? GestureDetector(
+        onTap: () {
+          final enrollment = _enrollments[creatorId];
+          Navigator.push(context, MaterialPageRoute(
+            builder: (_) => PaymentScreen(
+              teacherId: creatorId,
+              teacherName: paper['profiles']?['display_name'] ?? paper['profiles']?['full_name'] ?? 'Teacher',
+              subjectName: paper['subjects']?['name'] ?? '',
+              enrollmentId: enrollment?['id'] as String? ?? '',
+              subjectId: enrollment?['subject_id'] as String?,
+              levelId: enrollment?['level_id'] as String?,
+            ),
+          )).then((_) => _loadData());
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(colors: [Color(0xFF1A237E), Color(0xFF283593)]),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+            isSubscriptionExpired ? 'Renew' : 'Subscribe',
+            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+          ),
+        ),
+      )
+    : canAccess
+        ? FutureBuilder<bool>(
+            future: _canAccessExamPrep(creatorId),
+            builder: (context, snapshot) {
+              final hasFeatureAccess = snapshot.data ?? true;
+              if (!hasFeatureAccess) {
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: Colors.orange.shade300),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.lock, size: 12, color: Colors.orange),
+                      SizedBox(width: 3),
+                      Text('Upgrade', style: TextStyle(fontSize: 9, color: Colors.orange, fontWeight: FontWeight.w600)),
+                    ],
+                  ),
+                );
+              }
+              return ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => PaperViewScreen(paper: paper)),
+                  ).then((_) => _loadData());
+                },
+                icon: const Icon(Icons.edit_note, size: 18),
+                label: const Text('Start'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF00897B),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              );
+            },
+          )
+        : const Icon(Icons.lock, color: Colors.grey, size: 20),
           );
         },
       ),
@@ -360,7 +424,28 @@ if (teacherIds.isNotEmpty) {
                         color: status == 'submitted' ? Colors.orange : Colors.grey)),
               ]),
             ),
-            onTap: canAccess ? () => Navigator.push(context, MaterialPageRoute(builder: (_) => PaperViewScreen(paper: paper))) : null,
+            onTap: canAccess
+    ? () async {
+        final hasFeatureAccess = await _canAccessExamPrep(creatorId);
+        if (hasFeatureAccess) {
+          if (context.mounted) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => PaperViewScreen(paper: paper)),
+            );
+          }
+        } else {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Exam papers require a premium plan. Upgrade to access.'),
+                backgroundColor: Colors.orange,
+              ),
+            );
+          }
+        }
+      }
+    : null,
           );
         },
       ),
@@ -387,9 +472,29 @@ if (teacherIds.isNotEmpty) {
           return _PaperCard(
             paper: paper, canAccess: canAccess, statusText: statusText, statusColor: statusColor,
             onTap: canAccess && sub != null
-                ? () => Navigator.push(context, MaterialPageRoute(
-                    builder: (_) => StudentPaperResultsScreen(paper: paper, submission: sub)))
-                : null,
+    ? () async {
+        final hasFeatureAccess = await _canAccessExamPrep(creatorId);
+        if (hasFeatureAccess) {
+          if (context.mounted) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => StudentPaperResultsScreen(paper: paper, submission: sub),
+              ),
+            );
+          }
+        } else {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Exam papers require a premium plan. Upgrade to access.'),
+                backgroundColor: Colors.orange,
+              ),
+            );
+          }
+        }
+      }
+    : null,
             trailing: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(color: const Color(0xFF4CAF50).withOpacity(0.1), borderRadius: BorderRadius.circular(20)),

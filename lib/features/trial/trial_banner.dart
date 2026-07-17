@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../core/trial_service.dart';
 import '../../core/auth_service.dart';
 import '../payment/payment_screen.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class TrialBanner extends StatefulWidget {
   const TrialBanner({super.key});
@@ -70,27 +71,30 @@ class _TrialBannerState extends State<TrialBanner> {
     IconData icon;
 
     if (isExpired) {
-      bgColor = Colors.red.shade800;
-      icon = Icons.lock_outline;
-      buttonText = 'Renew';
-      message = isSubscription
-          ? '$subjectName — Subscription expired'
-          : '$subjectName with $teacherName — Trial ended';
-    } else if (daysLeft <= 3) {
-      bgColor = daysLeft == 0 ? Colors.red.shade700 : Colors.orange.shade800;
-      icon = Icons.warning_amber_rounded;
-      buttonText = 'Renew';
-      message = isSubscription
-          ? '$subjectName — Subscription ends in $daysLeft day(s)'
-          : '$subjectName with $teacherName — $daysLeft day(s) left';
-    } else {
-      bgColor = Colors.amber.shade800;
-      icon = Icons.timer_outlined;
-      buttonText = isSubscription ? 'Renew Early' : 'Subscribe Now';
-      message = isSubscription
-          ? '$subjectName — Subscription ends in $daysLeft days'
-          : '$subjectName with $teacherName — $daysLeft day(s) left';
-    }
+  bgColor = Colors.red.shade800;
+  icon = Icons.lock_outline;
+  // ✅ Fix: Trial ended = Subscribe, Subscription ended = Renew
+  buttonText = isSubscription ? 'Renew' : 'Subscribe';
+  message = isSubscription
+      ? '$subjectName — Subscription expired'
+      : '$subjectName with $teacherName — Trial ended';
+} else if (daysLeft <= 3) {
+  bgColor = daysLeft == 0 ? Colors.red.shade700 : Colors.orange.shade800;
+  icon = Icons.warning_amber_rounded;
+  // ✅ Fix: Trial expiring = Subscribe Now, Subscription expiring = Renew
+  buttonText = isSubscription ? 'Renew' : 'Subscribe Now';
+  message = isSubscription
+      ? '$subjectName — Subscription ends in $daysLeft day(s)'
+      : '$subjectName with $teacherName — $daysLeft day(s) left';
+} else {
+  bgColor = Colors.amber.shade800;
+  icon = Icons.timer_outlined;
+  // ✅ Fix: More than 3 days
+  buttonText = isSubscription ? 'Renew Early' : 'Subscribe Now';
+  message = isSubscription
+      ? '$subjectName — Subscription ends in $daysLeft days'
+      : '$subjectName with $teacherName — $daysLeft day(s) left';
+}
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -113,29 +117,46 @@ class _TrialBannerState extends State<TrialBanner> {
               ),
               const SizedBox(width: 8),
               TextButton(
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => PaymentScreen(
-                        teacherId: warning['teacher_id'] as String,
-                        teacherName: teacherName,
-                        subjectName: subjectName,
-                        enrollmentId: warning['enrollment_id'] as String,
-                      ),
-                    ),
-                  ).then((_) => _loadWarnings());
-                },
-                style: TextButton.styleFrom(
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                  backgroundColor: Colors.white.withOpacity(0.15),
-                ),
-                child: Text(
-                  buttonText,
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-                ),
-              ),
+  onPressed: () async {
+    // ✅ Load enrollment details to get subjectId and levelId
+    final enrollmentId = warning['enrollment_id'] as String;
+    
+    Map<String, dynamic>? enrollment;
+    try {
+      final response = await Supabase.instance.client
+          .from('enrollments')
+          .select('subject_id, level_id, teacher_id')
+          .eq('id', enrollmentId)
+          .maybeSingle();
+      enrollment = response;
+    } catch (_) {}
+
+    if (mounted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => PaymentScreen(
+            teacherId: warning['teacher_id'] as String,
+            teacherName: teacherName,
+            subjectName: subjectName,
+            enrollmentId: enrollmentId,
+            subjectId: enrollment?['subject_id'] as String?,  // ✅ Pass
+            levelId: enrollment?['level_id'] as String?,      // ✅ Pass
+          ),
+        ),
+      ).then((_) => _loadWarnings());
+    }
+  },
+  style: TextButton.styleFrom(
+    foregroundColor: Colors.white,
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+    backgroundColor: Colors.white.withOpacity(0.15),
+  ),
+  child: Text(
+    buttonText,
+    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+  ),
+),
               if (_warnings.length > 1)
                 GestureDetector(
                   onTap: () {

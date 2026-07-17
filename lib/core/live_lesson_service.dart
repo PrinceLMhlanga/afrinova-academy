@@ -89,7 +89,7 @@ Future<void> joinLesson({
 
     final response = await _client
         .from('live_lessons')
-        .select('*, subjects(name), profiles!teacher_id(full_name)')
+        .select('*, subjects(name), profiles!teacher_id(display_name, full_name)')
         .inFilter('teacher_id', teacherIds)
         .inFilter('status', ['scheduled', 'live'])
         .order('created_at', ascending: false);

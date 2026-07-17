@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
+import '../payment/payment_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/auth_service.dart';
 import '../../core/resource_service.dart';
 import '../pdf/pdf_viewer_screen.dart';
+import '../../core/access_checker.dart';  // ✅ Add import
 
 class ResourceLibraryScreen extends StatefulWidget {
   const ResourceLibraryScreen({super.key});
@@ -23,6 +24,8 @@ class _ResourceLibraryScreenState extends State<ResourceLibraryScreen> {
   String _selectedType = 'all';
   bool _isLoading = true;
 
+  Map<String, bool> _resourceAccessCache = {};
+
   @override
   void initState() {
     super.initState();
@@ -38,7 +41,7 @@ class _ResourceLibraryScreenState extends State<ResourceLibraryScreen> {
       // Get enrollments
       final enrollments = await Supabase.instance.client
           .from('enrollments')
-          .select('id, teacher_id, subject_id, status, trial_ends_at, is_subscribed, subscription_expires_at')
+          .select('id, teacher_id, subject_id, level_id, status, trial_ends_at, is_subscribed, subscription_expires_at')
           .eq('student_id', userId)
           .inFilter('status', ['approved', 'paid']);
 
@@ -121,32 +124,60 @@ class _ResourceLibraryScreenState extends State<ResourceLibraryScreen> {
     }
   }
 
+  Future<bool> _canAccessFeature(Map<String, dynamic> resource) async {
+  final teacherId = resource['teacher_id'] as String?;
+  if (teacherId == null) return false;
+
+  // Check cache first
+  final cacheKey = teacherId;
+  if (_resourceAccessCache.containsKey(cacheKey)) {
+    return _resourceAccessCache[cacheKey]!;
+  }
+
+  try {
+    final userId = _authService.currentUserId;
+    if (userId == null) return false;
+
+    final enrollment = await Supabase.instance.client
+        .from('enrollments')
+        .select('plan_features, is_subscribed, subscription_expires_at, trial_ends_at, subject_id')
+        .eq('student_id', userId)
+        .eq('teacher_id', teacherId)
+        .maybeSingle();
+
+    final hasAccess = AccessChecker.canAccessNotes(enrollment);
+    _resourceAccessCache[cacheKey] = hasAccess;
+    return hasAccess;
+  } catch (e) {
+    return true; // Default to true on error
+  }
+}
+
   // ✅ Access check
   bool _canAccessResource(Map<String, dynamic> resource) {
-    final teacherId = resource['teacher_id'] as String?;  // ✅ Changed from uploaded_by
+    final teacherId = resource['teacher_id'] as String?;
     if (teacherId == null) return false;
 
     final enrollment = _enrollments[teacherId];
     if (enrollment == null) return false;
 
+    // Check subscription/trial
+    bool hasActiveAccess = false;
     if (enrollment['is_subscribed'] == true) {
       final expiresAt = enrollment['subscription_expires_at'] as String?;
       if (expiresAt != null) {
         final expiry = DateTime.parse(expiresAt);
-        if (expiry.isAfter(DateTime.now())) return true;
+        hasActiveAccess = expiry.isAfter(DateTime.now());
       }
-    }
-
-    // ✅ Check trial
-    if (enrollment['is_subscribed'] != true) {
+    } else {
       final trialEndsAt = enrollment['trial_ends_at'] as String?;
       if (trialEndsAt != null) {
         final trialEnd = DateTime.parse(trialEndsAt);
-        return DateTime.now().isBefore(trialEnd);
+        hasActiveAccess = DateTime.now().isBefore(trialEnd);
       }
     }
 
-    return false;
+    return hasActiveAccess;
   }
 
   // ✅ Status text
@@ -287,63 +318,130 @@ class _ResourceLibraryScreenState extends State<ResourceLibraryScreen> {
                     : ListView.builder(
                         padding: const EdgeInsets.all(16),
                         itemCount: _resources.length,
-                        itemBuilder: (context, index) {
-                          final r = _resources[index];
-                          final canAccess = _canAccessResource(r);
-                          final statusText = _getAccessStatus(r);
+                       itemBuilder: (context, index) {
+  final r = _resources[index];
+  final canAccess = _canAccessResource(r);
+  final statusText = _getAccessStatus(r);
+  final teacherId = r['teacher_id'] as String? ?? '';
+  final teacherName = r['profiles']?['display_name'] ?? r['profiles']?['full_name'] ?? 'Teacher';
+  final isExpired = statusText.contains('Ended');
+  final enrollment = _enrollments[teacherId];
 
-                          return Card(
-                            margin: const EdgeInsets.only(bottom: 10),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                            child: ListTile(
-                              leading: Container(
-                                width: 48, height: 48,
-                                decoration: BoxDecoration(
-                                  color: canAccess
-                                      ? _getFileColor(r['file_type']).withOpacity(0.1)
-                                      : Colors.grey.shade200,
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: Icon(
-                                  canAccess ? _getFileIcon(r['file_type']) : Icons.lock_outline,
-                                  color: canAccess ? _getFileColor(r['file_type']) : Colors.grey,
-                                ),
-                              ),
-                              title: Text(
-                                r['title'] ?? 'Untitled',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 14,
-                                  color: canAccess ? Colors.black87 : Colors.grey,
-                                ),
-                              ),
-                              subtitle: Column(
-  crossAxisAlignment: CrossAxisAlignment.start,
-  children: [
-    if (r['subjects'] != null)
-      Text(r['subjects']['name'] ?? '',
-          style: TextStyle(fontSize: 11, color: canAccess ? const Color(0xFF1A237E) : Colors.grey)),
-    // ✅ Teacher name
-    if (r['profiles'] != null)
-      Text('By: ${r['profiles']['display_name'] ?? r['profiles']['full_name'] ?? 'Teacher'}',
-          style: TextStyle(fontSize: 10, color: canAccess ? Colors.grey.shade600 : Colors.grey.shade400)),
-    Text(
-      '${_formatFileSize(r['file_size_bytes'])} • ${r['resource_type'] == 'question_paper' ? 'Question Paper' : 'Notes'}',
-      style: TextStyle(fontSize: 11, color: canAccess ? Colors.grey : Colors.grey.shade400),
+  return Card(
+    margin: const EdgeInsets.only(bottom: 10),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    child: ListTile(
+      leading: Container(
+        width: 48, height: 48,
+        decoration: BoxDecoration(
+          color: canAccess
+              ? _getFileColor(r['file_type']).withOpacity(0.1)
+              : Colors.grey.shade200,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Icon(
+          canAccess ? _getFileIcon(r['file_type']) : Icons.lock_outline,
+          color: canAccess ? _getFileColor(r['file_type']) : Colors.grey,
+        ),
+      ),
+      title: Text(
+        r['title'] ?? 'Untitled',
+        style: TextStyle(
+          fontWeight: FontWeight.w600,
+          fontSize: 14,
+          color: canAccess ? Colors.black87 : Colors.grey,
+        ),
+      ),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (r['subjects'] != null)
+            Text(r['subjects']['name'] ?? '',
+                style: TextStyle(fontSize: 11, color: canAccess ? const Color(0xFF1A237E) : Colors.grey)),
+          if (r['profiles'] != null)
+            Text('By: $teacherName',
+                style: TextStyle(fontSize: 10, color: canAccess ? Colors.grey.shade600 : Colors.grey.shade400)),
+          Text(
+            '${_formatFileSize(r['file_size_bytes'])} • ${r['resource_type'] == 'question_paper' ? 'Question Paper' : 'Notes'}',
+            style: TextStyle(fontSize: 11, color: canAccess ? Colors.grey : Colors.grey.shade400),
+          ),
+          if (statusText.isNotEmpty)
+            Text(statusText,
+                style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
+                    color: statusText.contains('Ended') ? Colors.red : const Color(0xFF4CAF50))),
+        ],
+      ),
+      trailing: isExpired
+          ? GestureDetector(
+              onTap: () {
+                Navigator.push(context, MaterialPageRoute(
+                  builder: (_) => PaymentScreen(
+                    teacherId: teacherId,
+                    teacherName: teacherName,
+                    subjectName: r['subjects']?['name'] ?? '',
+                    enrollmentId: enrollment?['id'] as String? ?? '',
+                    subjectId: enrollment?['subject_id'] as String?,
+                    levelId: enrollment?['level_id'] as String?,
+                  ),
+                )).then((_) => _loadData());
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(colors: [Color(0xFF1A237E), Color(0xFF283593)]),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  statusText.contains('Subscription') ? 'Renew' : 'Subscribe',
+                  style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                ),
+              ),
+            )
+          : canAccess
+              ? FutureBuilder<bool>(
+                  future: _canAccessFeature(r),
+                  builder: (context, snapshot) {
+                    final hasFeatureAccess = snapshot.data ?? true;
+                    if (!hasFeatureAccess) {
+                      return Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.orange.shade300),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.lock, size: 12, color: Colors.orange),
+                            SizedBox(width: 3),
+                            Text('Upgrade', style: TextStyle(fontSize: 9, color: Colors.orange, fontWeight: FontWeight.w600)),
+                          ],
+                        ),
+                      );
+                    }
+                    return const Icon(Icons.download, color: Color(0xFFFF9800));
+                  },
+                )
+              : const Icon(Icons.lock, color: Colors.grey, size: 20),
+      onTap: canAccess
+          ? () async {
+              final hasFeatureAccess = await _canAccessFeature(r);
+              if (hasFeatureAccess) {
+                _openFile(r['file_url'] ?? '');
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('This feature requires a premium plan. Upgrade to access.'),
+                    backgroundColor: Colors.orange,
+                  ),
+                );
+              }
+            }
+          : null,
     ),
-    if (statusText.isNotEmpty)
-      Text(statusText,
-          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
-              color: statusText.contains('Ended') ? Colors.red : const Color(0xFF4CAF50))),
-  ],
-),
-                              trailing: canAccess
-                                  ? const Icon(Icons.download, color: Color(0xFFFF9800))
-                                  : const Icon(Icons.lock, color: Colors.grey, size: 20),
-                              onTap: canAccess ? () => _openFile(r['file_url'] ?? '') : null,
-                            ),
-                          );
-                        },
+  );
+},
                       ),
           ),
         ],

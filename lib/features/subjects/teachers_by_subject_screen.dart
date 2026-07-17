@@ -105,7 +105,10 @@ if (teacherIds.isNotEmpty) {
 
   // ✅ Only show plans for this subject (or plans with no subject = applies to all)
   pricingQuery = pricingQuery.or('subject_id.eq.${widget.subjectId},subject_id.is.null');
-
+  // ✅ Filter by level (student's level or plan with no level = all levels)
+if (studentLevelId != null) {
+  pricingQuery = pricingQuery.or('level_id.eq.$studentLevelId,level_id.is.null');
+}
   final pricingResponse = await pricingQuery;
 
   for (final plan in pricingResponse) {
@@ -374,6 +377,7 @@ Widget _buildActionButton({
                     teacherName: displayName,
                     subjectName: widget.subjectName,
                     subjectColor: widget.subjectColor,
+                    subjectId: widget.subjectId,
                   ),
                 ));
               },
@@ -399,6 +403,7 @@ Widget _buildActionButton({
                   teacherName: displayName,
                   subjectName: widget.subjectName,
                   subjectColor: widget.subjectColor,
+                  subjectId: widget.subjectId,
                 ),
               ));
             },
@@ -492,6 +497,7 @@ Widget _buildActionButton({
                     teacherName: displayName,
                     subjectName: widget.subjectName,
                     subjectColor: widget.subjectColor,
+                    subjectId: widget.subjectId,
                   ),
                 ));
               },
@@ -517,6 +523,7 @@ Widget _buildActionButton({
                   teacherName: displayName,
                   subjectName: widget.subjectName,
                   subjectColor: widget.subjectColor,
+                  subjectId: widget.subjectId,
                 ),
               ));
             },
@@ -544,6 +551,7 @@ Widget _buildActionButton({
             teacherName: displayName,
             subjectName: widget.subjectName,
             subjectColor: widget.subjectColor,
+            subjectId: widget.subjectId,
           ),
         ));
       },
