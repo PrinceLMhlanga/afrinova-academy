@@ -5,7 +5,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 
-
 class PayNowService {
   final SupabaseClient _client = Supabase.instance.client;
   String? _integrationId;
@@ -44,7 +43,8 @@ class PayNowService {
     return digest.toString().toUpperCase();
   }
 
-  Future<PayNowResponse> initiatePayment({
+  // Keep this method - it's what PaymentScreen calls
+  Future<PayNowResponse> initiateMobilePayment({
     required String reference,
     required double amount,
     required String mobileNumber,
@@ -180,6 +180,31 @@ class PayNowService {
       debugPrint('Poll error: $e');
       return PayNowStatusResponse(paid: false, status: 'Error', error: e.toString());
     }
+  }
+
+  Future<String> createPendingPayment({
+    required String studentId,
+    required String teacherId,
+    required double amount,
+    String? enrollmentId,
+    String? pricingPlanId, 
+  }) async {
+    final reference = 'AFRINOVA-${DateTime.now().millisecondsSinceEpoch}';
+
+    await _client.from('payments').insert({
+      'student_id': studentId,
+      'teacher_id': teacherId,
+      'amount': amount,
+      'gateway_reference': reference,
+      'status': 'pending',
+      'payment_method': 'ecocash',
+      'enrollment_id': enrollmentId,
+      'pricing_plan_id': pricingPlanId,
+      'created_at': DateTime.now().toIso8601String(),
+    });
+
+    debugPrint('Created new pending payment: $reference');
+    return reference;
   }
 
   PayNowStatusResponse _parseStatusResponse(String body) {
