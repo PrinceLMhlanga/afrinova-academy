@@ -220,14 +220,38 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   void _startPolling() {
     _pollTimer?.cancel();
+    int attempts = 0;
+    const maxAttempts = 60; // Poll for up to 5 minutes (60 * 5 seconds)
+    int consecutiveFailures = 0;
+    
     _pollTimer = Timer.periodic(const Duration(seconds: 5), (timer) async {
       if (_pollUrl == null || !mounted) {
         timer.cancel();
         return;
       }
 
+      attempts++;
+      
+      // Check if we've exceeded max polling attempts
+      if (attempts > maxAttempts) {
+        timer.cancel();
+        _pollTimer = null;
+        if (mounted) {
+          setState(() { _isPaying = false; });
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Payment is taking longer than expected. We\'ll notify you when it\'s confirmed.'),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 5),
+            ),
+          );
+        }
+        return;
+      }
+
       try {
         final status = await _payNowService.pollTransaction(_pollUrl!);
+        consecutiveFailures = 0; // Reset failure count on successful poll
         final currentStatus = status.status.toLowerCase();
 
         if (status.paid || currentStatus == 'paid' || currentStatus == 'awaiting delivery') {
@@ -255,9 +279,9 @@ class _PaymentScreenState extends State<PaymentScreen> {
           // ✅ Activate subscription
           final trialService = TrialService();
           await trialService.activateSubscription(
-  widget.enrollmentId,
-  pricingPlanId: _selectedPlanId,  // ✅ Pass selected plan
-);
+            widget.enrollmentId,
+            pricingPlanId: _selectedPlanId,
+          );
 
           if (mounted) {
             setState(() { _status = 'completed'; _isPaying = false; });
@@ -268,18 +292,49 @@ class _PaymentScreenState extends State<PaymentScreen> {
               if (mounted) Navigator.pop(context, true);
             });
           }
-        } else if (currentStatus == 'cancelled' || currentStatus == 'declined' || currentStatus == 'failed' || currentStatus == 'error') {
+        } else if (currentStatus == 'sent' || currentStatus == 'created' || currentStatus == 'pending') {
+          // Payment is still being processed - this is normal, keep waiting
+          debugPrint('Poll attempt $attempts: Status is $currentStatus - waiting for user to confirm...');
+        } else if (currentStatus == 'cancelled' || currentStatus == 'declined') {
           timer.cancel();
           _pollTimer = null;
           if (mounted) {
             setState(() { _status = 'failed'; _isPaying = false; });
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Payment was cancelled or failed'), backgroundColor: Colors.red),
+              const SnackBar(content: Text('Payment was cancelled or declined'), backgroundColor: Colors.red),
+            );
+          }
+        } else if (currentStatus == 'error' || currentStatus == 'failed') {
+          // Payment failed on PayNow's side
+          timer.cancel();
+          _pollTimer = null;
+          if (mounted) {
+            setState(() { _status = 'failed'; _isPaying = false; });
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Payment failed. Please try again.'), backgroundColor: Colors.red),
             );
           }
         }
       } catch (e) {
-        debugPrint('Polling error: $e');
+        // Network error during poll - don't fail immediately
+        consecutiveFailures++;
+        debugPrint('Polling error (${consecutiveFailures} consecutive): $e');
+        
+        // Only show error after 12 consecutive network failures (60 seconds of no connection)
+        if (consecutiveFailures > 12) {
+          timer.cancel();
+          _pollTimer = null;
+          if (mounted) {
+            setState(() { _isPaying = false; });
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Poor connection. Your payment may still be processing. Check status later.'),
+                backgroundColor: Colors.orange,
+                duration: Duration(seconds: 5),
+              ),
+            );
+          }
+        }
       }
     });
   }

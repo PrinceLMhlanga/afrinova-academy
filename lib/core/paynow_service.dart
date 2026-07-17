@@ -197,22 +197,44 @@ static const String _vercelApiUrl = 'https://www.afrinova-academy.com/api/paynow
     return result;
   }
 
-  Future<PayNowStatusResponse> pollTransaction(String pollUrl) async {
-    try {
-      if (pollUrl.isEmpty) {
-        return PayNowStatusResponse(paid: false, status: 'Error', error: 'Empty poll URL');
-      }
-
-      final response = await http
-          .post(Uri.parse(pollUrl), body: '')
-          .timeout(const Duration(seconds: 20));
-
-      return _parseStatusResponse(response.body);
-    } catch (e) {
-      debugPrint('Poll error: $e');
-      return PayNowStatusResponse(paid: false, status: 'Error', error: e.toString());
+ Future<PayNowStatusResponse> pollTransaction(String pollUrl) async {
+  try {
+    if (pollUrl.isEmpty) {
+      return PayNowStatusResponse(paid: false, status: 'Error', error: 'Empty poll URL');
     }
+
+    // For web, proxy through Vercel to avoid CORS
+    if (kIsWeb) {
+      final response = await http.post(
+        Uri.parse('$_vercelApiUrl?action=poll'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'pollUrl': pollUrl}),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return PayNowStatusResponse(
+          paid: data['paid'] ?? false,
+          status: data['status'] ?? 'pending',
+          reference: data['reference'],
+          amount: (data['amount'] as num?)?.toDouble(),
+          paynowReference: data['paynowReference'],
+          error: data['error'],
+        );
+      }
+    }
+
+    // For mobile, poll directly
+    final response = await http
+        .post(Uri.parse(pollUrl), body: '')
+        .timeout(const Duration(seconds: 20));
+
+    return _parseStatusResponse(response.body);
+  } catch (e) {
+    debugPrint('Poll error: $e');
+    return PayNowStatusResponse(paid: false, status: 'Error', error: e.toString());
   }
+}
 
   Future<String> createPendingPayment({
     required String studentId,
