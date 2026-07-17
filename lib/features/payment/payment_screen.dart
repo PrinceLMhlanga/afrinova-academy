@@ -498,7 +498,7 @@ Container(
                     child: ElevatedButton.icon(
                       onPressed: _isPaying ? null : _initiatePayment,
                       icon: const Icon(Icons.payment),
-                      label: Text('Pay \$${_amount.toStringAsFixed(2)} with EcoCash',
+                      label: Text('Pay \$${(_amount * 1.025).toStringAsFixed(2)} with EcoCash',
                           style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF1A237E), foregroundColor: Colors.white,

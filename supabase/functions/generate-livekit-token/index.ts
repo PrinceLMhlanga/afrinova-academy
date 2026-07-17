@@ -19,6 +19,11 @@ serve(async (req) => {
     const token = new AccessToken(API_KEY, API_SECRET, {
       identity: participantId,
       name: participantName,
+      // ✅ Include metadata in the token itself
+      metadata: JSON.stringify({
+        name: participantName,
+        userId: participantId,
+      }),
     });
 
     token.addGrant({
@@ -26,6 +31,8 @@ serve(async (req) => {
       room: roomName,
       canPublish: true,
       canSubscribe: true,
+      canPublishData: true,          // ✅ Allow data messages (chat, etc.)
+      canUpdateOwnMetadata: true,    // ✅ THIS FIXES YOUR ERROR
     });
 
     const jwt = await token.toJwt();

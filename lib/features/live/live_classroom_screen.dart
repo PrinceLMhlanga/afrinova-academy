@@ -49,29 +49,32 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
     _room = Room();
     _listener = _room.createListener();
 
-    // Use the correct event types from LiveKit SDK 2.8.0
     _listener.on<RoomEvent>((event) {
       if (mounted) {
-        // Handle different event types
         if (event is ParticipantConnectedEvent ||
             event is ParticipantDisconnectedEvent ||
             event is TrackMutedEvent ||
             event is TrackUnmutedEvent ||
             event is TrackPublishedEvent ||
             event is TrackUnpublishedEvent ||
-            event is TrackSubscribedEvent ||      // ✅ Add this
-            event is TrackUnsubscribedEvent ||    // ✅ Add this
+            event is TrackSubscribedEvent ||
+            event is TrackUnsubscribedEvent ||
             event is RoomDisconnectedEvent) {
           _updateParticipants();
+        }
+        
+        // ✅ Listen for new participants to get their metadata
+        if (event is ParticipantConnectedEvent) {
+          _onParticipantConnected(event.participant);
         }
       }
     });
 
     try {
-      // Get token from Supabase
       final profile = await _authService.getProfile();
       final userId = _authService.currentUserId;
       final userName = profile?['display_name'] ?? profile?['full_name'] ?? (widget.isTeacher ? 'Teacher' : 'Student');
+      
       _myName = userName;
       _participantNames[userId ?? 'unknown'] = userName;
 
@@ -89,7 +92,6 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
 
       final token = tokenResponse.data['token'] as String;
 
-      // Get LiveKit URL
       final settings = await Supabase.instance.client
           .from('platform_settings')
           .select('value')
@@ -98,10 +100,15 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
 
       final serverUrl = settings['value'] as String;
 
-      // Connect to the room
       await _room.connect(serverUrl, token);
       
-      // Enable camera and microphone
+      // ✅ Set metadata with name so other participants can see it
+      await _room.localParticipant?.setMetadata(jsonEncode({
+        'name': userName,
+        'role': widget.isTeacher ? 'teacher' : 'student',
+        'userId': userId ?? 'unknown',
+      }));
+      
       await _room.localParticipant?.setCameraEnabled(true);
       await _room.localParticipant?.setMicrophoneEnabled(true);
 
@@ -155,40 +162,63 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
     }
   }
 
-  // ✅ Add this helper method
-  String _getParticipantName(Participant participant) {
-    final identity = participant.identity ?? '';
-    
-    // First check our name map
-    if (_participantNames.containsKey(identity)) {
-      return _participantNames[identity]!;
+  void _onParticipantConnected(Participant participant) {
+  // Try to get metadata from the new participant
+  final metadata = participant.metadata;
+  if (metadata != null && metadata.isNotEmpty) {
+    try {
+      final meta = jsonDecode(metadata);
+      if (meta['name'] != null && meta['userId'] != null) {
+        _participantNames[meta['userId']] = meta['name'];
+        setState(() {}); // Refresh UI to show names
+      }
+    } catch (e) {
+      debugPrint('Error parsing participant metadata: $e');
     }
-    
-    // Check if it's the local participant
-    if (_myName != null && participant == _room.localParticipant) {
-      return _myName!;
-    }
-    
-    // Check participant metadata
-    final metadata = participant.metadata;
-    if (metadata != null && metadata.isNotEmpty) {
-      try {
-        final meta = jsonDecode(metadata);
-        if (meta['name'] != null) {
-          _participantNames[identity] = meta['name'];
-          return meta['name'];
-        }
-      } catch (_) {}
-    }
-    
-    // Fallback: show role instead of UUID
-    if (identity == _room.localParticipant?.identity) {
-      return widget.isTeacher ? 'You (Teacher)' : 'You (Student)';
-    }
-    
-    return widget.isTeacher ? 'Student' : 'Teacher';
   }
+}
 
+  String _getParticipantName(Participant participant) {
+  final identity = participant.identity ?? '';
+  
+  // Check our name map first (populated from metadata)
+  if (_participantNames.containsKey(identity)) {
+    return _participantNames[identity]!;
+  }
+  
+  // Check if it's the local participant
+  if (_myName != null && participant == _room.localParticipant) {
+    return _myName!;
+  }
+  
+  // Try to parse metadata
+  final metadata = participant.metadata;
+  if (metadata != null && metadata.isNotEmpty) {
+    try {
+      final meta = jsonDecode(metadata);
+      if (meta['name'] != null) {
+        _participantNames[identity] = meta['name'];
+        return meta['name'];
+      }
+    } catch (_) {}
+  }
+  
+  // Show role as last resort
+  final role = _getParticipantRole(participant);
+  return role == 'teacher' ? 'Teacher' : 'Student';
+}
+
+// ✅ Helper to get role from metadata
+String _getParticipantRole(Participant participant) {
+  final metadata = participant.metadata;
+  if (metadata != null && metadata.isNotEmpty) {
+    try {
+      final meta = jsonDecode(metadata);
+      return meta['role'] ?? (widget.isTeacher ? 'student' : 'teacher');
+    } catch (_) {}
+  }
+  return widget.isTeacher ? 'student' : 'teacher';
+}
   void _updateParticipants() {
   if (!mounted) return;
   setState(() {
@@ -198,22 +228,26 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
       ..._room.remoteParticipants.values,
     ];
 
+    // ✅ Extract metadata from all participants
+    for (final participant in _allParticipants) {
+      _extractParticipantName(participant);
+    }
+
     if (_allParticipants.isEmpty) {
       _mainFocusParticipant = null;
       return;
     }
 
-    // ✅ Priority 1: Someone ELSE sharing screen (remote participant)
+    // Priority 1: Someone ELSE sharing screen (remote participant)
     final remoteScreenSharer = _allParticipants.firstWhere(
       (p) => p != localParticipant && p.isScreenShareEnabled(),
       orElse: () => _allParticipants.first,
     );
     
-    // If a remote participant is sharing, show them
     if (remoteScreenSharer != localParticipant && remoteScreenSharer.isScreenShareEnabled()) {
       _mainFocusParticipant = remoteScreenSharer;
     } 
-    // ✅ Priority 2: Teacher (if no screen share)
+    // Priority 2: Teacher (if no screen share)
     else {
       _mainFocusParticipant = _allParticipants.firstWhere(
         (p) => (p.identity ?? '').toLowerCase().contains('teacher'),
@@ -221,6 +255,30 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
       );
     }
   });
+}
+
+// ✅ New method to extract name from participant metadata
+void _extractParticipantName(Participant participant) {
+  final identity = participant.identity ?? '';
+  
+  // Skip if we already have this participant's name
+  if (_participantNames.containsKey(identity)) return;
+  
+  // Try to get from metadata first
+  final metadata = participant.metadata;
+  if (metadata != null && metadata.isNotEmpty) {
+    try {
+      final meta = jsonDecode(metadata);
+      if (meta['name'] != null) {
+        _participantNames[identity] = meta['name'];
+        return;
+      }
+    } catch (_) {}
+  }
+  
+  // If no metadata, try to match by identity pattern
+  // (Sometimes the identity IS the UUID from Supabase)
+  if (_participantNames.containsKey(identity)) return;
 }
 
   Future<void> _endLesson() async {
@@ -301,51 +359,65 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1A1A1A),
-        elevation: 0,
-        title: Text(widget.roomName, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: widget.isTeacher ? _endLesson : _leaveLesson,
+  backgroundColor: const Color(0xFF1A1A1A),
+  elevation: 0,
+  title: Text(
+    widget.roomName, 
+    style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+  ),
+  leading: IconButton(
+    icon: const Icon(Icons.arrow_back, color: Colors.white),
+    onPressed: widget.isTeacher ? _endLesson : _leaveLesson,
+  ),
+  actions: [
+    // ✅ Show your name instead of just role
+    Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: widget.isTeacher ? Colors.redAccent.withOpacity(0.2) : Colors.blueAccent.withOpacity(0.2),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Center(
+        child: Text(
+          _myName ?? (widget.isTeacher ? 'Teacher' : 'Student'),
+          style: TextStyle(
+            color: widget.isTeacher ? Colors.redAccent : Colors.blueAccent,
+            fontWeight: FontWeight.bold,
+            fontSize: 12,
+          ),
         ),
-        actions: [
+      ),
+    ),
+    // Participant count
+    Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      margin: const EdgeInsets.only(right: 8),
+      decoration: BoxDecoration(
+        color: Colors.red.withOpacity(0.2),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
           Container(
-            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            decoration: BoxDecoration(
-              color: widget.isTeacher ? Colors.redAccent.withOpacity(0.2) : Colors.blueAccent.withOpacity(0.2),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Center(
-              child: Text(
-                widget.isTeacher ? 'TEACHER' : 'STUDENT',
-                style: TextStyle(
-                  color: widget.isTeacher ? Colors.redAccent : Colors.blueAccent,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12,
-                ),
-              ),
+            width: 8, 
+            height: 8, 
+            decoration: const BoxDecoration(
+              color: Colors.red, 
+              shape: BoxShape.circle,
             ),
           ),
-          // Participant count
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            margin: const EdgeInsets.only(right: 8),
-            decoration: BoxDecoration(
-              color: Colors.red.withOpacity(0.2),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(width: 8, height: 8, decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle)),
-                const SizedBox(width: 6),
-                Text('${_allParticipants.length}', style: const TextStyle(color: Colors.white, fontSize: 13)),
-              ],
-            ),
+          const SizedBox(width: 6),
+          Text(
+            '${_allParticipants.length}', 
+            style: const TextStyle(color: Colors.white, fontSize: 13),
           ),
         ],
       ),
+    ),
+  ],
+),
       body: SafeArea(
         child: Stack(
           children: [
