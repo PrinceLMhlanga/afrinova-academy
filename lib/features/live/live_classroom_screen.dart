@@ -110,27 +110,38 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
   }
 
   void _updateParticipants() {
-    if (!mounted) return;
-    setState(() {
-      final localParticipant = _room.localParticipant;
-      _allParticipants = [
-        if (localParticipant != null) localParticipant,
-        ..._room.remoteParticipants.values,
-      ];
+  if (!mounted) return;
+  setState(() {
+    final localParticipant = _room.localParticipant;
+    _allParticipants = [
+      if (localParticipant != null) localParticipant,
+      ..._room.remoteParticipants.values,
+    ];
 
-      if (_allParticipants.isNotEmpty) {
-        // ✅ Priority 1: Someone ELSE sharing screen (not me)
-        final screenSharer = _allParticipants.firstWhere(
-          (p) => p.isScreenShareEnabled() && p != localParticipant,
-          orElse: () => _allParticipants.firstWhere(
-            (p) => (p.identity ?? '').contains('teacher'),
-            orElse: () => _allParticipants.first,
-          ),
-        );
-        _mainFocusParticipant = screenSharer;
-      }
-    });
-  }
+    if (_allParticipants.isEmpty) {
+      _mainFocusParticipant = null;
+      return;
+    }
+
+    // ✅ Priority 1: Someone ELSE sharing screen (remote participant)
+    final remoteScreenSharer = _allParticipants.firstWhere(
+      (p) => p != localParticipant && p.isScreenShareEnabled(),
+      orElse: () => _allParticipants.first,
+    );
+    
+    // If a remote participant is sharing, show them
+    if (remoteScreenSharer != localParticipant && remoteScreenSharer.isScreenShareEnabled()) {
+      _mainFocusParticipant = remoteScreenSharer;
+    } 
+    // ✅ Priority 2: Teacher (if no screen share)
+    else {
+      _mainFocusParticipant = _allParticipants.firstWhere(
+        (p) => (p.identity ?? '').toLowerCase().contains('teacher'),
+        orElse: () => _allParticipants.first,
+      );
+    }
+  });
+}
 
   Future<void> _endLesson() async {
     final confirm = await showDialog<bool>(
@@ -272,6 +283,7 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
   _ParticipantVideoTile(
     participant: _mainFocusParticipant!,
     isMain: true,
+    localParticipant: _room.localParticipant,
   ),
                             _buildIdentityOverlay(_mainFocusParticipant, isMain: true),
                           ],
@@ -282,48 +294,50 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
                 ),
 
                 // Student filmstrip
-                if (_allParticipants.length > 1)
-                  SizedBox(
-                    height: 120,
-                    child: ListView.builder(
-                      scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      itemCount: _allParticipants.length,
-                      itemBuilder: (context, index) {
-                        final participant = _allParticipants[index];
-                        final isSelected = participant == _mainFocusParticipant;
-                        return GestureDetector(
-                          onTap: () => setState(() => _mainFocusParticipant = participant),
-                          child: Container(
-                            width: 140,
-                            margin: const EdgeInsets.only(right: 8, bottom: 4),
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                color: isSelected ? Colors.blueAccent : Colors.transparent,
-                                width: 2,
-                              ),
-                            ),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(10),
-                              child: Container(
-                                color: const Color(0xFF1E1E1E),
-                                child: Stack(
-                                  children: [
-                                    _ParticipantVideoTile(
-  participant: participant,
-  isMain: false,
-),
-                                    _buildIdentityOverlay(participant, isMain: false),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        );
-                      },
+                // Student filmstrip - exclude the main focus participant
+if (_allParticipants.length > 1)
+  SizedBox(
+    height: 120,
+    child: ListView.builder(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      // ✅ Filter out the main focus participant from filmstrip
+      itemCount: _allParticipants.where((p) => p != _mainFocusParticipant).length,
+      itemBuilder: (context, index) {
+        final participant = _allParticipants.where((p) => p != _mainFocusParticipant).toList()[index];
+        return GestureDetector(
+          onTap: () => setState(() => _mainFocusParticipant = participant),
+          child: Container(
+            width: 140,
+            margin: const EdgeInsets.only(right: 8, bottom: 4),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: participant == _mainFocusParticipant ? Colors.blueAccent : Colors.transparent,
+                width: 2,
+              ),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                color: const Color(0xFF1E1E1E),
+                child: Stack(
+                  children: [
+                    _ParticipantVideoTile(
+                      participant: participant,
+                      isMain: false,
+                      localParticipant: _room.localParticipant,
                     ),
-                  ),
+                    _buildIdentityOverlay(participant, isMain: false),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    ),
+  ),
 
                 // Control bar
                 Container(
@@ -516,14 +530,15 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
   }
 }
 
-// Add this new widget at the bottom of the file
 class _ParticipantVideoTile extends StatefulWidget {
   final Participant participant;
   final bool isMain;
+  final Participant? localParticipant;  // ✅ Add this
 
   const _ParticipantVideoTile({
     required this.participant,
     this.isMain = false,
+    this.localParticipant,  // ✅ Add this
   });
 
   @override
@@ -532,32 +547,33 @@ class _ParticipantVideoTile extends StatefulWidget {
 
 class _ParticipantVideoTileState extends State<_ParticipantVideoTile> {
   late final EventsListener<ParticipantEvent> _listener;
+  bool _disposed = false;
 
   @override
   void initState() {
     super.initState();
-    // ✅ Listen for track changes on this participant
     _listener = widget.participant.createListener();
     
-    _listener.on<TrackSubscribedEvent>((event) {
-      if (mounted) setState(() {});
+    _listener.on<TrackSubscribedEvent>((_) {
+      if (!_disposed && mounted) setState(() {});
     });
     
-    _listener.on<TrackUnsubscribedEvent>((event) {
-      if (mounted) setState(() {});
+    _listener.on<TrackUnsubscribedEvent>((_) {
+      if (!_disposed && mounted) setState(() {});
     });
     
-    _listener.on<TrackMutedEvent>((event) {
-      if (mounted) setState(() {});
+    _listener.on<TrackMutedEvent>((_) {
+      if (!_disposed && mounted) setState(() {});
     });
     
-    _listener.on<TrackUnmutedEvent>((event) {
-      if (mounted) setState(() {});
+    _listener.on<TrackUnmutedEvent>((_) {
+      if (!_disposed && mounted) setState(() {});
     });
   }
 
   @override
   void dispose() {
+    _disposed = true;
     _listener.dispose();
     super.dispose();
   }
@@ -568,32 +584,55 @@ class _ParticipantVideoTileState extends State<_ParticipantVideoTile> {
   }
 
   Widget _buildVideoContent(Participant participant, bool isMain) {
-    // ✅ Check screen share first
-    // ✅ Fix - only use screenShareVideo
-final screenPub = participant.videoTrackPublications.firstWhere(
-  (p) => p.source == TrackSource.screenShareVideo,
-  orElse: () => participant.videoTrackPublications.first,
-);
-
-    // If screen share is active and subscribed, show it
-    if (participant.isScreenShareEnabled() && 
-        screenPub.track != null && 
-        screenPub.subscribed) {
-      return VideoTrackRenderer(screenPub.track as VideoTrack);
+    final isLocal = participant == widget.localParticipant;
+    
+    final videoPubs = participant.videoTrackPublications;
+    
+    if (videoPubs.isEmpty) {
+      return _buildAvatar(participant, isMain);
     }
 
-    // Regular camera
-    final cameraPub = participant.videoTrackPublications.firstWhere(
-      (p) => p.source == TrackSource.camera,
-      orElse: () => participant.videoTrackPublications.first,
-    );
-
-    if (participant.isCameraEnabled() && 
-        cameraPub.track != null) {
-      return VideoTrackRenderer(cameraPub.track as VideoTrack);
+    // ✅ For LOCAL participant: NEVER show their own screen share
+    if (isLocal) {
+      try {
+        final cameraPub = videoPubs.cast<TrackPublication>().firstWhere(
+          (p) => p.source == TrackSource.camera,
+        );
+        
+        if (cameraPub.track != null && cameraPub.subscribed) {
+          return VideoTrackRenderer(cameraPub.track as VideoTrack);
+        }
+      } catch (_) {}
+      
+      return _buildAvatar(participant, isMain);
     }
 
-    // Fallback avatar
+    // ✅ For REMOTE participants: Show screen share if available
+    try {
+      final screenPub = videoPubs.cast<TrackPublication>().firstWhere(
+        (p) => p.source == TrackSource.screenShareVideo,
+      );
+      
+      if (screenPub.track != null && screenPub.subscribed) {
+        return VideoTrackRenderer(screenPub.track as VideoTrack);
+      }
+    } catch (_) {}
+
+    // ✅ Show camera for remote participants
+    try {
+      final cameraPub = videoPubs.cast<TrackPublication>().firstWhere(
+        (p) => p.source == TrackSource.camera,
+      );
+      
+      if (cameraPub.track != null && cameraPub.subscribed) {
+        return VideoTrackRenderer(cameraPub.track as VideoTrack);
+      }
+    } catch (_) {}
+
+    return _buildAvatar(participant, isMain);
+  }
+
+  Widget _buildAvatar(Participant participant, bool isMain) {
     return Center(
       child: CircleAvatar(
         radius: isMain ? 50 : 20,
@@ -610,7 +649,6 @@ final screenPub = participant.videoTrackPublications.firstWhere(
     );
   }
 }
-
 class _ChatMessage {
   final String sender;
   final String message;
