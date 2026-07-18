@@ -595,8 +595,8 @@ Widget _buildMainContentArea() {
           room: _room,
           isTeacher: widget.isTeacher,
           userName: _myName ?? 'Teacher',
-          onDrawingStart: _onTeacherDrawingStart,
-          onDrawingEnd: _onTeacherDrawingEnd,
+          //onDrawingStart: _onTeacherDrawingStart,
+          //onDrawingEnd: _onTeacherDrawingEnd,
         ),
       ),
     );
