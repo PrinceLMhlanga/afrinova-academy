@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:livekit_client/livekit_client.dart';
 import 'whiteboard_data.dart';
@@ -8,8 +9,8 @@ class WhiteboardCanvas extends StatefulWidget {
   final Room room;
   final bool isTeacher;
   final String userName;
-  final VoidCallback? onDrawingStart;  // ✅ Add this
-  final VoidCallback? onDrawingEnd;    // ✅ Add this
+  final VoidCallback? onDrawingStart;
+  final VoidCallback? onDrawingEnd;
 
   const WhiteboardCanvas({
     super.key,
@@ -31,77 +32,100 @@ class _WhiteboardCanvasState extends State<WhiteboardCanvas> {
   Color _selectedColor = Colors.black;
   double _strokeWidth = 3.0;
   StrokeType _currentTool = StrokeType.draw;
+  bool _showToolbar = true;
+  late final EventsListener<RoomEvent> _roomListener;
   
-  final Map<String, Color> _colorPalette = {
-    'Black': Colors.black,
-    'Red': Colors.red,
-    'Blue': Colors.blue,
-    'Green': Colors.green,
-    'Orange': Colors.orange,
-    'Purple': Colors.purple,
-  };
-
-  final Map<String, double> _strokeSizes = {
-    'Thin': 2.0,
-    'Medium': 4.0,
-    'Thick': 8.0,
-  };
+  
+  
 
   @override
   void initState() {
     super.initState();
-    _setupDataSync();
+    _setupDataChannel();
   }
 
-  void _setupDataSync() {
-    // Listen for whiteboard data from other participants
-    widget.room.addListener(() {
-      // This would be replaced with LiveKit data channel messages
-    });
+  void _setupDataChannel() {
+  _roomListener = widget.room.createListener();
+  
+  _roomListener.on<DataReceivedEvent>((event) {
+    final data = event.data is Uint8List 
+        ? event.data as Uint8List 
+        : Uint8List.fromList(event.data);
+    _handleDataMessage(data);
+  });
+}
+
+  void _handleDataMessage(Uint8List data) {
+    try {
+      final message = jsonDecode(utf8.decode(data));
+      
+      if (message['type'] == 'whiteboard_stroke') {
+        final stroke = WhiteboardStroke.fromJson(message['stroke']);
+        if (mounted) {
+          setState(() {
+            _strokes.removeWhere((s) => s.id == stroke.id);
+            _strokes.add(stroke);
+          });
+        }
+      } else if (message['type'] == 'whiteboard_clear') {
+        if (mounted) {
+          setState(() {
+            _strokes.clear();
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Error handling whiteboard data: $e');
+    }
   }
 
-  void _sendWhiteboardUpdate(WhiteboardStroke stroke) {
-    final data = jsonEncode({
+  void _sendStroke(WhiteboardStroke stroke) {
+    final data = utf8.encode(jsonEncode({
       'type': 'whiteboard_stroke',
       'stroke': stroke.toJson(),
       'sentBy': widget.userName,
-    });
+    }));
     
-    // Send via LiveKit data channel
     widget.room.localParticipant?.publishData(
-      utf8.encode(data),
+      data,
       reliable: true,
+      topic: 'whiteboard',  // Topic for filtering
+    );
+  }
+
+  void _sendClear() {
+    final data = utf8.encode(jsonEncode({
+      'type': 'whiteboard_clear',
+      'sentBy': widget.userName,
+    }));
+    
+    widget.room.localParticipant?.publishData(
+      data,
+      reliable: true,
+      topic: 'whiteboard',
     );
   }
 
   void _onPanStart(DragStartDetails details) {
-  if (!widget.isTeacher) return;
-  
-  widget.onDrawingStart?.call();  // ✅ Notify parent
-  
-  final id = DateTime.now().millisecondsSinceEpoch.toString();
-  setState(() {
-    _currentStroke = WhiteboardStroke(
-      id: id,
-      points: [details.localPosition],
-      color: _currentTool == StrokeType.eraser ? Colors.white : _selectedColor,
-      strokeWidth: _strokeWidth,
-      type: _currentTool,
-    );
-  });
-}
-
-void _onPanEnd(DragEndDetails details) {
-  if (!widget.isTeacher || _currentStroke == null) return;
-  
-  setState(() {
-    _strokes.add(_currentStroke!);
-    _sendWhiteboardUpdate(_currentStroke!);
-    _currentStroke = null;
-  });
-  
-  widget.onDrawingEnd?.call();  // ✅ Notify parent
-}
+    if (!widget.isTeacher) return;
+    
+    widget.onDrawingStart?.call();
+    
+    final id = '${DateTime.now().millisecondsSinceEpoch}_${widget.userName}';
+    setState(() {
+      _currentStroke = WhiteboardStroke(
+        id: id,
+        points: [details.localPosition],
+        color: _currentTool == StrokeType.eraser ? Colors.white : _selectedColor,
+        strokeWidth: _strokeWidth,
+        type: _currentTool,
+      );
+      // Hide toolbar while drawing on mobile
+      if (MediaQuery.of(context).size.width < 600) {
+        _showToolbar = false;
+      }
+    });
+  }
 
   void _onPanUpdate(DragUpdateDetails details) {
     if (!widget.isTeacher || _currentStroke == null) return;
@@ -111,14 +135,27 @@ void _onPanEnd(DragEndDetails details) {
     });
   }
 
-  
+  void _onPanEnd(DragEndDetails details) {
+    if (!widget.isTeacher || _currentStroke == null) return;
+    
+    setState(() {
+      _strokes.add(_currentStroke!);
+      _sendStroke(_currentStroke!);  // Send to all participants
+      _currentStroke = null;
+      _showToolbar = true;
+    });
+    
+    widget.onDrawingEnd?.call();
+  }
 
   void _clearWhiteboard() {
+    if (!widget.isTeacher) return;
+    
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Clear Whiteboard?'),
-        content: const Text('This will remove all drawings.'),
+        content: const Text('This will remove all drawings for everyone.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
@@ -127,10 +164,11 @@ void _onPanEnd(DragEndDetails details) {
           ElevatedButton(
             onPressed: () {
               setState(() => _strokes.clear());
+              _sendClear();  // Notify all participants
               Navigator.pop(ctx);
             },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text('Clear', style: TextStyle(color: Colors.white)),
+            child: const Text('Clear All', style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -138,26 +176,80 @@ void _onPanEnd(DragEndDetails details) {
   }
 
   @override
+  void dispose() {
+    _roomListener.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final isMobile = MediaQuery.of(context).size.width < 600;
+    
     return Container(
       color: Colors.white,
       child: Column(
         children: [
-          if (widget.isTeacher) _buildToolbar(),
+          // Toolbar - collapsible on mobile
+          if (widget.isTeacher && _showToolbar)
+            _buildToolbar(isMobile),
+          
+          // Canvas area
           Expanded(
-            child: GestureDetector(
-              onPanStart: _onPanStart,
-              onPanUpdate: _onPanUpdate,
-              onPanEnd: _onPanEnd,
-              child: ClipRRect(
-                child: CustomPaint(
-                  painter: WhiteboardPainter(
-                    strokes: _strokes,
-                    currentStroke: _currentStroke,
+            child: Stack(
+              children: [
+                // Whiteboard canvas
+                GestureDetector(
+                  onPanStart: widget.isTeacher ? _onPanStart : null,
+                  onPanUpdate: widget.isTeacher ? _onPanUpdate : null,
+                  onPanEnd: widget.isTeacher ? _onPanEnd : null,
+                  child: Container(
+                    color: Colors.white,
+                    width: double.infinity,
+                    height: double.infinity,
+                    child: CustomPaint(
+                      painter: WhiteboardPainter(
+                        strokes: _strokes,
+                        currentStroke: _currentStroke,
+                      ),
+                      size: Size.infinite,
+                    ),
                   ),
-                  size: Size.infinite,
                 ),
-              ),
+                
+                // Mobile: Floating action button for toolbar
+                if (isMobile && widget.isTeacher && !_showToolbar)
+                  Positioned(
+                    bottom: 16,
+                    right: 16,
+                    child: FloatingActionButton(
+                      mini: true,
+                      onPressed: () => setState(() => _showToolbar = true),
+                      backgroundColor: Colors.blue,
+                      child: const Icon(Icons.menu, color: Colors.white),
+                    ),
+                  ),
+                
+                // Student: Show "Teacher is drawing" indicator
+                if (!widget.isTeacher && _currentStroke != null)
+                  Positioned(
+                    top: 16,
+                    left: 0,
+                    right: 0,
+                    child: Center(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.7),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Text(
+                          'Teacher is drawing...',
+                          style: TextStyle(color: Colors.white, fontSize: 12),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
         ],
@@ -165,129 +257,156 @@ void _onPanEnd(DragEndDetails details) {
     );
   }
 
-  Widget _buildToolbar() {
+  Widget _buildToolbar(bool isMobile) {
+    if (isMobile) {
+      return _buildMobileToolbar();
+    }
+    return _buildDesktopToolbar();
+  }
+
+  Widget _buildDesktopToolbar() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
         color: Colors.grey.shade100,
         border: Border(bottom: BorderSide(color: Colors.grey.shade300)),
       ),
-      child: Row(
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 4,
         children: [
           // Tools
-          _buildToolButton(Icons.brush, 'Draw', StrokeType.draw),
-          _buildToolButton(Icons.show_chart, 'Line', StrokeType.line),
-          _buildToolButton(Icons.crop_square, 'Rect', StrokeType.rectangle),
-          _buildToolButton(Icons.circle_outlined, 'Circle', StrokeType.circle),
-          _buildToolButton(Icons.auto_fix_high, 'Eraser', StrokeType.eraser),
+          _buildToolChip(Icons.brush, 'Draw', StrokeType.draw),
+          _buildToolChip(Icons.show_chart, 'Line', StrokeType.line),
+          _buildToolChip(Icons.crop_square, 'Rect', StrokeType.rectangle),
+          _buildToolChip(Icons.circle_outlined, 'Circle', StrokeType.circle),
+          _buildToolChip(Icons.auto_fix_high, 'Eraser', StrokeType.eraser),
           
-          const SizedBox(width: 16),
-          Container(width: 1, height: 24, color: Colors.grey.shade400),
-          const SizedBox(width: 16),
+          const SizedBox(width: 8),
           
           // Colors
-          ..._colorPalette.entries.map((entry) => _buildColorButton(entry.value, entry.key)),
+          ...[Colors.black, Colors.red, Colors.blue, Colors.green, Colors.orange, Colors.purple]
+              .map((c) => _buildColorDot(c)),
           
-          const SizedBox(width: 16),
-          Container(width: 1, height: 24, color: Colors.grey.shade400),
-          const SizedBox(width: 16),
+          const SizedBox(width: 8),
           
-          // Stroke sizes
-          ..._strokeSizes.entries.map((entry) => _buildSizeButton(entry.value, entry.key)),
+          // Sizes
+          _buildSizeChip(2.0, 'S'),
+          _buildSizeChip(4.0, 'M'),
+          _buildSizeChip(8.0, 'L'),
           
-          const Spacer(),
+          const SizedBox(width: 8),
           
-          // Clear button
-          _buildActionButton(Icons.delete_outline, 'Clear', _clearWhiteboard, Colors.red),
+          // Clear
+          _buildActionChip(Icons.delete, 'Clear', Colors.red, _clearWhiteboard),
         ],
       ),
     );
   }
 
-  Widget _buildToolButton(IconData icon, String tooltip, StrokeType type) {
+  Widget _buildMobileToolbar() {
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade100,
+        border: Border(bottom: BorderSide(color: Colors.grey.shade300)),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            _buildToolChip(Icons.brush, '', StrokeType.draw),
+            _buildToolChip(Icons.auto_fix_high, '', StrokeType.eraser),
+            const SizedBox(width: 8),
+            ...[Colors.black, Colors.red, Colors.blue, Colors.green]
+                .map((c) => _buildColorDot(c)),
+            const SizedBox(width: 8),
+            _buildSizeChip(3.0, ''),
+            _buildSizeChip(6.0, ''),
+            const SizedBox(width: 8),
+            _buildActionChip(Icons.delete, '', Colors.red, _clearWhiteboard),
+            const SizedBox(width: 8),
+            _buildActionChip(
+              Icons.close, '', Colors.grey, 
+              () => setState(() => _showToolbar = false),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildToolChip(IconData icon, String label, StrokeType type) {
     final isSelected = _currentTool == type;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 2),
-      child: Tooltip(
-        message: tooltip,
-        child: Material(
-          color: isSelected ? Colors.blue.shade50 : Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(8),
-            onTap: () => setState(() => _currentTool = type),
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: Icon(
-                icon,
-                size: 20,
-                color: isSelected ? Colors.blue : Colors.grey.shade700,
-              ),
-            ),
+    return Material(
+      color: isSelected ? Colors.blue.shade100 : Colors.white,
+      borderRadius: BorderRadius.circular(20),
+      elevation: isSelected ? 2 : 0,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: () => setState(() => _currentTool = type),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 18, color: isSelected ? Colors.blue : Colors.black87),
+              if (label.isNotEmpty) ...[
+                const SizedBox(width: 4),
+                Text(label, style: TextStyle(fontSize: 12, color: isSelected ? Colors.blue : Colors.black87)),
+              ],
+            ],
           ),
         ),
       ),
     );
   }
 
-  Widget _buildColorButton(Color color, String tooltip) {
+  Widget _buildColorDot(Color color) {
     final isSelected = _selectedColor == color && _currentTool != StrokeType.eraser;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 2),
-      child: Tooltip(
-        message: tooltip,
-        child: GestureDetector(
-          onTap: () => setState(() {
-            _selectedColor = color;
-            _currentTool = StrokeType.draw;
-          }),
-          child: Container(
-            width: 24,
-            height: 24,
-            decoration: BoxDecoration(
-              color: color,
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: isSelected ? Colors.blue : Colors.grey.shade400,
-                width: isSelected ? 3 : 1,
-              ),
-              boxShadow: isSelected
-                  ? [BoxShadow(color: color.withOpacity(0.5), blurRadius: 4)]
-                  : null,
-            ),
+    return GestureDetector(
+      onTap: () => setState(() {
+        _selectedColor = color;
+        _currentTool = StrokeType.draw;
+      }),
+      child: Container(
+        width: 28,
+        height: 28,
+        margin: const EdgeInsets.symmetric(horizontal: 2),
+        decoration: BoxDecoration(
+          color: color,
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: isSelected ? Colors.blue : Colors.grey.shade400,
+            width: isSelected ? 3 : 1.5,
           ),
         ),
       ),
     );
   }
 
-  Widget _buildSizeButton(double size, String tooltip) {
+  Widget _buildSizeChip(double size, String label) {
     final isSelected = _strokeWidth == size;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 2),
-      child: Tooltip(
-        message: tooltip,
-        child: GestureDetector(
-          onTap: () => setState(() => _strokeWidth = size),
+    return GestureDetector(
+      onTap: () => setState(() => _strokeWidth = size),
+      child: Container(
+        width: 32,
+        height: 32,
+        margin: const EdgeInsets.symmetric(horizontal: 2),
+        decoration: BoxDecoration(
+          color: isSelected ? Colors.blue.shade100 : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isSelected ? Colors.blue : Colors.grey.shade300,
+          ),
+        ),
+        child: Center(
           child: Container(
-            width: 28,
-            height: 28,
+            width: size * 1.5,
+            height: size * 1.5,
             decoration: BoxDecoration(
-              color: isSelected ? Colors.blue.shade50 : Colors.transparent,
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(
-                color: isSelected ? Colors.blue : Colors.transparent,
-              ),
-            ),
-            child: Center(
-              child: Container(
-                width: size * 2,
-                height: size * 2,
-                decoration: BoxDecoration(
-                  color: _selectedColor,
-                  shape: BoxShape.circle,
-                ),
-              ),
+              color: _selectedColor,
+              shape: BoxShape.circle,
             ),
           ),
         ),
@@ -295,18 +414,24 @@ void _onPanEnd(DragEndDetails details) {
     );
   }
 
-  Widget _buildActionButton(IconData icon, String tooltip, VoidCallback onPressed, Color color) {
-    return Tooltip(
-      message: tooltip,
-      child: Material(
-        color: Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: onPressed,
-          child: Padding(
-            padding: const EdgeInsets.all(8),
-            child: Icon(icon, size: 20, color: color),
+  Widget _buildActionChip(IconData icon, String label, Color color, VoidCallback onPressed) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: onPressed,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 18, color: color),
+              if (label.isNotEmpty) ...[
+                const SizedBox(width: 4),
+                Text(label, style: TextStyle(fontSize: 12, color: color)),
+              ],
+            ],
           ),
         ),
       ),

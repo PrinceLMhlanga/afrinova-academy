@@ -584,12 +584,13 @@ if (_showWhiteboard && _mainFocusParticipant != null)
 }
 
 Widget _buildMainContentArea() {
-  // If whiteboard is active, show it as main focus
+  final isMobile = MediaQuery.of(context).size.width < 600;
+  
   if (_showWhiteboard) {
     return Padding(
-      padding: _isFullScreen ? EdgeInsets.zero : const EdgeInsets.all(8),
+      padding: isMobile ? EdgeInsets.zero : const EdgeInsets.all(8),  // ✅ No padding on mobile
       child: ClipRRect(
-        borderRadius: _isFullScreen ? BorderRadius.zero : BorderRadius.circular(16),
+        borderRadius: isMobile ? BorderRadius.zero : BorderRadius.circular(16),  // ✅ No border on mobile
         child: WhiteboardCanvas(
           room: _room,
           isTeacher: widget.isTeacher,
@@ -601,7 +602,6 @@ Widget _buildMainContentArea() {
     );
   }
   
-  // Show video as main focus when whiteboard is hidden
   return _isFullScreen && !_showControls
       ? _buildFullScreenContent()
       : _buildMainContent();
