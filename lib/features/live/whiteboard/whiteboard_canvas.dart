@@ -32,7 +32,7 @@ class _WhiteboardCanvasState extends State<WhiteboardCanvas> {
   Color _selectedColor = Colors.black;
   double _strokeWidth = 3.0;
   StrokeType _currentTool = StrokeType.draw;
-  bool _showToolbar = true;
+  
   late final EventsListener<RoomEvent> _roomListener;
   
   
@@ -106,26 +106,42 @@ class _WhiteboardCanvasState extends State<WhiteboardCanvas> {
     );
   }
 
-  void _onPanStart(DragStartDetails details) {
-    if (!widget.isTeacher) return;
-    
-    widget.onDrawingStart?.call();
-    
-    final id = '${DateTime.now().millisecondsSinceEpoch}_${widget.userName}';
-    setState(() {
-      _currentStroke = WhiteboardStroke(
-        id: id,
-        points: [details.localPosition],
-        color: _currentTool == StrokeType.eraser ? Colors.white : _selectedColor,
-        strokeWidth: _strokeWidth,
-        type: _currentTool,
-      );
-      // Hide toolbar while drawing on mobile
-      if (MediaQuery.of(context).size.width < 600) {
-        _showToolbar = false;
-      }
-    });
-  }
+  // In _WhiteboardCanvasState, remove the toolbar hiding logic:
+
+void _onPanStart(DragStartDetails details) {
+  if (!widget.isTeacher) return;
+  
+  widget.onDrawingStart?.call();
+  
+  final id = '${DateTime.now().millisecondsSinceEpoch}_${widget.userName}';
+  setState(() {
+    _currentStroke = WhiteboardStroke(
+      id: id,
+      points: [details.localPosition],
+      color: _currentTool == StrokeType.eraser ? Colors.white : _selectedColor,
+      strokeWidth: _strokeWidth,
+      type: _currentTool,
+    );
+    // ❌ REMOVE THIS: Don't hide toolbar
+    // if (MediaQuery.of(context).size.width < 600) {
+    //   _showToolbar = false;
+    // }
+  });
+}
+
+void _onPanEnd(DragEndDetails details) {
+  if (!widget.isTeacher || _currentStroke == null) return;
+  
+  setState(() {
+    _strokes.add(_currentStroke!);
+    _sendStroke(_currentStroke!);
+    _currentStroke = null;
+    // ❌ REMOVE THIS: Toolbar stays visible
+    // _showToolbar = true;
+  });
+  
+  widget.onDrawingEnd?.call();
+}
 
   void _onPanUpdate(DragUpdateDetails details) {
     if (!widget.isTeacher || _currentStroke == null) return;
@@ -135,18 +151,7 @@ class _WhiteboardCanvasState extends State<WhiteboardCanvas> {
     });
   }
 
-  void _onPanEnd(DragEndDetails details) {
-    if (!widget.isTeacher || _currentStroke == null) return;
-    
-    setState(() {
-      _strokes.add(_currentStroke!);
-      _sendStroke(_currentStroke!);  // Send to all participants
-      _currentStroke = null;
-      _showToolbar = true;
-    });
-    
-    widget.onDrawingEnd?.call();
-  }
+ 
 
   void _clearWhiteboard() {
     if (!widget.isTeacher) return;
@@ -181,82 +186,42 @@ class _WhiteboardCanvasState extends State<WhiteboardCanvas> {
     super.dispose();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final isMobile = MediaQuery.of(context).size.width < 600;
-    
-    return Container(
-      color: Colors.white,
-      child: Column(
-        children: [
-          // Toolbar - collapsible on mobile
-          if (widget.isTeacher && _showToolbar)
-            _buildToolbar(isMobile),
-          
-          // Canvas area
-          Expanded(
-            child: Stack(
-              children: [
-                // Whiteboard canvas
-                GestureDetector(
-                  onPanStart: widget.isTeacher ? _onPanStart : null,
-                  onPanUpdate: widget.isTeacher ? _onPanUpdate : null,
-                  onPanEnd: widget.isTeacher ? _onPanEnd : null,
-                  child: Container(
-                    color: Colors.white,
-                    width: double.infinity,
-                    height: double.infinity,
-                    child: CustomPaint(
-                      painter: WhiteboardPainter(
-                        strokes: _strokes,
-                        currentStroke: _currentStroke,
-                      ),
-                      size: Size.infinite,
-                    ),
-                  ),
+ @override
+Widget build(BuildContext context) {
+  final isMobile = MediaQuery.of(context).size.width < 600;
+  
+  return Container(
+    color: Colors.white,
+    child: Column(
+      children: [
+        // Toolbar - always visible for teacher
+        if (widget.isTeacher)
+          isMobile ? _buildMobileToolbar() : _buildDesktopToolbar(),
+        
+        // Canvas area
+        Expanded(
+          child: GestureDetector(
+            onPanStart: widget.isTeacher ? _onPanStart : null,
+            onPanUpdate: widget.isTeacher ? _onPanUpdate : null,
+            onPanEnd: widget.isTeacher ? _onPanEnd : null,
+            child: Container(
+              color: Colors.white,
+              width: double.infinity,
+              height: double.infinity,
+              child: CustomPaint(
+                painter: WhiteboardPainter(
+                  strokes: _strokes,
+                  currentStroke: _currentStroke,
                 ),
-                
-                // Mobile: Floating action button for toolbar
-                if (isMobile && widget.isTeacher && !_showToolbar)
-                  Positioned(
-                    bottom: 16,
-                    right: 16,
-                    child: FloatingActionButton(
-                      mini: true,
-                      onPressed: () => setState(() => _showToolbar = true),
-                      backgroundColor: Colors.blue,
-                      child: const Icon(Icons.menu, color: Colors.white),
-                    ),
-                  ),
-                
-                // Student: Show "Teacher is drawing" indicator
-                if (!widget.isTeacher && _currentStroke != null)
-                  Positioned(
-                    top: 16,
-                    left: 0,
-                    right: 0,
-                    child: Center(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.7),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: const Text(
-                          'Teacher is drawing...',
-                          style: TextStyle(color: Colors.white, fontSize: 12),
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
+                size: Size.infinite,
+              ),
             ),
           ),
-        ],
-      ),
-    );
-  }
-
+        ),
+      ],
+    ),
+  );
+}
   Widget _buildToolbar(bool isMobile) {
     if (isMobile) {
       return _buildMobileToolbar();
@@ -305,36 +270,143 @@ class _WhiteboardCanvasState extends State<WhiteboardCanvas> {
   }
 
   Widget _buildMobileToolbar() {
-    return Container(
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: Colors.grey.shade100,
-        border: Border(bottom: BorderSide(color: Colors.grey.shade300)),
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+    decoration: BoxDecoration(
+      color: Colors.grey.shade100,
+      border: Border(bottom: BorderSide(color: Colors.grey.shade300)),
+    ),
+    child: SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          // All drawing tools
+          _buildCompactToolButton(Icons.brush, StrokeType.draw),
+          _buildCompactToolButton(Icons.show_chart, StrokeType.line),
+          _buildCompactToolButton(Icons.crop_square, StrokeType.rectangle),
+          _buildCompactToolButton(Icons.circle_outlined, StrokeType.circle),
+          _buildCompactToolButton(Icons.auto_fix_high, StrokeType.eraser),
+          
+          Container(width: 1, height: 24, color: Colors.grey.shade300),
+          const SizedBox(width: 4),
+          
+          // All colors
+          ...<Color>[Colors.black, Colors.red, Colors.blue, Colors.green, Colors.orange, Colors.purple]
+              .map((c) => _buildCompactColorDot(c)),
+          
+          Container(width: 1, height: 24, color: Colors.grey.shade300),
+          const SizedBox(width: 4),
+          
+          // All stroke sizes
+          _buildCompactSizeButton(2.0),
+          _buildCompactSizeButton(4.0),
+          _buildCompactSizeButton(8.0),
+          
+          Container(width: 1, height: 24, color: Colors.grey.shade300),
+          const SizedBox(width: 4),
+          
+          // Clear button
+          _buildCompactActionButton(Icons.delete_outline, Colors.red, _clearWhiteboard),
+        ],
       ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            _buildToolChip(Icons.brush, '', StrokeType.draw),
-            _buildToolChip(Icons.auto_fix_high, '', StrokeType.eraser),
-            const SizedBox(width: 8),
-            ...[Colors.black, Colors.red, Colors.blue, Colors.green]
-                .map((c) => _buildColorDot(c)),
-            const SizedBox(width: 8),
-            _buildSizeChip(3.0, ''),
-            _buildSizeChip(6.0, ''),
-            const SizedBox(width: 8),
-            _buildActionChip(Icons.delete, '', Colors.red, _clearWhiteboard),
-            const SizedBox(width: 8),
-            _buildActionChip(
-              Icons.close, '', Colors.grey, 
-              () => setState(() => _showToolbar = false),
-            ),
-          ],
+    ),
+  );
+}
+
+// Compact tool button
+Widget _buildCompactToolButton(IconData icon, StrokeType type) {
+  final isSelected = _currentTool == type;
+  return GestureDetector(
+    onTap: () => setState(() => _currentTool = type),
+    child: Container(
+      padding: const EdgeInsets.all(6),
+      margin: const EdgeInsets.symmetric(horizontal: 1),
+      decoration: BoxDecoration(
+        color: isSelected ? Colors.blue.shade100 : Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+        border: isSelected ? Border.all(color: Colors.blue, width: 1.5) : null,
+      ),
+      child: Icon(
+        icon,
+        size: 18,
+        color: isSelected ? Colors.blue : Colors.grey.shade700,
+      ),
+    ),
+  );
+}
+
+// Compact color dot
+Widget _buildCompactColorDot(Color color) {
+  final isSelected = _selectedColor == color && _currentTool != StrokeType.eraser;
+  return GestureDetector(
+    onTap: () => setState(() {
+      _selectedColor = color;
+      _currentTool = StrokeType.draw;
+    }),
+    child: Container(
+      width: 22,
+      height: 22,
+      margin: const EdgeInsets.symmetric(horizontal: 3),
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: isSelected ? Colors.blue : Colors.grey.shade400,
+          width: isSelected ? 2.5 : 1,
+        ),
+        boxShadow: isSelected
+            ? [BoxShadow(color: color.withOpacity(0.5), blurRadius: 4)]
+            : null,
+      ),
+    ),
+  );
+}
+
+// Compact size button
+Widget _buildCompactSizeButton(double size) {
+  final isSelected = _strokeWidth == size;
+  return GestureDetector(
+    onTap: () => setState(() => _strokeWidth = size),
+    child: Container(
+      width: 26,
+      height: 26,
+      margin: const EdgeInsets.symmetric(horizontal: 2),
+      decoration: BoxDecoration(
+        color: isSelected ? Colors.blue.shade50 : Colors.transparent,
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(
+          color: isSelected ? Colors.blue : Colors.grey.shade300,
+          width: isSelected ? 1.5 : 1,
         ),
       ),
-    );
-  }
+      child: Center(
+        child: Container(
+          width: size * 1.5,
+          height: size * 1.5,
+          decoration: BoxDecoration(
+            color: _selectedColor,
+            shape: BoxShape.circle,
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+// Compact action button
+Widget _buildCompactActionButton(IconData icon, Color color, VoidCallback onPressed) {
+  return GestureDetector(
+    onTap: onPressed,
+    child: Container(
+      padding: const EdgeInsets.all(6),
+      margin: const EdgeInsets.symmetric(horizontal: 2),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Icon(icon, size: 18, color: color),
+    ),
+  );
+}
 
   Widget _buildToolChip(IconData icon, String label, StrokeType type) {
     final isSelected = _currentTool == type;

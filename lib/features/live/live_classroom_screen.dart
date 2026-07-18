@@ -79,7 +79,6 @@ late Timer _controlsTimer;
           _updateParticipants();
         }
         
-        // ✅ Listen for new participants to get their metadata
         if (event is ParticipantConnectedEvent) {
           _onParticipantConnected(event.participant);
         }
@@ -94,7 +93,6 @@ late Timer _controlsTimer;
       _myName = userName;
       _participantNames[userId ?? 'unknown'] = userName;
 
-      // ✅ Get all participants' names from Supabase
       await _loadParticipantNames();
 
       final tokenResponse = await Supabase.instance.client.functions.invoke(
@@ -118,7 +116,6 @@ late Timer _controlsTimer;
 
       await _room.connect(serverUrl, token);
       
-      // ✅ Set metadata with name so other participants can see it
       await _room.localParticipant?.setMetadata(jsonEncode({
         'name': userName,
         'role': widget.isTeacher ? 'teacher' : 'student',
@@ -127,6 +124,9 @@ late Timer _controlsTimer;
       
       await _room.localParticipant?.setCameraEnabled(true);
       await _room.localParticipant?.setMicrophoneEnabled(true);
+
+      // ✅ SETUP WHITEBOARD LISTENER FOR STUDENTS
+      _setupWhiteboardListener();
 
       _updateParticipants();
       setState(() => _isLoading = false);
@@ -247,14 +247,35 @@ void _onTeacherDrawingEnd() {
 
 // For students: Listen for whiteboard data to auto-switch
 void _setupWhiteboardListener() {
-  // Listen for data channel messages
-  _room.addListener(() {
-    // When student receives whiteboard data, auto-show whiteboard
-    if (!widget.isTeacher && !_showWhiteboard) {
-      // Check if there's whiteboard activity
-      // This would be triggered by your LiveKit data channel
+  final dataListener = _room.createListener();
+  
+  dataListener.on<DataReceivedEvent>((event) {
+    // Only process if student and not already showing whiteboard
+    if (widget.isTeacher || _showWhiteboard) return;
+    
+    try {
+      final data = event.data is Uint8List 
+          ? event.data as Uint8List 
+          : Uint8List.fromList(event.data);
+      
+      final message = jsonDecode(utf8.decode(data));
+      
+      // Auto-switch to whiteboard when teacher draws or clears
+      if (message['type'] == 'whiteboard_stroke' || 
+          message['type'] == 'whiteboard_clear') {
+        debugPrint('📱 Student: Auto-switching to whiteboard');
+        if (mounted) {
+          setState(() {
+            _showWhiteboard = true;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Error in whiteboard listener: $e');
     }
   });
+  
+  debugPrint('👂 Whiteboard listener set up for student');
 }
 
 void _startControlsTimer() {
