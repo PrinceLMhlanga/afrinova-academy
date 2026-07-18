@@ -4,6 +4,9 @@ import 'package:livekit_client/livekit_client.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/auth_service.dart';
 import 'dart:convert';  // ✅ Add this for jsonDecode
+import 'package:flutter/services.dart';
+import '../live/whiteboard/whiteboard_canvas.dart';
+import 'dart:async';
 
 class LiveClassroomScreen extends StatefulWidget {
   final String roomName;
@@ -39,9 +42,22 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
   final Map<String, String> _participantNames = {};
   String? _myName;
 
+  bool _showWhiteboard = false;
+  bool _isTeacherDrawing = false;
+  Timer? _drawingTimer;
+
+  // Add this import at the top
+
+
+// Add these state variables
+bool _isFullScreen = false;
+bool _showControls = true;
+late Timer _controlsTimer;
+
   @override
   void initState() {
     super.initState();
+    _controlsTimer = Timer(const Duration(seconds: 0), () {}); // Dummy timer
     _setupClassroom();
   }
 
@@ -161,6 +177,91 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
       debugPrint('Error loading participant names: $e');
     }
   }
+
+  void _toggleFullScreen() {
+  setState(() {
+    _isFullScreen = !_isFullScreen;
+    _showControls = true;
+  });
+  
+  if (_isFullScreen) {
+    // Hide system UI for immersive experience
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    // Allow all orientations on fullscreen
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+    
+    // Auto-hide controls after 3 seconds
+    _startControlsTimer();
+  } else {
+    // Restore normal UI
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+    ]);
+    _controlsTimer.cancel();
+  }
+}
+
+void _onTeacherDrawingStart() {
+  if (!widget.isTeacher) return;
+  
+  setState(() {
+    _isTeacherDrawing = true;
+    _showWhiteboard = true;  // Auto-show whiteboard
+  });
+  
+  // Cancel any existing timer
+  _drawingTimer?.cancel();
+}
+
+void _onTeacherDrawingEnd() {
+  if (!widget.isTeacher) return;
+  
+  // Wait 2 seconds after teacher stops drawing before switching back
+  _drawingTimer?.cancel();
+  _drawingTimer = Timer(const Duration(seconds: 2), () {
+    if (mounted) {
+      setState(() {
+        _isTeacherDrawing = false;
+        // Don't auto-hide whiteboard, let teacher control that
+      });
+    }
+  });
+}
+
+// For students: Listen for whiteboard data to auto-switch
+void _setupWhiteboardListener() {
+  // Listen for data channel messages
+  _room.addListener(() {
+    // When student receives whiteboard data, auto-show whiteboard
+    if (!widget.isTeacher && !_showWhiteboard) {
+      // Check if there's whiteboard activity
+      // This would be triggered by your LiveKit data channel
+    }
+  });
+}
+
+void _startControlsTimer() {
+  _controlsTimer.cancel();
+  _controlsTimer = Timer(const Duration(seconds: 3), () {
+    if (mounted && _isFullScreen) {
+      setState(() => _showControls = false);
+    }
+  });
+}
+
+void _onScreenTap() {
+  if (_isFullScreen) {
+    setState(() => _showControls = !_showControls);
+    if (_showControls) {
+      _startControlsTimer();
+    }
+  }
+}
 
   void _onParticipantConnected(Participant participant) {
   // Try to get metadata from the new participant
@@ -330,134 +431,299 @@ void _extractParticipantName(Participant participant) {
 }
 
   @override
-  void dispose() {
-    _chatController.dispose();
-    _listener.dispose();
-    _room.disconnect();
-    _room.dispose();
-    super.dispose();
+void dispose() {
+  _chatController.dispose();
+  _listener.dispose();
+  _controlsTimer.cancel();
+  _room.disconnect();
+  _room.dispose();
+  // Restore normal orientations
+  SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+  ]);
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  super.dispose();
+}
+  @override
+Widget build(BuildContext context) {
+  if (_isLoading) {
+    return const Scaffold(
+      backgroundColor: Color(0xFF121212),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(color: Colors.blueAccent),
+            SizedBox(height: 16),
+            Text('Entering classroom...', style: TextStyle(color: Colors.white70)),
+          ],
+        ),
+      ),
+    );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    if (_isLoading) {
-      return const Scaffold(
-        backgroundColor: Color(0xFF121212),
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
+  // ✅ Wrap everything in a GestureDetector for fullscreen tap
+  return GestureDetector(
+    onTap: _onScreenTap,
+    child: AnimatedContainer(
+      duration: const Duration(milliseconds: 300),
+      child: Scaffold(
+        backgroundColor: const Color(0xFF121212),
+        // ✅ Hide app bar in fullscreen
+        appBar: _isFullScreen && !_showControls
+            ? null
+            : _buildAppBar(),
+        body: SafeArea(
+          child: Stack(
             children: [
-              CircularProgressIndicator(color: Colors.blueAccent),
-              SizedBox(height: 16),
-              Text('Entering classroom...', style: TextStyle(color: Colors.white70)),
+              Column(
+                children: [
+                  // Main presentation area
+                  // Main presentation area - Smart focus switching
+Expanded(
+  flex: _isFullScreen ? 1 : 3,
+  child: _buildMainContentArea(),
+),
+
+// Add this method:
+                   // In the Stack of your build method, add this after the main content:
+if (_showWhiteboard && _mainFocusParticipant != null)
+  Positioned(
+    bottom: widget.isTeacher ? 140 : 20,
+    right: 20,
+    child: GestureDetector(
+      onTap: () {
+        // Toggle back to video view
+        setState(() => _showWhiteboard = false);
+      },
+      child: Container(
+        width: 160,
+        height: 120,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.blueAccent, width: 2),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.3),
+              blurRadius: 8,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: Stack(
+            children: [
+              _ParticipantVideoTile(
+                participant: _mainFocusParticipant!,
+                isMain: false,
+                localParticipant: _room.localParticipant,
+                getName: _getParticipantName,
+              ),
+              // Label
+              Positioned(
+                bottom: 4,
+                left: 4,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.6),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    _getParticipantName(_mainFocusParticipant!),
+                    style: const TextStyle(color: Colors.white, fontSize: 10),
+                  ),
+                ),
+              ),
+              // Close button
+              Positioned(
+                top: 4,
+                right: 4,
+                child: GestureDetector(
+                  onTap: () => setState(() => _showWhiteboard = false),
+                  child: Container(
+                    padding: const EdgeInsets.all(2),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.6),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.close, color: Colors.white, size: 14),
+                  ),
+                ),
+              ),
             ],
           ),
         ),
-      );
-    }
-
-    return Scaffold(
-      backgroundColor: const Color(0xFF121212),
-      appBar: AppBar(
-  backgroundColor: const Color(0xFF1A1A1A),
-  elevation: 0,
-  title: Text(
-    widget.roomName, 
-    style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-  ),
-  leading: IconButton(
-    icon: const Icon(Icons.arrow_back, color: Colors.white),
-    onPressed: widget.isTeacher ? _endLesson : _leaveLesson,
-  ),
-  actions: [
-    // ✅ Show your name instead of just role
-    Container(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: widget.isTeacher ? Colors.redAccent.withOpacity(0.2) : Colors.blueAccent.withOpacity(0.2),
-        borderRadius: BorderRadius.circular(20),
       ),
-      child: Center(
-        child: Text(
-          _myName ?? (widget.isTeacher ? 'Teacher' : 'Student'),
-          style: TextStyle(
-            color: widget.isTeacher ? Colors.redAccent : Colors.blueAccent,
-            fontWeight: FontWeight.bold,
-            fontSize: 12,
+    ),
+  ),
+                  // Student filmstrip - hide in fullscreen
+                  if (!_isFullScreen && _allParticipants.length > 1)
+                    _buildFilmstrip(),
+
+                  // Control bar - auto-hide in fullscreen
+                  if (!_isFullScreen || _showControls)
+                    _buildControlBar(),
+                ],
+              ),
+
+              // Chat panel
+              if (_isChatOpen && (!_isFullScreen || _showControls))
+                Positioned(
+                  right: 0, top: 0, bottom: _isFullScreen ? 100 : 160,
+                  width: 300,
+                  child: _buildChatPanel(),
+                ),
+            ],
           ),
         ),
       ),
     ),
-    // Participant count
-    Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      margin: const EdgeInsets.only(right: 8),
-      decoration: BoxDecoration(
-        color: Colors.red.withOpacity(0.2),
-        borderRadius: BorderRadius.circular(12),
+  );
+}
+
+Widget _buildMainContentArea() {
+  // If whiteboard is active, show it as main focus
+  if (_showWhiteboard) {
+    return Padding(
+      padding: _isFullScreen ? EdgeInsets.zero : const EdgeInsets.all(8),
+      child: ClipRRect(
+        borderRadius: _isFullScreen ? BorderRadius.zero : BorderRadius.circular(16),
+        child: WhiteboardCanvas(
+          room: _room,
+          isTeacher: widget.isTeacher,
+          userName: _myName ?? 'Teacher',
+          onDrawingStart: _onTeacherDrawingStart,
+          onDrawingEnd: _onTeacherDrawingEnd,
+        ),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 8, 
-            height: 8, 
-            decoration: const BoxDecoration(
-              color: Colors.red, 
-              shape: BoxShape.circle,
+    );
+  }
+  
+  // Show video as main focus when whiteboard is hidden
+  return _isFullScreen && !_showControls
+      ? _buildFullScreenContent()
+      : _buildMainContent();
+}
+
+
+PreferredSizeWidget _buildAppBar() {
+  return AppBar(
+    backgroundColor: const Color(0xFF1A1A1A),
+    elevation: 0,
+    title: Text(
+      widget.roomName, 
+      style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+    ),
+    leading: IconButton(
+      icon: const Icon(Icons.arrow_back, color: Colors.white),
+      onPressed: widget.isTeacher ? _endLesson : _leaveLesson,
+    ),
+    actions: [
+      // Fullscreen toggle button
+      IconButton(
+        icon: Icon(
+          _isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
+          color: Colors.white70,
+        ),
+        onPressed: _toggleFullScreen,
+        tooltip: _isFullScreen ? 'Exit Fullscreen' : 'Fullscreen',
+      ),
+      // Name badge
+      Container(
+        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: widget.isTeacher ? Colors.redAccent.withOpacity(0.2) : Colors.blueAccent.withOpacity(0.2),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Center(
+          child: Text(
+            _myName ?? (widget.isTeacher ? 'Teacher' : 'Student'),
+            style: TextStyle(
+              color: widget.isTeacher ? Colors.redAccent : Colors.blueAccent,
+              fontWeight: FontWeight.bold,
+              fontSize: 12,
             ),
           ),
-          const SizedBox(width: 6),
-          Text(
-            '${_allParticipants.length}', 
-            style: const TextStyle(color: Colors.white, fontSize: 13),
-          ),
+        ),
+      ),
+      // Participant count
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        margin: const EdgeInsets.only(right: 8),
+        decoration: BoxDecoration(
+          color: Colors.red.withOpacity(0.2),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 8, height: 8, 
+              decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              '${_allParticipants.length}', 
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+            ),
+          ],
+        ),
+      ),
+    ],
+  );
+}
+
+Widget _buildFullScreenContent() {
+  return ClipRRect(
+    borderRadius: _showControls ? BorderRadius.circular(16) : BorderRadius.zero,
+    child: Container(
+      color: const Color(0xFF252525),
+      child: Stack(
+        children: [
+          if (_mainFocusParticipant != null)
+            _ParticipantVideoTile(
+              participant: _mainFocusParticipant!,
+              isMain: true,
+              localParticipant: _room.localParticipant,
+              getName: _getParticipantName,
+            ),
+          _buildIdentityOverlay(_mainFocusParticipant, isMain: true),
         ],
       ),
     ),
-  ],
-),
-      body: SafeArea(
-        child: Stack(
-          children: [
-            Column(
-              children: [
-                // Main presentation area
-                Expanded(
-                  flex: 3,
-                  child: Padding(
-                    padding: const EdgeInsets.all(8),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(16),
-                      child: Container(
-                        color: const Color(0xFF252525),
-                        child: Stack(
-                          children: [
-                            if (_mainFocusParticipant != null)
-  _ParticipantVideoTile(
-    participant: _mainFocusParticipant!,
-    isMain: true,
-    localParticipant: _room.localParticipant,
-    getName: _getParticipantName, 
-  ),
-                            _buildIdentityOverlay(_mainFocusParticipant, isMain: true),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
+  );
+}
 
-                // Student filmstrip
-                // Student filmstrip - exclude the main focus participant
-if (_allParticipants.length > 1)
-  SizedBox(
+Widget _buildMainContent() {
+  return ClipRRect(
+    borderRadius: BorderRadius.circular(16),
+    child: Container(
+      color: const Color(0xFF252525),
+      child: Stack(
+        children: [
+          if (_mainFocusParticipant != null)
+            _ParticipantVideoTile(
+              participant: _mainFocusParticipant!,
+              isMain: true,
+              localParticipant: _room.localParticipant,
+              getName: _getParticipantName,
+            ),
+          _buildIdentityOverlay(_mainFocusParticipant, isMain: true),
+        ],
+      ),
+    ),
+  );
+}
+
+Widget _buildFilmstrip() {
+  return SizedBox(
     height: 120,
     child: ListView.builder(
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.symmetric(horizontal: 8),
-      // ✅ Filter out the main focus participant from filmstrip
       itemCount: _allParticipants.where((p) => p != _mainFocusParticipant).length,
       itemBuilder: (context, index) {
         final participant = _allParticipants.where((p) => p != _mainFocusParticipant).toList()[index];
@@ -483,7 +749,7 @@ if (_allParticipants.length > 1)
                       participant: participant,
                       isMain: false,
                       localParticipant: _room.localParticipant,
-                      getName: _getParticipantName, 
+                      getName: _getParticipantName,
                     ),
                     _buildIdentityOverlay(participant, isMain: false),
                   ],
@@ -494,76 +760,86 @@ if (_allParticipants.length > 1)
         );
       },
     ),
-  ),
+  );
+}
 
-                // Control bar
-                Container(
-                  padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF1A1A1A),
-                    borderRadius: BorderRadius.only(topLeft: Radius.circular(24), topRight: Radius.circular(24)),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      _buildControlButton(
-                        icon: _isMuted ? Icons.mic_off : Icons.mic,
-                        color: _isMuted ? Colors.redAccent : const Color(0xFF2D2D2D),
-                        onPressed: () async {
-                          setState(() => _isMuted = !_isMuted);
-                          await _room.localParticipant?.setMicrophoneEnabled(!_isMuted);
-                        },
-                      ),
-                      _buildControlButton(
-                        icon: _isVideoOff ? Icons.videocam_off : Icons.videocam,
-                        color: _isVideoOff ? Colors.redAccent : const Color(0xFF2D2D2D),
-                        onPressed: () async {
-                          setState(() => _isVideoOff = !_isVideoOff);
-                          await _room.localParticipant?.setCameraEnabled(!_isVideoOff);
-                        },
-                      ),
-                      if (widget.isTeacher)
-                        _buildControlButton(
-                          icon: Icons.screen_share,
-                          color: Colors.blueAccent,
-                          onPressed: () async {
-                            final enabled = _room.localParticipant?.isScreenShareEnabled() ?? false;
-                            await _room.localParticipant?.setScreenShareEnabled(!enabled);
-                            setState(() {});
-                          },
-                        ),
-                      _buildControlButton(
-                        icon: Icons.chat_bubble_outline,
-                        color: _isChatOpen ? Colors.blueAccent : const Color(0xFF2D2D2D),
-                        onPressed: () => setState(() {
-                          _isChatOpen = !_isChatOpen;
-                          _showParticipants = false;
-                        }),
-                      ),
-                      _buildControlButton(
-                        icon: Icons.call_end,
-                        color: Colors.red,
-                        iconColor: Colors.white,
-                        onPressed: widget.isTeacher ? _endLesson : _leaveLesson,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-
-            // Chat panel
-            if (_isChatOpen)
-              Positioned(
-                right: 0, top: 0, bottom: 160,
-                width: 300,
-                child: _buildChatPanel(),
-              ),
-          ],
-        ),
+Widget _buildControlBar() {
+  return AnimatedContainer(
+    duration: const Duration(milliseconds: 300),
+    padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
+    decoration: const BoxDecoration(
+      color: Color(0xFF1A1A1A),
+      borderRadius: BorderRadius.only(
+        topLeft: Radius.circular(24), 
+        topRight: Radius.circular(24),
       ),
-    );
-  }
+    ),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: [
+        _buildControlButton(
+          icon: _isMuted ? Icons.mic_off : Icons.mic,
+          color: _isMuted ? Colors.redAccent : const Color(0xFF2D2D2D),
+          onPressed: () async {
+            setState(() => _isMuted = !_isMuted);
+            await _room.localParticipant?.setMicrophoneEnabled(!_isMuted);
+          },
+        ),
+        _buildControlButton(
+          icon: _isVideoOff ? Icons.videocam_off : Icons.videocam,
+          color: _isVideoOff ? Colors.redAccent : const Color(0xFF2D2D2D),
+          onPressed: () async {
+            setState(() => _isVideoOff = !_isVideoOff);
+            await _room.localParticipant?.setCameraEnabled(!_isVideoOff);
+          },
+        ),
+        if (widget.isTeacher)
+          _buildControlButton(
+            icon: Icons.screen_share,
+            color: Colors.blueAccent,
+            onPressed: () async {
+              final enabled = _room.localParticipant?.isScreenShareEnabled() ?? false;
+              await _room.localParticipant?.setScreenShareEnabled(!enabled);
+              setState(() {});
+            },
+          ),
+          _buildControlButton(
+  icon: _showWhiteboard ? Icons.videocam : Icons.draw,
+  color: _showWhiteboard ? Colors.blueAccent : const Color(0xFF2D2D2D),
+  onPressed: () {
+    setState(() {
+      _showWhiteboard = !_showWhiteboard;
+      // If hiding whiteboard, reset drawing state
+      if (!_showWhiteboard) {
+        _isTeacherDrawing = false;
+      }
+    });
+  },
+),
+        _buildControlButton(
+          icon: Icons.chat_bubble_outline,
+          color: _isChatOpen ? Colors.blueAccent : const Color(0xFF2D2D2D),
+          onPressed: () => setState(() {
+            _isChatOpen = !_isChatOpen;
+            _showParticipants = false;
+          }),
+        ),
+        // ✅ Fullscreen button in control bar too
+        _buildControlButton(
+          icon: _isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
+          color: _isFullScreen ? Colors.blueAccent : const Color(0xFF2D2D2D),
+          onPressed: _toggleFullScreen,
+        ),
+        _buildControlButton(
+          icon: Icons.call_end,
+          color: Colors.red,
+          iconColor: Colors.white,
+          onPressed: widget.isTeacher ? _endLesson : _leaveLesson,
+        ),
+      ],
+    ),
+  );
+}
 
   
 
