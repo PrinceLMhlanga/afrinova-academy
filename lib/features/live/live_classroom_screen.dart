@@ -143,41 +143,53 @@ late Timer _controlsTimer;
 
   // ✅ Add this method to load participant names
   Future<void> _loadParticipantNames() async {
-    try {
-      // Get the lesson to find enrolled students
-      final lesson = await Supabase.instance.client
-          .from('live_lessons')
-          .select('teacher_id, enrollments(student_id, profiles(display_name, full_name))')
-          .eq('id', widget.lessonId)
-          .single();
+  try {
+    // 1. Get the lesson info
+    final lesson = await Supabase.instance.client
+        .from('live_lessons')
+        .select('teacher_id, profiles!teacher_id(display_name, full_name)')
+        .eq('id', widget.lessonId)
+        .single();
 
-      // Add teacher name
-      if (lesson['teacher_id'] != null) {
-        final teacherProfile = await Supabase.instance.client
-            .from('profiles')
-            .select('display_name, full_name')
-            .eq('id', lesson['teacher_id'] as String)
-            .single();
-        
-        final teacherName = teacherProfile?['display_name'] ?? teacherProfile?['full_name'] ?? 'Teacher';
-        _participantNames[lesson['teacher_id'] as String] = teacherName;
-      }
-
-      // Add student names from enrollments
-      final enrollments = lesson['enrollments'] as List? ?? [];
-      for (final enrollment in enrollments) {
-        final student = enrollment['profiles'];
-        if (student != null) {
-          final studentId = enrollment['student_id'] as String;
-          final studentName = student['display_name'] ?? student['full_name'] ?? 'Student';
-          _participantNames[studentId] = studentName;
-        }
-      }
-    } catch (e) {
-      debugPrint('Error loading participant names: $e');
+    // Add teacher name
+    if (lesson['teacher_id'] != null) {
+      final profiles = lesson['profiles'] as Map<String, dynamic>?;
+      final teacherName = profiles?['display_name'] ?? profiles?['full_name'] ?? 'Teacher';
+      _participantNames[lesson['teacher_id'] as String] = teacherName;
     }
-  }
 
+    // 2. For students, get enrolled students for this teacher+subject combo
+    final lessonSubject = await Supabase.instance.client
+        .from('live_lessons')
+        .select('teacher_id, subject_id')
+        .eq('id', widget.lessonId)
+        .single();
+
+    if (lessonSubject != null) {
+      final teacherId = lessonSubject['teacher_id'] as String;
+      final subjectId = lessonSubject['subject_id'] as String;
+
+      // Get enrolled students
+      final enrollments = await Supabase.instance.client
+          .from('enrollments')
+          .select('student_id, profiles!student_id(display_name, full_name)')
+          .eq('teacher_id', teacherId)
+          .eq('subject_id', subjectId)
+          .inFilter('status', ['approved', 'paid']);
+
+      for (final enrollment in enrollments) {
+        final studentId = enrollment['student_id'] as String;
+        final profiles = enrollment['profiles'] as Map<String, dynamic>?;
+        final studentName = profiles?['display_name'] ?? profiles?['full_name'] ?? 'Student';
+        _participantNames[studentId] = studentName;
+      }
+    }
+
+    debugPrint('✅ Loaded participant names: $_participantNames');
+  } catch (e) {
+    debugPrint('❌ Error loading participant names: $e');
+  }
+}
   void _toggleFullScreen() {
   setState(() {
     _isFullScreen = !_isFullScreen;
@@ -279,11 +291,11 @@ void _onScreenTap() {
   }
 }
 
-  String _getParticipantName(Participant participant) {
+ String _getParticipantName(Participant participant) {
   final identity = participant.identity ?? '';
   
-  // Check our name map first (populated from metadata)
-  if (_participantNames.containsKey(identity)) {
+  // Check our name map
+  if (_participantNames.containsKey(identity) && _participantNames[identity] != 'Teacher' && _participantNames[identity] != 'Student') {
     return _participantNames[identity]!;
   }
   
@@ -292,7 +304,7 @@ void _onScreenTap() {
     return _myName!;
   }
   
-  // Try to parse metadata
+  // Try metadata
   final metadata = participant.metadata;
   if (metadata != null && metadata.isNotEmpty) {
     try {
@@ -304,9 +316,12 @@ void _onScreenTap() {
     } catch (_) {}
   }
   
-  // Show role as last resort
-  final role = _getParticipantRole(participant);
-  return role == 'teacher' ? 'Teacher' : 'Student';
+  // Fallback: Use the identity if it looks like a name, otherwise role
+  if (!identity.contains('-') && identity.length < 30) {
+    return identity;
+  }
+  
+  return widget.isTeacher ? 'Student' : 'Teacher';
 }
 
 // ✅ Helper to get role from metadata
@@ -358,7 +373,6 @@ String _getParticipantRole(Participant participant) {
   });
 }
 
-// ✅ New method to extract name from participant metadata
 void _extractParticipantName(Participant participant) {
   final identity = participant.identity ?? '';
   
@@ -377,11 +391,13 @@ void _extractParticipantName(Participant participant) {
     } catch (_) {}
   }
   
-  // If no metadata, try to match by identity pattern
-  // (Sometimes the identity IS the UUID from Supabase)
-  if (_participantNames.containsKey(identity)) return;
+  // If still unknown, assign a default name based on role
+  final isTeacherParticipant = identity == _room.localParticipant?.identity 
+      ? widget.isTeacher 
+      : !widget.isTeacher;
+  
+  _participantNames[identity] = isTeacherParticipant ? 'Teacher' : 'Student';
 }
-
   Future<void> _endLesson() async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -462,121 +478,122 @@ Widget build(BuildContext context) {
     );
   }
 
-  // ✅ Wrap everything in a GestureDetector for fullscreen tap
   return GestureDetector(
     onTap: _onScreenTap,
     child: AnimatedContainer(
       duration: const Duration(milliseconds: 300),
       child: Scaffold(
         backgroundColor: const Color(0xFF121212),
-        // ✅ Hide app bar in fullscreen
         appBar: _isFullScreen && !_showControls
             ? null
-            : _buildAppBar(),
+            : _buildAppBar() as PreferredSizeWidget?,
         body: SafeArea(
-          child: Stack(
+          child: Stack(  // ✅ Everything must be inside this Stack
             children: [
+              // Main column content
               Column(
                 children: [
-                  // Main presentation area
-                  // Main presentation area - Smart focus switching
-Expanded(
-  flex: _isFullScreen ? 1 : 3,
-  child: _buildMainContentArea(),
-),
+                  // Main content area
+                  Expanded(
+                    flex: _isFullScreen ? 1 : 3,
+                    child: _buildMainContentArea(),
+                  ),
 
-// Add this method:
-                   // In the Stack of your build method, add this after the main content:
-if (_showWhiteboard && _mainFocusParticipant != null)
-  Positioned(
-    bottom: widget.isTeacher ? 140 : 20,
-    right: 20,
-    child: GestureDetector(
-      onTap: () {
-        // Toggle back to video view
-        setState(() => _showWhiteboard = false);
-      },
-      child: Container(
-        width: 160,
-        height: 120,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.blueAccent, width: 2),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.3),
-              blurRadius: 8,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(10),
-          child: Stack(
-            children: [
-              _ParticipantVideoTile(
-                participant: _mainFocusParticipant!,
-                isMain: false,
-                localParticipant: _room.localParticipant,
-                getName: _getParticipantName,
-              ),
-              // Label
-              Positioned(
-                bottom: 4,
-                left: 4,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.6),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text(
-                    _getParticipantName(_mainFocusParticipant!),
-                    style: const TextStyle(color: Colors.white, fontSize: 10),
-                  ),
-                ),
-              ),
-              // Close button
-              Positioned(
-                top: 4,
-                right: 4,
-                child: GestureDetector(
-                  onTap: () => setState(() => _showWhiteboard = false),
-                  child: Container(
-                    padding: const EdgeInsets.all(2),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.6),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.close, color: Colors.white, size: 14),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    ),
-  ),
-                  // Student filmstrip - hide in fullscreen
+                  // Filmstrip
                   if (!_isFullScreen && _allParticipants.length > 1)
                     _buildFilmstrip(),
 
-                  // Control bar - auto-hide in fullscreen
+                  // Control bar
                   if (!_isFullScreen || _showControls)
                     _buildControlBar(),
                 ],
               ),
 
+              // ✅ PiP video - now correctly inside Stack
+              if (_showWhiteboard && _mainFocusParticipant != null)
+                Positioned(
+                  bottom: widget.isTeacher ? 140 : 20,
+                  right: 20,
+                  child: _buildPiPVideo(),
+                ),
+
               // Chat panel
               if (_isChatOpen && (!_isFullScreen || _showControls))
                 Positioned(
-                  right: 0, top: 0, bottom: _isFullScreen ? 100 : 160,
+                  right: 0,
+                  top: 0,
+                  bottom: _isFullScreen ? 100 : 160,
                   width: 300,
                   child: _buildChatPanel(),
                 ),
             ],
           ),
+        ),
+      ),
+    ),
+  );
+}
+
+Widget _buildPiPVideo() {
+  return GestureDetector(
+    onTap: () {
+      setState(() => _showWhiteboard = false);
+    },
+    child: Container(
+      width: 160,
+      height: 120,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.blueAccent, width: 2),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.3),
+            blurRadius: 8,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: Stack(
+          children: [
+            _ParticipantVideoTile(
+              participant: _mainFocusParticipant!,
+              isMain: false,
+              localParticipant: _room.localParticipant,
+              getName: _getParticipantName,
+            ),
+            Positioned(
+              bottom: 4,
+              left: 4,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.6),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  _getParticipantName(_mainFocusParticipant!),
+                  style: const TextStyle(color: Colors.white, fontSize: 10),
+                ),
+              ),
+            ),
+            Positioned(
+              top: 4,
+              right: 4,
+              child: GestureDetector(
+                onTap: () => setState(() => _showWhiteboard = false),
+                child: Container(
+                  padding: const EdgeInsets.all(2),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.6),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.close, color: Colors.white, size: 14),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     ),
