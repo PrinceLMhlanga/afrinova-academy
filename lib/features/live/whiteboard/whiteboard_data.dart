@@ -1,4 +1,4 @@
-import 'dart:convert';
+
 import 'package:flutter/material.dart';
 
 class WhiteboardStroke {
@@ -16,19 +16,27 @@ class WhiteboardStroke {
     this.type = StrokeType.draw,
   });
 
-  Map<String, dynamic> toJson() => {
+  // ✅ Convert absolute coordinates to normalized (0.0 to 1.0)
+  Map<String, dynamic> toJson(Size canvasSize) => {
     'id': id,
-    'points': points.map((p) => {'x': p.dx, 'y': p.dy}).toList(),
+    'points': points.map((p) => {
+      'x': p.dx / canvasSize.width,
+      'y': p.dy / canvasSize.height,
+    }).toList(),
     'color': color.value,
     'strokeWidth': strokeWidth,
     'type': type.index,
   };
 
-  factory WhiteboardStroke.fromJson(Map<String, dynamic> json) {
+  // ✅ Convert normalized coordinates back to absolute
+  factory WhiteboardStroke.fromJson(Map<String, dynamic> json, Size canvasSize) {
     return WhiteboardStroke(
       id: json['id'],
       points: (json['points'] as List)
-          .map((p) => Offset((p['x'] as num).toDouble(), (p['y'] as num).toDouble()))
+          .map((p) => Offset(
+            (p['x'] as num).toDouble() * canvasSize.width,
+            (p['y'] as num).toDouble() * canvasSize.height,
+          ))
           .toList(),
       color: Color(json['color'] as int),
       strokeWidth: (json['strokeWidth'] as num).toDouble(),
@@ -39,26 +47,3 @@ class WhiteboardStroke {
 
 enum StrokeType { draw, line, rectangle, circle, eraser }
 
-class WhiteboardState {
-  final List<WhiteboardStroke> strokes;
-  final String lastUpdatedBy;
-
-  WhiteboardState({
-    required this.strokes,
-    required this.lastUpdatedBy,
-  });
-
-  Map<String, dynamic> toJson() => {
-    'strokes': strokes.map((s) => s.toJson()).toList(),
-    'lastUpdatedBy': lastUpdatedBy,
-  };
-
-  factory WhiteboardState.fromJson(Map<String, dynamic> json) {
-    return WhiteboardState(
-      strokes: (json['strokes'] as List)
-          .map((s) => WhiteboardStroke.fromJson(s))
-          .toList(),
-      lastUpdatedBy: json['lastUpdatedBy'] ?? '',
-    );
-  }
-}

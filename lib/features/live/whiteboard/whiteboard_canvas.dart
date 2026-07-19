@@ -26,6 +26,8 @@ class WhiteboardCanvas extends StatefulWidget {
 }
 
 class _WhiteboardCanvasState extends State<WhiteboardCanvas> {
+  final GlobalKey _canvasKey = GlobalKey();
+  Size _canvasSize = Size.zero;
   final List<WhiteboardStroke> _strokes = [];
   WhiteboardStroke? _currentStroke;
   
@@ -56,42 +58,47 @@ class _WhiteboardCanvasState extends State<WhiteboardCanvas> {
 }
 
   void _handleDataMessage(Uint8List data) {
-    try {
-      final message = jsonDecode(utf8.decode(data));
-      
-      if (message['type'] == 'whiteboard_stroke') {
-        final stroke = WhiteboardStroke.fromJson(message['stroke']);
-        if (mounted) {
-          setState(() {
-            _strokes.removeWhere((s) => s.id == stroke.id);
-            _strokes.add(stroke);
-          });
-        }
-      } else if (message['type'] == 'whiteboard_clear') {
-        if (mounted) {
-          setState(() {
-            _strokes.clear();
-          });
-        }
+  if (_canvasSize == Size.zero) return;
+  
+  try {
+    final message = jsonDecode(utf8.decode(data));
+    
+    if (message['type'] == 'whiteboard_stroke') {
+      // ✅ Convert normalized coordinates using receiver's canvas size
+      final stroke = WhiteboardStroke.fromJson(message['stroke'], _canvasSize);
+      if (mounted) {
+        setState(() {
+          _strokes.removeWhere((s) => s.id == stroke.id);
+          _strokes.add(stroke);
+        });
       }
-    } catch (e) {
-      debugPrint('Error handling whiteboard data: $e');
+    } else if (message['type'] == 'whiteboard_clear') {
+      if (mounted) {
+        setState(() {
+          _strokes.clear();
+        });
+      }
     }
+  } catch (e) {
+    debugPrint('Error handling whiteboard data: $e');
   }
+}
 
   void _sendStroke(WhiteboardStroke stroke) {
-    final data = utf8.encode(jsonEncode({
-      'type': 'whiteboard_stroke',
-      'stroke': stroke.toJson(),
-      'sentBy': widget.userName,
-    }));
-    
-    widget.room.localParticipant?.publishData(
-      data,
-      reliable: true,
-      topic: 'whiteboard',  // Topic for filtering
-    );
-  }
+  if (_canvasSize == Size.zero) return;
+  
+  final data = utf8.encode(jsonEncode({
+    'type': 'whiteboard_stroke',
+    'stroke': stroke.toJson(_canvasSize),  // ✅ Pass canvas size
+    'sentBy': widget.userName,
+  }));
+  
+  widget.room.localParticipant?.publishData(
+    data,
+    reliable: true,
+    topic: 'whiteboard',
+  );
+}
 
   void _sendClear() {
     final data = utf8.encode(jsonEncode({
@@ -194,28 +201,43 @@ Widget build(BuildContext context) {
     color: Colors.white,
     child: Column(
       children: [
-        // Toolbar - always visible for teacher
         if (widget.isTeacher)
           isMobile ? _buildMobileToolbar() : _buildDesktopToolbar(),
         
-        // Canvas area
         Expanded(
-          child: GestureDetector(
-            onPanStart: widget.isTeacher ? _onPanStart : null,
-            onPanUpdate: widget.isTeacher ? _onPanUpdate : null,
-            onPanEnd: widget.isTeacher ? _onPanEnd : null,
-            child: Container(
-              color: Colors.white,
-              width: double.infinity,
-              height: double.infinity,
-              child: CustomPaint(
-                painter: WhiteboardPainter(
-                  strokes: _strokes,
-                  currentStroke: _currentStroke,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              // ✅ Update canvas size when layout changes
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (constraints.maxWidth > 0 && constraints.maxHeight > 0) {
+                  final newSize = Size(constraints.maxWidth, constraints.maxHeight);
+                  if (_canvasSize != newSize) {
+                    setState(() {
+                      _canvasSize = newSize;
+                    });
+                  }
+                }
+              });
+              
+              return GestureDetector(
+                key: _canvasKey,
+                onPanStart: widget.isTeacher ? _onPanStart : null,
+                onPanUpdate: widget.isTeacher ? _onPanUpdate : null,
+                onPanEnd: widget.isTeacher ? _onPanEnd : null,
+                child: Container(
+                  color: Colors.white,
+                  width: double.infinity,
+                  height: double.infinity,
+                  child: CustomPaint(
+                    painter: WhiteboardPainter(
+                      strokes: _strokes,
+                      currentStroke: _currentStroke,
+                    ),
+                    size: Size.infinite,
+                  ),
                 ),
-                size: Size.infinite,
-              ),
-            ),
+              );
+            },
           ),
         ),
       ],
