@@ -45,7 +45,7 @@ android {
 
 configurations.all {
     resolutionStrategy {
-        exclude(group = "io.github.webrtc-sdk", module = "android")
+        
         exclude(group = "androidx.media3", module = "media3-exoplayer-rtsp")
     }
 }

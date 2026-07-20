@@ -22,14 +22,16 @@ class WhiteboardCanvas extends StatefulWidget {
   });
 
   @override
-  State<WhiteboardCanvas> createState() => _WhiteboardCanvasState();
+  State<WhiteboardCanvas> createState() => WhiteboardCanvasState();
 }
 
-class _WhiteboardCanvasState extends State<WhiteboardCanvas> {
+class WhiteboardCanvasState extends State<WhiteboardCanvas> {
   final GlobalKey _canvasKey = GlobalKey();
   Size _canvasSize = Size.zero;
   final List<WhiteboardStroke> _strokes = [];
   WhiteboardStroke? _currentStroke;
+  // Add this in your state variables
+ 
   
   Color _selectedColor = Colors.black;
   double _strokeWidth = 3.0;

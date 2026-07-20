@@ -7,6 +7,15 @@ import 'dart:convert';  // ✅ Add this for jsonDecode
 import 'package:flutter/services.dart';
 import '../live/whiteboard/whiteboard_canvas.dart';
 import 'dart:async';
+import 'dart:typed_data';
+import 'package:flutter_screen_recording/flutter_screen_recording.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:http/http.dart' as http;
+
+
 
 class LiveClassroomScreen extends StatefulWidget {
   final String roomName;
@@ -30,6 +39,11 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
   late final EventsListener<RoomEvent> _listener;
   bool _isLoading = true;
 
+  // Add this in your state variables
+final GlobalKey<WhiteboardCanvasState> _whiteboardKey = GlobalKey();
+final GlobalKey _videoContentKey = GlobalKey();  // ✅ Add this
+final GlobalKey _filmstripKey = GlobalKey();
+
   Participant? _mainFocusParticipant;
   List<Participant> _allParticipants = [];
   bool _isMuted = false;
@@ -46,13 +60,30 @@ class _LiveClassroomScreenState extends State<LiveClassroomScreen> {
   bool _isTeacherDrawing = false;
   Timer? _drawingTimer;
 
-  // Add this import at the top
+  // Hand raise state
+bool _handRaised = false;
+final List<String> _raisedHands = []; // List of participant identities
+bool _showRaisedHands = false;
+
+// Add these state variables
+String? _notificationMessage;
+Timer? _notificationTimer;
+Color _notificationColor = Colors.blueAccent;
+
+// Add this state variable
+final Map<String, String> _handRaiseReasons = {};
 
 
 // Add these state variables
 bool _isFullScreen = false;
 bool _showControls = true;
 late Timer _controlsTimer;
+
+// Recording state variables
+bool _isRecording = false;
+bool _isRecordingStarting = false;
+String? _recordingError;
+String? _recordingId;
 
   @override
   void initState() {
@@ -126,18 +157,13 @@ late Timer _controlsTimer;
       await _room.localParticipant?.setMicrophoneEnabled(true);
 
       // ✅ SETUP WHITEBOARD LISTENER FOR STUDENTS
-      _setupWhiteboardListener();
+      _setupDataListener();
 
       _updateParticipants();
       setState(() => _isLoading = false);
     } catch (e) {
       debugPrint('Classroom connection error: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to connect: $e'), backgroundColor: Colors.red),
-        );
-        Navigator.of(context).pop();
-      }
+      _showNotification('Failed to connect: $e', backgroundColor: Colors.red);
     }
   }
 
@@ -190,34 +216,410 @@ late Timer _controlsTimer;
     debugPrint('❌ Error loading participant names: $e');
   }
 }
-  void _toggleFullScreen() {
+
+
+// Start recording
+Future<void> _startRecording() async {
+  if (!widget.isTeacher) return;
+  
   setState(() {
-    _isFullScreen = !_isFullScreen;
-    _showControls = true;
+    _isRecordingStarting = true;
+    _recordingError = null;
   });
   
-  if (_isFullScreen) {
-    // Hide system UI for immersive experience
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    // Allow all orientations on fullscreen
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.portraitUp,
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
+  try {
+    // Request permissions
+    final microphone = await Permission.microphone.request();
+    if (!microphone.isGranted) {
+      _showNotification('Microphone permission required', backgroundColor: Colors.red);
+      setState(() => _isRecordingStarting = false);
+      return;
+    }
     
-    // Auto-hide controls after 3 seconds
-    _startControlsTimer();
-  } else {
-    // Restore normal UI
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.portraitUp,
-    ]);
-    _controlsTimer.cancel();
+    // Save metadata to database
+    final response = await Supabase.instance.client
+      .from('lesson_recordings')
+      .insert({
+        'lesson_id': widget.lessonId,
+        'room_name': widget.roomName,
+        'teacher_id': _authService.currentUserId,
+        'status': 'recording',
+        'started_at': DateTime.now().toIso8601String(),
+      })
+      .select()
+      .single();
+    
+    _recordingId = response['id'] as String;
+    
+    // ✅ Start screen recording
+    await FlutterScreenRecording.startRecordScreen(
+      'Lesson_${DateTime.now().millisecondsSinceEpoch}',
+      titleNotification: 'Recording...',
+      messageNotification: 'Tap to stop',
+    );
+    
+    setState(() => _isRecording = true);
+    _showNotification('Recording started 🔴', backgroundColor: Colors.red);
+    
+  } catch (e) {
+    debugPrint('Recording error: $e');
+    setState(() => _recordingError = 'Failed to start recording');
+    _showNotification(_recordingError!, backgroundColor: Colors.red);
+  } finally {
+    setState(() => _isRecordingStarting = false);
   }
 }
 
+Future<void> _testStorageUpload() async {
+  try {
+    // Create a small test file
+    final testFile = File('${Directory.systemTemp.path}/test.txt');
+    await testFile.writeAsString('Test upload from AfriNova');
+    
+    // Upload
+    await Supabase.instance.client.storage
+      .from('recordings')
+      .upload('test_${DateTime.now().millisecondsSinceEpoch}.txt', testFile);
+    
+    _showNotification('Test upload successful! ✅', backgroundColor: Colors.green);
+  } catch (e) {
+    debugPrint('Test upload error: $e');
+    _showNotification('Upload failed: $e', backgroundColor: Colors.red);
+  }
+}
+
+
+
+Future<void> _stopRecording() async {
+  if (!widget.isTeacher || _recordingId == null) return;
+  
+  try {
+    setState(() => _isRecording = false);
+    _showNotification('Saving recording...', backgroundColor: Colors.orange);
+    
+    if (kIsWeb) {
+      // ✅ Web: Get blob from recording
+      await _stopWebRecording();
+    } else {
+      // ✅ Mobile: Get file path
+      await _stopMobileRecording();
+    }
+    
+    _recordingId = null;
+    
+  } catch (e) {
+    debugPrint('Stop recording error: $e');
+    setState(() => _isRecording = false);
+    _showNotification('Failed to save recording: $e', backgroundColor: Colors.red);
+    _recordingId = null;
+  }
+}
+
+// Mobile recording stop
+Future<void> _stopMobileRecording() async {
+  final filePath = await FlutterScreenRecording.stopRecordScreen;
+  
+  if (filePath != null && filePath.isNotEmpty) {
+    final file = File(filePath);
+    await _uploadRecording(file);
+  }
+}
+
+// Web recording stop
+Future<void> _stopWebRecording() async {
+  // Web returns a blob URL
+  final blobUrl = await FlutterScreenRecording.stopRecordScreen;
+  
+  if (blobUrl != null && blobUrl.isNotEmpty) {
+    debugPrint('Blob URL: $blobUrl');
+    
+    // Convert blob to bytes
+    final response = await http.get(Uri.parse(blobUrl));
+    final bytes = response.bodyBytes;
+    
+    // Create temp file
+    final tempDir = Directory.systemTemp;
+    final tempFile = File('${tempDir.path}/recording_${DateTime.now().millisecondsSinceEpoch}.webm');
+    await tempFile.writeAsBytes(bytes);
+    
+    await _uploadRecording(tempFile);
+  }
+}
+
+// Upload to Supabase
+Future<void> _uploadRecording(File file) async {
+  if (!await file.exists()) {
+    throw Exception('Recording file not found');
+  }
+  
+  final fileSize = await file.length();
+  debugPrint('File size: $fileSize bytes');
+  
+  if (fileSize == 0) {
+    throw Exception('Recording file is empty');
+  }
+  
+  final extension = kIsWeb ? 'webm' : 'mp4';
+  final fileName = 'lesson_${widget.lessonId}_${DateTime.now().millisecondsSinceEpoch}.$extension';
+  
+  _showNotification('Uploading...', backgroundColor: Colors.orange);
+  
+  // Upload to Supabase Storage
+  await Supabase.instance.client.storage
+    .from('recordings')
+    .upload(fileName, file);
+  
+  final url = Supabase.instance.client.storage
+    .from('recordings')
+    .getPublicUrl(fileName);
+  
+  // Get duration
+  final recording = await Supabase.instance.client
+    .from('lesson_recordings')
+    .select('started_at')
+    .eq('id', _recordingId!)
+    .single();
+  
+  final startedAt = recording['started_at'] != null 
+      ? DateTime.parse(recording['started_at'] as String)
+      : DateTime.now();
+  final duration = DateTime.now().difference(startedAt).inSeconds;
+  
+  // Update database
+  await Supabase.instance.client
+    .from('lesson_recordings')
+    .update({
+      'status': 'completed',
+      'ended_at': DateTime.now().toIso8601String(),
+      'recording_url': url,
+      'duration_seconds': duration,
+    })
+    .eq('id', _recordingId!);
+  
+  _showNotification('Recording saved ✅', backgroundColor: Colors.green);
+  
+  // Clean up
+  try { await file.delete(); } catch (_) {}
+}
+Future<void> _toggleRecording() async {
+  if (_isRecording) {
+    await _stopRecording();
+  } else {
+    await _startRecording();
+  }
+}
+
+
+void _showNotification(String message, {Color backgroundColor = Colors.blueAccent}) {
+  setState(() {
+    _notificationMessage = message;
+    _notificationColor = backgroundColor; // ✅ Add this state variable
+  });
+  
+  _notificationTimer?.cancel();
+  _notificationTimer = Timer(const Duration(seconds: 3), () {
+    if (mounted) {
+      setState(() {
+        _notificationMessage = null;
+      });
+    }
+  });
+}
+
+// Toggle hand raise (for students)
+void _toggleHandRaise() {
+  if (_handRaised) {
+    // Lower hand immediately
+    setState(() {
+      _handRaised = false;
+    });
+    
+    final data = utf8.encode(jsonEncode({
+      'type': 'hand_raise',
+      'action': 'lower',
+      'participantId': _room.localParticipant?.identity ?? '',
+      'participantName': _myName ?? 'Unknown',
+    }));
+    
+    _room.localParticipant?.publishData(data, reliable: true);
+  } else {
+    // ✅ Show dialog to ask for reason
+    _showRaiseHandDialog();
+  }
+}
+
+void _showRaiseHandDialog() {
+  final reasonController = TextEditingController();
+  
+  showDialog(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: Row(
+        children: [
+          const Icon(Icons.pan_tool, color: Colors.amber, size: 24),
+          const SizedBox(width: 8),
+          const Text('Raise Hand', style: TextStyle(fontSize: 18)),
+        ],
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text(
+            'What would you like to say?',
+            style: TextStyle(color: Colors.grey, fontSize: 14),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: reasonController,
+            autofocus: true,
+            maxLines: 2,
+            decoration: InputDecoration(
+              hintText: 'E.g., I have a question about...',
+              hintStyle: const TextStyle(color: Colors.grey, fontSize: 13),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              contentPadding: const EdgeInsets.all(12),
+            ),
+          ),
+          const SizedBox(height: 8),
+          // Quick reasons
+          Wrap(
+            spacing: 6,
+            children: [
+              _buildQuickReasonChip('Question', reasonController),
+              _buildQuickReasonChip('Answer', reasonController),
+              _buildQuickReasonChip('Technical issue', reasonController),
+              _buildQuickReasonChip('Break', reasonController),
+            ],
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            Navigator.pop(ctx);
+            _sendHandRaise(reasonController.text.trim());
+          },
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.amber,
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+          child: const Text('Raise Hand ✋'),
+        ),
+      ],
+    ),
+  );
+}
+
+Widget _buildQuickReasonChip(String label, TextEditingController controller) {
+  return GestureDetector(
+    onTap: () => controller.text = label,
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.amber.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.amber.withOpacity(0.3)),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(fontSize: 11, color: Colors.amber),
+      ),
+    ),
+  );
+}
+
+void _sendHandRaise(String reason) {
+  setState(() {
+    _handRaised = true;
+  });
+  
+  final data = utf8.encode(jsonEncode({
+    'type': 'hand_raise',
+    'action': 'raise',
+    'participantId': _room.localParticipant?.identity ?? '',
+    'participantName': _myName ?? 'Unknown',
+    'reason': reason.isNotEmpty ? reason : null, // ✅ Include reason
+  }));
+  
+  _room.localParticipant?.publishData(data, reliable: true);
+}
+
+// Handle incoming hand raise data
+void _handleHandRaise(Map<String, dynamic> message) {
+  final participantId = message['participantId'] as String? ?? '';
+  final participantName = message['participantName'] as String? ?? 'Unknown';
+  final reason = message['reason'] as String?;
+  
+  if (message['action'] == 'raise') {
+    if (!_raisedHands.contains(participantId)) {
+      setState(() {
+        _raisedHands.add(participantId);
+        _participantNames[participantId] = participantName;
+        // ✅ Store the reason
+        if (reason != null && reason.isNotEmpty) {
+          _handRaiseReasons[participantId] = reason;
+        }
+      });
+      
+      // Show notification with reason
+      if (widget.isTeacher && mounted) {
+        final notificationMsg = reason != null && reason.isNotEmpty
+            ? '$participantName raised their hand: "$reason"'
+            : '$participantName raised their hand ✋';
+        _showNotification(notificationMsg, backgroundColor: Colors.blueAccent);
+      }
+    }
+  } else if (message['action'] == 'lower') {
+    setState(() {
+      _raisedHands.remove(participantId);
+      _handRaiseReasons.remove(participantId); // ✅ Clean up
+    });
+  }
+}
+
+void _lowerHand(String participantId) {
+  setState(() {
+    _raisedHands.remove(participantId);
+    // ✅ Auto-hide panel if no more raised hands
+    if (_raisedHands.isEmpty) {
+      _showRaisedHands = false;
+    }
+  });
+  
+  final data = utf8.encode(jsonEncode({
+    'type': 'hand_lowered',
+    'participantId': participantId,
+  }));
+  
+  _room.localParticipant?.publishData(data, reliable: true);
+}
+
+void _lowerAllHands() {
+  setState(() {
+    _raisedHands.clear();
+    _handRaiseReasons.clear(); // ✅ Clear reasons too
+    _showRaisedHands = false;
+  });
+  
+  // ✅ Send to ALL students that their hands were lowered
+  final data = utf8.encode(jsonEncode({
+    'type': 'hand_all_lowered',
+    'sentBy': _myName ?? 'Teacher',
+  }));
+  
+  _room.localParticipant?.publishData(data, reliable: true);
+  
+  _showNotification('All hands lowered', backgroundColor: Colors.green);
+}
+  
 void _onTeacherDrawingStart() {
   if (!widget.isTeacher) return;
   
@@ -245,14 +647,54 @@ void _onTeacherDrawingEnd() {
   });
 }
 
+void _toggleFullScreen() {
+  setState(() {
+    _isFullScreen = !_isFullScreen;
+    _showControls = true;
+  });
+  
+  if (_isFullScreen) {
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+    _startControlsTimer();
+  } else {
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+    ]);
+    _controlsTimer.cancel();
+  }
+}
+
+void _onScreenTap() {
+  if (_isFullScreen) {
+    setState(() {
+      _showControls = !_showControls;
+    });
+    if (_showControls) {
+      _startControlsTimer();
+    }
+  }
+}
+
+void _startControlsTimer() {
+  _controlsTimer.cancel();
+  _controlsTimer = Timer(const Duration(seconds: 6), () {
+    if (mounted && _isFullScreen) {
+      setState(() => _showControls = false);
+    }
+  });
+}
+
 // For students: Listen for whiteboard data to auto-switch
-void _setupWhiteboardListener() {
+void _setupDataListener() {
   final dataListener = _room.createListener();
   
   dataListener.on<DataReceivedEvent>((event) {
-    // Only process if student and not already showing whiteboard
-    if (widget.isTeacher || _showWhiteboard) return;
-    
     try {
       final data = event.data is Uint8List 
           ? event.data as Uint8List 
@@ -260,41 +702,59 @@ void _setupWhiteboardListener() {
       
       final message = jsonDecode(utf8.decode(data));
       
-      // Auto-switch to whiteboard when teacher draws or clears
-      if (message['type'] == 'whiteboard_stroke' || 
-          message['type'] == 'whiteboard_clear') {
-        debugPrint('📱 Student: Auto-switching to whiteboard');
+      debugPrint('📱 Received message: ${message['type']}');
+      
+      // Handle hand raise events
+      if (message['type'] == 'hand_raise') {
+        _handleHandRaise(message);
+        return;
+      }
+      
+      // ✅ Handle individual hand lowered
+      if (message['type'] == 'hand_lowered') {
+        final targetId = message['participantId'] as String?;
+        if (!widget.isTeacher && targetId == _room.localParticipant?.identity) {
+          setState(() => _handRaised = false);
+          _showNotification('Teacher lowered your hand', backgroundColor: Colors.orange);
+        }
+        return;
+      }
+      
+      // ✅ Handle all hands lowered
+      if (message['type'] == 'hand_all_lowered') {
+        if (!widget.isTeacher) {
+          setState(() => _handRaised = false);
+          _showNotification('Teacher lowered all hands', backgroundColor: Colors.orange);
+        }
+        return;
+      }
+      
+      // Skip rest if teacher
+      if (widget.isTeacher) return;
+      
+      // Handle whiteboard toggle
+      if (message['type'] == 'whiteboard_toggle') {
+        final show = message['show'] as bool;
         if (mounted) {
-          setState(() {
-            _showWhiteboard = true;
-          });
+          setState(() => _showWhiteboard = show);
+        }
+        return;
+      }
+      
+      // Auto-switch to whiteboard when teacher draws
+      if (message['type'] == 'whiteboard_stroke') {
+        if (mounted && !_showWhiteboard) {
+          setState(() => _showWhiteboard = true);
         }
       }
     } catch (e) {
-      debugPrint('Error in whiteboard listener: $e');
+      debugPrint('Error in data listener: $e');
     }
   });
   
-  debugPrint('👂 Whiteboard listener set up for student');
+  debugPrint('👂 Data listener ready');
 }
 
-void _startControlsTimer() {
-  _controlsTimer.cancel();
-  _controlsTimer = Timer(const Duration(seconds: 3), () {
-    if (mounted && _isFullScreen) {
-      setState(() => _showControls = false);
-    }
-  });
-}
-
-void _onScreenTap() {
-  if (_isFullScreen) {
-    setState(() => _showControls = !_showControls);
-    if (_showControls) {
-      _startControlsTimer();
-    }
-  }
-}
 
   void _onParticipantConnected(Participant participant) {
   // Try to get metadata from the new participant
@@ -447,6 +907,23 @@ void _extractParticipantName(Participant participant) {
     }
   }
 
+  void _sendWhiteboardToggle(bool show) {
+  final data = utf8.encode(jsonEncode({
+    'type': 'whiteboard_toggle',
+    'show': show,
+    'sentBy': _myName ?? 'Teacher',
+  }));
+  
+  debugPrint('📤 Teacher sending toggle: ${show ? "SHOW" : "HIDE"}');
+  
+  _room.localParticipant?.publishData(
+    data,
+    reliable: true,
+    // ❌ Remove topic filter - use no topic so all participants receive it
+    // topic: 'whiteboard',
+  );
+}
+
   Future<void> _leaveLesson() async {
     _room.disconnect();
     _room.dispose();
@@ -469,6 +946,7 @@ void _extractParticipantName(Participant participant) {
 
   @override
 void dispose() {
+  _notificationTimer?.cancel();
   _chatController.dispose();
   _listener.dispose();
   _controlsTimer.cancel();
@@ -499,62 +977,214 @@ Widget build(BuildContext context) {
     );
   }
 
+  // Fullscreen with hidden controls
+  if (_isFullScreen && !_showControls) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF121212),
+      body: SafeArea(
+        child: Stack(
+          children: [
+            Column(
+              children: [
+                Expanded(
+                  child: _buildMainContentArea(),
+                ),
+              ],
+            ),
+            // In the Stack of the build method (both normal and fullscreen)
+if (_isRecording)
+  Positioned(
+    top: 8,
+    right: 16,
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.red.withOpacity(0.8),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.red.withOpacity(0.3),
+            blurRadius: 8,
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Pulsing dot
+          _PulsingDot(),
+          const SizedBox(width: 6),
+          const Text(
+            'Recording',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    ),
+  ),
+            // ✅ Notification overlay for fullscreen
+            if (_notificationMessage != null)
+              _buildNotificationOverlay(),
+            // Tap area
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              height: 50,
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: _onScreenTap,
+                child: Container(
+                  color: Colors.white.withOpacity(0.05),
+                  child: const Center(
+                    child: Text(
+                      '👆 Tap here to show controls',
+                      style: TextStyle(color: Colors.white54, fontSize: 11),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Normal mode with AppBar and controls
   return GestureDetector(
     onTap: _onScreenTap,
-    child: AnimatedContainer(
-      duration: const Duration(milliseconds: 300),
-      child: Scaffold(
-        backgroundColor: const Color(0xFF121212),
-        appBar: _isFullScreen && !_showControls
-            ? null
-            : _buildAppBar() as PreferredSizeWidget?,
-        body: SafeArea(
-          child: Stack(  // ✅ Everything must be inside this Stack
-            children: [
-              // Main column content
-              Column(
-                children: [
-                  // Main content area
-                  Expanded(
-                    flex: _isFullScreen ? 1 : 3,
-                    child: _buildMainContentArea(),
-                  ),
-
-                  // Filmstrip
-                  if (!_isFullScreen && _allParticipants.length > 1)
-                    _buildFilmstrip(),
-
-                  // Control bar
-                  if (!_isFullScreen || _showControls)
-                    _buildControlBar(),
-                ],
-              ),
-
-              // ✅ PiP video - now correctly inside Stack
-              if (_showWhiteboard && _mainFocusParticipant != null)
-                Positioned(
-                  bottom: widget.isTeacher ? 140 : 20,
-                  right: 20,
-                  child: _buildPiPVideo(),
+    child: Scaffold(
+      backgroundColor: const Color(0xFF121212),
+      appBar: _isFullScreen 
+          ? null
+          : _buildAppBar() as PreferredSizeWidget?,
+      body: SafeArea(
+        child: Stack(
+          children: [
+            Column(
+              children: [
+                Expanded(
+                  flex: _isFullScreen ? 1 : 3,
+                  child: _buildMainContentArea(),
                 ),
-
-              // Chat panel
-              if (_isChatOpen && (!_isFullScreen || _showControls))
-                Positioned(
-                  right: 0,
-                  top: 0,
-                  bottom: _isFullScreen ? 100 : 160,
-                  width: 300,
-                  child: _buildChatPanel(),
-                ),
-            ],
+                if (!_isFullScreen && _allParticipants.length > 1)
+                  _buildFilmstrip(),
+                if (!_isFullScreen || _showControls)
+                  _buildControlBar(),
+              ],
+            ),
+            // In the Stack of the build method (both normal and fullscreen)
+if (_isRecording)
+  Positioned(
+    top: 8,
+    right: 16,
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.red.withOpacity(0.8),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.red.withOpacity(0.3),
+            blurRadius: 8,
           ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Pulsing dot
+          _PulsingDot(),
+          const SizedBox(width: 6),
+          const Text(
+            'Recording',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    ),
+  ),
+            // PiP video
+            if (_showWhiteboard && _mainFocusParticipant != null)
+              Positioned(
+                bottom: _isFullScreen ? 80 : 140,
+                right: 20,
+                child: _buildPiPVideo(),
+              ),
+            // Chat panel
+            if (_isChatOpen && (!_isFullScreen || _showControls))
+              Positioned(
+                right: 0,
+                top: 0,
+                bottom: _isFullScreen ? 100 : 160,
+                width: 300,
+                child: _buildChatPanel(),
+              ),
+            // ✅ Notification overlay for normal mode
+            if (_notificationMessage != null)
+              _buildNotificationOverlay(),
+            // Raised hands panel
+            if (_showRaisedHands && widget.isTeacher && _raisedHands.isNotEmpty)
+              Positioned(
+                top: 60,
+                right: 16,
+                child: Material(
+                  elevation: 8,
+                  borderRadius: BorderRadius.circular(16),
+                  child: _buildRaisedHandsPanel(),
+                ),
+              ),
+          ],
         ),
       ),
     ),
   );
 }
 
+// ✅ Extracted notification widget to avoid duplication
+Widget _buildNotificationOverlay() {
+  return Positioned(
+    top: 8,
+    left: 16,
+    right: 16,
+    child: Material(
+      elevation: 4,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: _notificationColor,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.notifications, color: Colors.white, size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                _notificationMessage!,
+                style: const TextStyle(color: Colors.white, fontSize: 14),
+              ),
+            ),
+            GestureDetector(
+              onTap: () => setState(() => _notificationMessage = null),
+              child: const Icon(Icons.close, color: Colors.white, size: 16),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
 Widget _buildPiPVideo() {
   return GestureDetector(
     onTap: () {
@@ -626,10 +1256,11 @@ Widget _buildMainContentArea() {
   
   if (_showWhiteboard) {
     return Padding(
-      padding: isMobile ? EdgeInsets.zero : const EdgeInsets.all(8),  // ✅ No padding on mobile
+      padding: isMobile ? EdgeInsets.zero : const EdgeInsets.all(8),
       child: ClipRRect(
-        borderRadius: isMobile ? BorderRadius.zero : BorderRadius.circular(16),  // ✅ No border on mobile
+        borderRadius: isMobile ? BorderRadius.zero : BorderRadius.circular(16),
         child: WhiteboardCanvas(
+          key: _whiteboardKey,
           room: _room,
           isTeacher: widget.isTeacher,
           userName: _myName ?? 'Teacher',
@@ -640,9 +1271,13 @@ Widget _buildMainContentArea() {
     );
   }
   
-  return _isFullScreen && !_showControls
-      ? _buildFullScreenContent()
-      : _buildMainContent();
+  // ✅ Use key to prevent video reload
+  return Container(
+    key: _videoContentKey,
+    child: _isFullScreen && !_showControls
+        ? _buildFullScreenContent()
+        : _buildMainContent(),
+  );
 }
 
 
@@ -687,6 +1322,38 @@ PreferredSizeWidget _buildAppBar() {
           ),
         ),
       ),
+      // Recording indicator
+if (_isRecording)
+  Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+    margin: const EdgeInsets.only(right: 4),
+    decoration: BoxDecoration(
+      color: Colors.red.withOpacity(0.2),
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: const BoxDecoration(
+            color: Colors.red,
+            shape: BoxShape.circle,
+          ),
+        ),
+        const SizedBox(width: 4),
+        const Text(
+          'REC',
+          style: TextStyle(
+            color: Colors.red,
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ],
+    ),
+  ),
       // Participant count
       Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -710,7 +1377,116 @@ PreferredSizeWidget _buildAppBar() {
           ],
         ),
       ),
+
+      // Raised hands indicator (teacher only)
+if (widget.isTeacher && _raisedHands.isNotEmpty)
+  GestureDetector(
+    onTap: () => setState(() => _showRaisedHands = !_showRaisedHands),
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      margin: const EdgeInsets.only(right: 4),
+      decoration: BoxDecoration(
+        color: Colors.amber.withOpacity(0.2),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.pan_tool, color: Colors.amber, size: 14),
+          const SizedBox(width: 4),
+          Text(
+            '${_raisedHands.length}',
+            style: const TextStyle(color: Colors.amber, fontSize: 13, fontWeight: FontWeight.bold),
+          ),
+        ],
+      ),
+    ),
+  ),
     ],
+  );
+}
+
+Widget _buildRaisedHandsPanel() {
+  return Container(
+    width: 280,
+    margin: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: const Color(0xFF1A1A1A),
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: Colors.amber.withOpacity(0.3)),
+    ),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Header
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.amber.withOpacity(0.1),
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(16),
+              topRight: Radius.circular(16),
+            ),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.pan_tool, color: Colors.amber, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                'Raised Hands (${_raisedHands.length})',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+              const Spacer(),
+              GestureDetector(
+                onTap: _lowerAllHands,
+                child: const Icon(Icons.clear_all, color: Colors.white54, size: 20),
+              ),
+            ],
+          ),
+        ),
+        // List
+        Flexible(
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: _raisedHands.length,
+            itemBuilder: (context, index) {
+              final participantId = _raisedHands[index];
+              final name = _participantNames[participantId] ?? 'Student';
+              final reason = _handRaiseReasons[participantId]; // ✅ Get reason
+              
+              return ListTile(
+                leading: CircleAvatar(
+                  radius: 16,
+                  backgroundColor: Colors.amber.withOpacity(0.2),
+                  child: Text(
+                    name[0].toUpperCase(),
+                    style: const TextStyle(color: Colors.amber, fontSize: 12),
+                  ),
+                ),
+                title: Text(name, style: const TextStyle(color: Colors.white, fontSize: 14)),
+                subtitle: reason != null
+                    ? Text(
+                        '"$reason"',
+                        style: const TextStyle(color: Colors.white54, fontSize: 12, fontStyle: FontStyle.italic),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      )
+                    : const Text('Raised hand', style: TextStyle(color: Colors.white38, fontSize: 11)),
+                trailing: IconButton(
+                  icon: const Icon(Icons.check, color: Colors.green, size: 20),
+                  onPressed: () => _lowerHand(participantId),
+                  tooltip: 'Lower hand',
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    ),
   );
 }
 
@@ -759,6 +1535,7 @@ Widget _buildMainContent() {
 Widget _buildFilmstrip() {
   return SizedBox(
     height: 120,
+    key: _filmstripKey, 
     child: ListView.builder(
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -802,9 +1579,14 @@ Widget _buildFilmstrip() {
 }
 
 Widget _buildControlBar() {
+  final isMobile = MediaQuery.of(context).size.width < 600;
+  
   return AnimatedContainer(
     duration: const Duration(milliseconds: 300),
-    padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
+    padding: EdgeInsets.symmetric(
+      vertical: isMobile ? 10 : 16, 
+      horizontal: isMobile ? 8 : 24,
+    ),
     decoration: const BoxDecoration(
       color: Color(0xFF1A1A1A),
       borderRadius: BorderRadius.only(
@@ -812,73 +1594,358 @@ Widget _buildControlBar() {
         topRight: Radius.circular(24),
       ),
     ),
-    child: Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-      children: [
-        _buildControlButton(
-          icon: _isMuted ? Icons.mic_off : Icons.mic,
-          color: _isMuted ? Colors.redAccent : const Color(0xFF2D2D2D),
-          onPressed: () async {
-            setState(() => _isMuted = !_isMuted);
-            await _room.localParticipant?.setMicrophoneEnabled(!_isMuted);
-          },
-        ),
-        _buildControlButton(
-          icon: _isVideoOff ? Icons.videocam_off : Icons.videocam,
-          color: _isVideoOff ? Colors.redAccent : const Color(0xFF2D2D2D),
-          onPressed: () async {
-            setState(() => _isVideoOff = !_isVideoOff);
-            await _room.localParticipant?.setCameraEnabled(!_isVideoOff);
-          },
-        ),
-        if (widget.isTeacher)
-          _buildControlButton(
-            icon: Icons.screen_share,
-            color: Colors.blueAccent,
-            onPressed: () async {
-              final enabled = _room.localParticipant?.isScreenShareEnabled() ?? false;
-              await _room.localParticipant?.setScreenShareEnabled(!enabled);
-              setState(() {});
-            },
-          ),
-          _buildControlButton(
-  icon: _showWhiteboard ? Icons.videocam : Icons.draw,
-  color: _showWhiteboard ? Colors.blueAccent : const Color(0xFF2D2D2D),
-  onPressed: () {
-    setState(() {
-      _showWhiteboard = !_showWhiteboard;
-      // If hiding whiteboard, reset drawing state
-      if (!_showWhiteboard) {
-        _isTeacherDrawing = false;
-      }
-    });
-  },
-),
-        _buildControlButton(
-          icon: Icons.chat_bubble_outline,
-          color: _isChatOpen ? Colors.blueAccent : const Color(0xFF2D2D2D),
-          onPressed: () => setState(() {
-            _isChatOpen = !_isChatOpen;
-            _showParticipants = false;
-          }),
-        ),
-        // ✅ Fullscreen button in control bar too
-        _buildControlButton(
-          icon: _isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
-          color: _isFullScreen ? Colors.blueAccent : const Color(0xFF2D2D2D),
-          onPressed: _toggleFullScreen,
-        ),
-        _buildControlButton(
-          icon: Icons.call_end,
-          color: Colors.red,
-          iconColor: Colors.white,
-          onPressed: widget.isTeacher ? _endLesson : _leaveLesson,
-        ),
-      ],
-    ),
+    child: isMobile ? _buildMobileControlBar() : _buildDesktopControlBar(),
   );
 }
 
+Widget _buildDesktopControlBar() {
+  return Row(
+    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+    children: [
+      _buildControlButton(
+        icon: _isMuted ? Icons.mic_off : Icons.mic,
+        color: _isMuted ? Colors.redAccent : const Color(0xFF2D2D2D),
+        onPressed: () async {
+          setState(() => _isMuted = !_isMuted);
+          await _room.localParticipant?.setMicrophoneEnabled(!_isMuted);
+        },
+      ),
+      _buildControlButton(
+        icon: _isVideoOff ? Icons.videocam_off : Icons.videocam,
+        color: _isVideoOff ? Colors.redAccent : const Color(0xFF2D2D2D),
+        onPressed: () async {
+          setState(() => _isVideoOff = !_isVideoOff);
+          await _room.localParticipant?.setCameraEnabled(!_isVideoOff);
+        },
+      ),
+      if (widget.isTeacher)
+        _buildControlButton(
+          icon: Icons.screen_share,
+          color: Colors.blueAccent,
+          onPressed: () async {
+            final enabled = _room.localParticipant?.isScreenShareEnabled() ?? false;
+            await _room.localParticipant?.setScreenShareEnabled(!enabled);
+            setState(() {});
+          },
+        ),
+        if (widget.isTeacher)
+  _buildControlButton(
+    icon: _isRecordingStarting 
+        ? Icons.circle 
+        : _isRecording ? Icons.fiber_manual_record : Icons.fiber_manual_record_outlined,
+    color: _isRecording ? Colors.red : const Color(0xFF2D2D2D),
+    iconColor: _isRecording ? Colors.red : Colors.white70,
+    onPressed: _isRecordingStarting ? () {} : () => _toggleRecording(),  // ✅ Empty function instead of null
+  ),
+      _buildControlButton(
+        icon: _showWhiteboard ? Icons.videocam : Icons.draw,
+        color: _showWhiteboard ? Colors.blueAccent : const Color(0xFF2D2D2D),
+        onPressed: () {
+          setState(() {
+            _showWhiteboard = !_showWhiteboard;
+            if (!_showWhiteboard) _isTeacherDrawing = false;
+          });
+          _sendWhiteboardToggle(_showWhiteboard);
+        },
+      ),
+      _buildControlButton(
+        icon: Icons.chat_bubble_outline,
+        color: _isChatOpen ? Colors.blueAccent : const Color(0xFF2D2D2D),
+        onPressed: () => setState(() {
+          _isChatOpen = !_isChatOpen;
+          _showParticipants = false;
+        }),
+      ),
+      // Hand raise button (students only)
+if (!widget.isTeacher)
+  _buildControlButton(
+    icon: _handRaised ? Icons.pan_tool : Icons.pan_tool_outlined,
+    color: _handRaised ? Colors.amber : const Color(0xFF2D2D2D),
+    iconColor: _handRaised ? Colors.white : Colors.white70,
+    onPressed: _toggleHandRaise,
+  ),
+      _buildControlButton(
+        icon: _isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
+        color: _isFullScreen ? Colors.blueAccent : const Color(0xFF2D2D2D),
+        onPressed: _toggleFullScreen,
+      ),
+      _buildControlButton(
+        icon: Icons.call_end,
+        color: Colors.red,
+        iconColor: Colors.white,
+        onPressed: widget.isTeacher ? _endLesson : _leaveLesson,
+      ),
+    ],
+  );
+}
+
+Widget _buildMobileControlBar() {
+  return Row(
+    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+    children: [
+      // Mic - essential
+      _buildControlButton(
+        icon: _isMuted ? Icons.mic_off : Icons.mic,
+        color: _isMuted ? Colors.redAccent : const Color(0xFF2D2D2D),
+        onPressed: () async {
+          setState(() => _isMuted = !_isMuted);
+          await _room.localParticipant?.setMicrophoneEnabled(!_isMuted);
+        },
+        isMobile: true,
+      ),
+      
+      // Video - essential
+      _buildControlButton(
+        icon: _isVideoOff ? Icons.videocam_off : Icons.videocam,
+        color: _isVideoOff ? Colors.redAccent : const Color(0xFF2D2D2D),
+        onPressed: () async {
+          setState(() => _isVideoOff = !_isVideoOff);
+          await _room.localParticipant?.setCameraEnabled(!_isVideoOff);
+        },
+        isMobile: true,
+      ),
+      
+      // Whiteboard - essential for teacher
+      _buildControlButton(
+        icon: _showWhiteboard ? Icons.videocam : Icons.draw,
+        color: _showWhiteboard ? Colors.blueAccent : const Color(0xFF2D2D2D),
+        onPressed: () {
+          setState(() {
+            _showWhiteboard = !_showWhiteboard;
+            if (!_showWhiteboard) _isTeacherDrawing = false;
+          });
+          _sendWhiteboardToggle(_showWhiteboard);
+        },
+        isMobile: true,
+      ),
+
+ 
+
+      
+      // More options menu
+      _buildMoreButton(),
+      
+      // End call - always visible
+      _buildControlButton(
+        icon: Icons.call_end,
+        color: Colors.red,
+        iconColor: Colors.white,
+        onPressed: widget.isTeacher ? _endLesson : _leaveLesson,
+        isMobile: true,
+      ),
+    ],
+  );
+}
+
+// More options popup menu
+Widget _buildMoreButton() {
+  return PopupMenuButton<String>(
+    color: const Color(0xFF2D2D2D),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    offset: const Offset(0, -240),
+    child: Container(
+      padding: const EdgeInsets.all(12),
+      decoration: const BoxDecoration(
+        color: Color(0xFF2D2D2D),
+        shape: BoxShape.circle,
+      ),
+      child: const Icon(Icons.more_horiz, color: Colors.white70, size: 20),
+    ),
+    onSelected: (value) {
+      switch (value) {
+        case 'chat':
+          setState(() => _isChatOpen = !_isChatOpen);
+          break;
+        case 'fullscreen':
+          _toggleFullScreen();
+          break;
+        case 'screenshare':
+          if (widget.isTeacher) {
+            final enabled = _room.localParticipant?.isScreenShareEnabled() ?? false;
+            _room.localParticipant?.setScreenShareEnabled(!enabled);
+            setState(() {});
+          }
+          break;
+        case 'handraise':
+          _toggleHandRaise();
+          break;
+        case 'raisedhands':
+          setState(() => _showRaisedHands = !_showRaisedHands);
+          break;
+        case 'recording':  // ✅ Add recording
+          _toggleRecording();
+          break;
+        case 'test_upload':
+  _testStorageUpload();
+  break;  
+      }
+    },
+    itemBuilder: (context) => [
+      // Chat
+      PopupMenuItem(
+        value: 'chat',
+        child: Row(
+          children: [
+            Icon(
+              _isChatOpen ? Icons.chat_bubble : Icons.chat_bubble_outline,
+              color: _isChatOpen ? Colors.blueAccent : Colors.white70,
+              size: 20,
+            ),
+            const SizedBox(width: 12),
+            Text(
+              _isChatOpen ? 'Hide Chat' : 'Chat',
+              style: TextStyle(color: _isChatOpen ? Colors.blueAccent : Colors.white70, fontSize: 14),
+            ),
+          ],
+        ),
+      ),
+      PopupMenuItem(
+  value: 'test_upload',
+  child: Row(
+    children: [
+      const Icon(Icons.upload, color: Colors.white70, size: 20),
+      const SizedBox(width: 12),
+      const Text('Test Upload', style: TextStyle(color: Colors.white70, fontSize: 14)),
+    ],
+  ),
+),
+      
+      // Hand Raise (students only)
+      if (!widget.isTeacher)
+        PopupMenuItem(
+          value: 'handraise',
+          child: Row(
+            children: [
+              Icon(
+                _handRaised ? Icons.pan_tool : Icons.pan_tool_outlined,
+                color: _handRaised ? Colors.amber : Colors.white70,
+                size: 20,
+              ),
+              const SizedBox(width: 12),
+              Text(
+                _handRaised ? 'Lower Hand ✋' : 'Raise Hand ✋',
+                style: TextStyle(color: _handRaised ? Colors.amber : Colors.white70, fontSize: 14),
+              ),
+            ],
+          ),
+        ),
+      
+      // Raised Hands (teacher only)
+      if (widget.isTeacher && _raisedHands.isNotEmpty)
+        PopupMenuItem(
+          value: 'raisedhands',
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  color: Colors.amber.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.pan_tool, color: Colors.amber, size: 16),
+                    const SizedBox(width: 2),
+                    Text(
+                      '${_raisedHands.length}',
+                      style: const TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                _showRaisedHands ? 'Hide Raised Hands' : 'View Raised Hands',
+                style: TextStyle(color: _showRaisedHands ? Colors.amber : Colors.white70, fontSize: 14),
+              ),
+            ],
+          ),
+        ),
+      
+      // ✅ Recording (teacher only)
+      if (widget.isTeacher)
+        PopupMenuItem(
+          value: 'recording',
+          child: Row(
+            children: [
+              Icon(
+                _isRecording ? Icons.fiber_manual_record : Icons.fiber_manual_record_outlined,
+                color: _isRecording ? Colors.red : Colors.white70,
+                size: 20,
+              ),
+              const SizedBox(width: 12),
+              Text(
+                _isRecording ? 'Stop Recording' : 'Start Recording',
+                style: TextStyle(color: _isRecording ? Colors.red : Colors.white70, fontSize: 14),
+              ),
+            ],
+          ),
+        ),
+      
+      // Fullscreen
+      PopupMenuItem(
+        value: 'fullscreen',
+        child: Row(
+          children: [
+            Icon(
+              _isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
+              color: _isFullScreen ? Colors.blueAccent : Colors.white70,
+              size: 20,
+            ),
+            const SizedBox(width: 12),
+            Text(
+              _isFullScreen ? 'Exit Fullscreen' : 'Fullscreen',
+              style: TextStyle(color: _isFullScreen ? Colors.blueAccent : Colors.white70, fontSize: 14),
+            ),
+          ],
+        ),
+      ),
+      
+      // Screen Share (teacher only)
+      if (widget.isTeacher)
+        PopupMenuItem(
+          value: 'screenshare',
+          child: Row(
+            children: [
+              Icon(
+                Icons.screen_share,
+                color: (_room.localParticipant?.isScreenShareEnabled() ?? false) ? Colors.blueAccent : Colors.white70,
+                size: 20,
+              ),
+              const SizedBox(width: 12),
+              Text(
+                (_room.localParticipant?.isScreenShareEnabled() ?? false) ? 'Stop Sharing' : 'Share Screen',
+                style: TextStyle(
+                  color: (_room.localParticipant?.isScreenShareEnabled() ?? false) ? Colors.blueAccent : Colors.white70,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+        ),
+    ],
+  );
+}
+// Update _buildControlButton to accept mobile flag
+Widget _buildControlButton({
+  required IconData icon,
+  required Color color,
+  Color iconColor = Colors.white70,
+  required VoidCallback onPressed,
+  bool isMobile = false,
+}) {
+  return ElevatedButton(
+    style: ElevatedButton.styleFrom(
+      shape: const CircleBorder(),
+      padding: EdgeInsets.all(isMobile ? 12 : 16),
+      backgroundColor: color,
+      elevation: 0,
+    ),
+    onPressed: onPressed,
+    child: Icon(icon, color: iconColor, size: isMobile ? 20 : 24),
+  );
+}
   
 
   Widget _buildIdentityOverlay(Participant? participant, {required bool isMain}) {
@@ -919,23 +1986,7 @@ Widget _buildControlBar() {
     ),
   );
 }
-  Widget _buildControlButton({
-    required IconData icon,
-    required Color color,
-    Color iconColor = Colors.white70,
-    required VoidCallback onPressed,
-  }) {
-    return ElevatedButton(
-      style: ElevatedButton.styleFrom(
-        shape: const CircleBorder(),
-        padding: const EdgeInsets.all(16),
-        backgroundColor: color,
-        elevation: 0,
-      ),
-      onPressed: onPressed,
-      child: Icon(icon, color: iconColor, size: 24),
-    );
-  }
+  
 
   Widget _buildChatPanel() {
     return Container(
@@ -1137,4 +2188,46 @@ class _ChatMessage {
   final String message;
   final bool isMe;
   _ChatMessage({required this.sender, required this.message, required this.isMe});
+}
+
+class _PulsingDot extends StatefulWidget {
+  @override
+  State<_PulsingDot> createState() => _PulsingDotState();
+}
+
+class _PulsingDotState extends State<_PulsingDot>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1000),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.3 + (_controller.value * 0.7)),
+            shape: BoxShape.circle,
+          ),
+        );
+      },
+    );
+  }
 }

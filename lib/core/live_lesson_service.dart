@@ -2,7 +2,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 
-import 'jitsi_meeting_wrapper.dart';
+
 import 'package:flutter/material.dart';
 
 class LiveLessonService {
@@ -11,24 +11,7 @@ class LiveLessonService {
   
 
   // Join a lesson directly in-app
-  // Inside LiveLessonService class
-Future<void> joinLesson({
-  required BuildContext context,
-  required String roomName,
-  required String userName,
-  required String lessonId,
-  bool isTeacher = false,
-}) async {
-  await updateStatus(lessonId, 'live');  // ✅ Use this.updateStatus()
 
-  await JitsiMeetingWrapper.join(
-    context: context,
-    roomName: roomName,
-    userName: userName,
-    lessonId: lessonId,
-    isTeacher: isTeacher,
-  );
-}
 
 
   // Modified createLiveLesson to ensure unique but readable room names

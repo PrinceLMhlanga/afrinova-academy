@@ -12,6 +12,9 @@ class WhiteboardPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    // ✅ Draw subtle background grid to show drawing area
+    _drawBackground(canvas, size);
+    
     // Draw completed strokes
     for (final stroke in strokes) {
       _drawStroke(canvas, stroke);
@@ -23,12 +26,22 @@ class WhiteboardPainter extends CustomPainter {
     }
   }
 
+  void _drawBackground(Canvas canvas, Size size) {
+    // Optional: Draw light border to show the drawing area
+    final paint = Paint()
+      ..color = Colors.grey.shade200
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+    
+    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), paint);
+  }
+
   void _drawStroke(Canvas canvas, WhiteboardStroke stroke) {
     if (stroke.points.isEmpty) return;
 
     final paint = Paint()
       ..color = stroke.type == StrokeType.eraser ? Colors.white : stroke.color
-      ..strokeWidth = stroke.type == StrokeType.eraser ? stroke.strokeWidth * 3 : stroke.strokeWidth
+      ..strokeWidth = stroke.strokeWidth
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
       ..style = PaintingStyle.stroke
@@ -53,7 +66,6 @@ class WhiteboardPainter extends CustomPainter {
 
   void _drawFreehand(Canvas canvas, List<Offset> points, Paint paint) {
     if (points.length < 2) {
-      // Single point - draw a dot
       canvas.drawCircle(points.first, paint.strokeWidth / 2, paint);
       return;
     }

@@ -72,24 +72,14 @@ class _ScheduledLessonsScreenState extends State<ScheduledLessonsScreen> {
     } else {
       // Mobile: Join in-app
       if (mounted) {
-        await _joinInApp(roomId, lessonId);
+        //await _joinInApp(roomId, lessonId);
       }
     }
 
     _loadLessons();
   }
 
-  Future<void> _joinInApp(String roomId, String lessonId) async {
-    await _liveService.updateStatus(lessonId, 'live');
-
-    await _liveService.joinLesson(
-      context: context,
-      roomName: roomId,
-      userName: "Teacher",
-      lessonId: lessonId,
-      isTeacher: true,
-    );
-  }
+  
 
   Future<void> _endLesson() async {
     if (_activeLessonId == null) return;
