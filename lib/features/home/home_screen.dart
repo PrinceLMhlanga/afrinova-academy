@@ -17,6 +17,7 @@ import '../trial/trial_banner.dart';
 import '../account/my_account_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../generated_exams/exam_generator_screen.dart'; // Added import
+import '../tutoring/my_tutors_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -501,128 +502,215 @@ String _getFormattedDate() {
                   const SizedBox(height: 16),
                   
                   // ==================== CORE FEATURES SECTION ====================
-                  _SectionHeader(
-                    title: 'Core Learning',
-                    icon: Icons.school_rounded,
-                    count: _getCoreFeaturesCount(),
-                  ),
-                  
-                  const SizedBox(height: 16),
-                  
-                  FadeTransition(
-                    opacity: widget.animationController,
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        final isSmallScreen = constraints.maxWidth < 400;
-                        final crossAxisCount = isSmallScreen ? 3 : 4;
-                        final spacing = 12.0;
-                        final totalSpacing = spacing * (crossAxisCount - 1);
-                        final cardWidth = (constraints.maxWidth - totalSpacing) / crossAxisCount;
-                        
-                        return Wrap(
-                          spacing: spacing,
-                          runSpacing: spacing,
-                          children: [
-                            _AnimatedQuickActionCard(
-                              icon: Icons.book_rounded,
-                              label: 'My Subjects',
-                              color: const Color(0xFF1A237E),
-                              index: 0,
-                              width: cardWidth,
-                              onTap: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => const MySubjectsScreen(),
-                                  ),
-                                );
-                              },
-                            ),
-                            _AnimatedQuickActionCard(
-                              icon: Icons.quiz_rounded,
-                              label: 'MCQ Exams',
-                              color: const Color(0xFFFF9800),
-                              index: 1,
-                              width: cardWidth,
-                              onTap: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => const StudentExamsScreen(),
-                                  ),
-                                );
-                              },
-                            ),
-                            _AnimatedQuickActionCard(
-                              icon: Icons.assignment_rounded,
-                              label: 'Exam Papers',
-                              color: const Color(0xFF00897B),
-                              index: 2,
-                              width: cardWidth,
-                              onTap: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => const StudentPapersScreen(),
-                                  ),
-                                );
-                              },
-                            ),
-                            _AnimatedQuickActionCard(
-                              icon: Icons.analytics_rounded,
-                              label: 'Progress',
-                              color: const Color(0xFF4CAF50),
-                              index: 3,
-                              width: cardWidth,
-                              onTap: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => const ProgressDashboard(),
-                                  ),
-                                );
-                              },
-                            ),
-                            _AnimatedQuickActionCard(
-                              icon: Icons.library_books_rounded,
-                              label: 'Resources',
-                              color: const Color(0xFF9C27B0),
-                              index: 4,
-                              width: cardWidth,
-                              onTap: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => const ResourceLibraryScreen(),
-                                  ),
-                                );
-                              },
-                            ),
-                            _AnimatedQuickActionCard(
-                              icon: Icons.live_tv_rounded,
-                              label: 'Live Lessons',
-                              color: Colors.red,
-                              index: 5,
-                              width: cardWidth,
-                              onTap: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => const StudentLiveLessonsScreen(),
-                                  ),
-                                );
-                              },
-                            ),
-                          ],
-                        );
-                      },
+                  // ==================== CORE FEATURES SECTION ====================
+Container(
+  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+  decoration: BoxDecoration(
+    gradient: LinearGradient(
+      colors: [
+        const Color(0xFF1A237E).withOpacity(0.06),
+        const Color(0xFF283593).withOpacity(0.04),
+      ],
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+    ),
+    borderRadius: BorderRadius.circular(20),
+    border: Border.all(
+      color: const Color(0xFF1A237E).withOpacity(0.2),
+      width: 2,
+    ),
+  ),
+  child: Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      // Header
+      Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFF1A237E), Color(0xFF283593)],
+              ),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(
+              Icons.school_rounded,
+              color: Colors.white,
+              size: 24,
+            ),
+          ),
+          const SizedBox(width: 12),
+          const Text(
+            'Core Learning',
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF1A237E),
+              letterSpacing: 0.3,
+            ),
+          ),
+          const Spacer(),
+          Container(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 10,
+              vertical: 4,
+            ),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFF1A237E), Color(0xFF283593)],
+              ),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              '${_getCoreFeaturesCount()} features',
+              style: const TextStyle(
+                fontSize: 11,
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 4),
+      Text(
+        'Your learning journey at your fingertips',
+        style: TextStyle(
+          fontSize: 13,
+          color: Colors.grey[600],
+          fontWeight: FontWeight.w400,
+        ),
+      ),
+      const SizedBox(height: 16),
+      
+      // Features Grid
+      LayoutBuilder(
+        builder: (context, constraints) {
+          final isSmallScreen = constraints.maxWidth < 400;
+          final crossAxisCount = isSmallScreen ? 3 : 4;
+          final spacing = 12.0;
+          final totalSpacing = spacing * (crossAxisCount - 1);
+          final cardWidth = (constraints.maxWidth - totalSpacing) / crossAxisCount;
+          
+          return Wrap(
+            spacing: spacing,
+            runSpacing: spacing,
+            children: [
+              _AnimatedQuickActionCard(
+                icon: Icons.book_rounded,
+                label: 'My Subjects',
+                color: const Color(0xFF1A237E),
+                index: 0,
+                width: cardWidth,
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const MySubjectsScreen(),
                     ),
-                  ),
-                  
-                  const SizedBox(height: 30),
+                  );
+                },
+              ),
+              _AnimatedQuickActionCard(
+                icon: Icons.people_rounded,
+                label: 'My Tutors',
+                color: const Color(0xFF5C6BC0),
+                index: 1,
+                width: cardWidth,
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const MyTutorsScreen(),
+                    ),
+                  );
+                },
+              ),
+              _AnimatedQuickActionCard(
+                icon: Icons.quiz_rounded,
+                label: 'MCQ Exams',
+                color: const Color(0xFFFF9800),
+                index: 2,
+                width: cardWidth,
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const StudentExamsScreen(),
+                    ),
+                  );
+                },
+              ),
+              _AnimatedQuickActionCard(
+                icon: Icons.assignment_rounded,
+                label: 'Exam Papers',
+                color: const Color(0xFF00897B),
+                index: 3,
+                width: cardWidth,
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const StudentPapersScreen(),
+                    ),
+                  );
+                },
+              ),
+              _AnimatedQuickActionCard(
+                icon: Icons.analytics_rounded,
+                label: 'Progress',
+                color: const Color(0xFF4CAF50),
+                index: 4,
+                width: cardWidth,
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const ProgressDashboard(),
+                    ),
+                  );
+                },
+              ),
+              _AnimatedQuickActionCard(
+                icon: Icons.library_books_rounded,
+                label: 'Resources',
+                color: const Color(0xFF9C27B0),
+                index: 5,
+                width: cardWidth,
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const ResourceLibraryScreen(),
+                    ),
+                  );
+                },
+              ),
+              _AnimatedQuickActionCard(
+                icon: Icons.live_tv_rounded,
+                label: 'Live Lessons',
+                color: Colors.red,
+                index: 6,
+                width: cardWidth,
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const StudentLiveLessonsScreen(),
+                    ),
+                  );
+                },
+              ),
+            ],
+          );
+        },
+      ),
+    ],
+  ),
+),
 
-                  const SizedBox(height: 8),
-
+const SizedBox(height: 30),
 // ==================== BADGES & LEADERBOARD SECTION ====================
 Container(
   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),

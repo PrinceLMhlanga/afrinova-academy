@@ -21,6 +21,7 @@ import 'wallet_screen.dart';
 import 'payout_account_screen.dart';
 import 'my_classes_screen.dart';
 import 'teacher_pricing_screen.dart';
+import '../tutoring/teacher_students_screen.dart';
 
 // ===== ADMIN ACTION DATA CLASS =====
 class AdminActionData {
@@ -502,6 +503,28 @@ class _TeacherDashboardState extends State<TeacherDashboard>
                   ),
 
                   const SizedBox(height: 24),
+                  // One-on-One Tutoring
+_buildCategoryCard(
+  title: 'One-on-One Tutoring',
+  icon: Icons.chat_rounded,
+  color: const Color(0xFF5C6BC0),
+  features: [
+    _FeatureItem(
+      icon: Icons.chat_rounded,
+      label: 'Student Chats',
+      color: const Color(0xFF5C6BC0),
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const TeacherStudentsScreen()),
+        );
+      },
+    ),
+   
+  ],
+),
+                  const SizedBox(height: 24),
+
 
                   // Class Management
                   _buildCategoryCard(
@@ -1049,6 +1072,8 @@ final crossAxisCount = isVerySmallScreen ? 2 : (isSmallScreen ? 3 : 4);
         return 'Build exams, papers, and track progress';
       case 'Live Teaching':
         return 'Go live and schedule lessons';
+      case 'One-on-One Tutoring':
+        return 'Beta';
       case 'Class Management':
         return 'Manage students, classes, and requests';
       case 'Finances':

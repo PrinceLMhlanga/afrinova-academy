@@ -31,4 +31,8 @@ class AccessChecker {
   static bool canAccessMCQ(Map<String, dynamic>? enrollment) {
     return hasFeature(enrollment, 'MCQ Practice');
   }
+  // Add this to AccessChecker
+static bool canAccessTutoring(Map<String, dynamic>? enrollment) {
+  return hasFeature(enrollment, 'One-on-One Support');
+}
 }

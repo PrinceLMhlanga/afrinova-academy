@@ -8,13 +8,8 @@ import 'package:flutter/services.dart';
 import '../live/whiteboard/whiteboard_canvas.dart';
 import 'dart:async';
 import 'dart:typed_data';
-import 'package:flutter_screen_recording/flutter_screen_recording.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'dart:io';
-
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:http/http.dart' as http;
-
+import '../live/poll_widgets.dart';
+import '../live/poll_models.dart';
 
 
 class LiveClassroomScreen extends StatefulWidget {
@@ -64,6 +59,7 @@ final GlobalKey _filmstripKey = GlobalKey();
 bool _handRaised = false;
 final List<String> _raisedHands = []; // List of participant identities
 bool _showRaisedHands = false;
+final Set<String> _mutedParticipants = {};
 
 // Add these state variables
 String? _notificationMessage;
@@ -79,11 +75,11 @@ bool _isFullScreen = false;
 bool _showControls = true;
 late Timer _controlsTimer;
 
-// Recording state variables
-bool _isRecording = false;
-bool _isRecordingStarting = false;
-String? _recordingError;
-String? _recordingId;
+// Poll state
+Poll? _activePoll;
+bool _showPollPanel = false;
+bool _showCreatePoll = false;
+
 
   @override
   void initState() {
@@ -154,7 +150,12 @@ String? _recordingId;
       }));
       
       await _room.localParticipant?.setCameraEnabled(true);
-      await _room.localParticipant?.setMicrophoneEnabled(true);
+      if (widget.isTeacher) {
+  await _room.localParticipant?.setMicrophoneEnabled(true);
+} else {
+  await _room.localParticipant?.setMicrophoneEnabled(false);
+  setState(() => _isMuted = true);
+}
 
       // ✅ SETUP WHITEBOARD LISTENER FOR STUDENTS
       _setupDataListener();
@@ -218,196 +219,167 @@ String? _recordingId;
 }
 
 
-// Start recording
-Future<void> _startRecording() async {
-  if (!widget.isTeacher) return;
+
+
+// Teacher requests a student to mute
+void _requestMute(String participantId, String participantName) {
+  final data = utf8.encode(jsonEncode({
+    'type': 'mute_request',
+    'participantId': participantId,
+    'requestedBy': _myName ?? 'Teacher',
+  }));
+  
+  _room.localParticipant?.publishData(data, reliable: true);
+  _showNotification('Mute request sent to $participantName', backgroundColor: Colors.orange);
+}
+
+// Request all to mute
+void _requestMuteAll() {
+  final data = utf8.encode(jsonEncode({
+    'type': 'mute_all_request',
+    'requestedBy': _myName ?? 'Teacher',
+  }));
+  
+  _room.localParticipant?.publishData(data, reliable: true);
+  _showNotification('Mute all requested 🔇', backgroundColor: Colors.orange);
+}
+
+void _openCreatePoll() {
+  showDialog(
+    context: context,
+    builder: (ctx) => CreatePollDialog(
+      onCreate: (question, options) {
+        _createPoll(question, options);
+      },
+    ),
+  );
+}
+
+// Teacher creates a poll
+void _createPoll(String question, List<String> options) {
+  final poll = Poll(
+    id: DateTime.now().millisecondsSinceEpoch.toString(),
+    question: question,
+    options: options,
+    createdAt: DateTime.now(),
+    createdBy: _myName ?? 'Teacher',
+  );
   
   setState(() {
-    _isRecordingStarting = true;
-    _recordingError = null;
+    _activePoll = poll;
+    _showPollPanel = true;  // ✅ Show for teacher too
   });
   
-  try {
-    // Request permissions
-    final microphone = await Permission.microphone.request();
-    if (!microphone.isGranted) {
-      _showNotification('Microphone permission required', backgroundColor: Colors.red);
-      setState(() => _isRecordingStarting = false);
-      return;
+  // Send poll to all students immediately
+  _sendPollUpdate(poll);
+}
+
+// Send poll data to participants
+void _sendPollUpdate(Poll poll) {
+  final message = jsonEncode({
+    'type': 'poll_update',
+    'poll': poll.toJson(),
+  });
+  
+  debugPrint('📤 Sending poll update: $message');
+  
+  final data = utf8.encode(message);
+  
+  _room.localParticipant?.publishData(data, reliable: true).then((_) {
+    debugPrint('✅ Poll sent successfully');
+  }).catchError((e) {
+    debugPrint('❌ Failed to send poll: $e');
+  });
+}
+
+// Student votes
+void _vote(int optionIndex) {
+  if (_activePoll == null || !_activePoll!.isActive) return;
+  
+  final participantId = _room.localParticipant?.identity ?? '';
+  
+  // Check if already voted
+  if (_activePoll!.participantVotes.containsKey(participantId)) {
+    _showNotification('You already voted!', backgroundColor: Colors.orange);
+    return;
+  }
+  
+  setState(() {
+    _activePoll!.participantVotes[participantId] = optionIndex;
+    _activePoll!.votes[optionIndex.toString()] = 
+        (_activePoll!.votes[optionIndex.toString()] ?? 0) + 1;
+  });
+  
+  // Send vote to teacher
+  _sendVote(optionIndex);
+}
+
+void _sendVote(int optionIndex) {
+  final data = utf8.encode(jsonEncode({
+    'type': 'poll_vote',
+    'optionIndex': optionIndex,
+    'participantId': _room.localParticipant?.identity ?? '',
+  }));
+  
+  _room.localParticipant?.publishData(data, reliable: true);
+}
+
+void _closePoll() {
+  if (_activePoll == null) return;
+  
+  // ✅ Mark poll as inactive
+  setState(() {
+    _activePoll!.isActive = false;
+    _showPollPanel = false;
+  });
+  
+  // Send final update
+  _sendPollUpdate(_activePoll!);
+  
+  // Send explicit close
+  final data = utf8.encode(jsonEncode({
+    'type': 'poll_closed',
+  }));
+  _room.localParticipant?.publishData(data, reliable: true);
+  
+  // ✅ Reset poll after a delay so the button goes back to "create"
+  Future.delayed(const Duration(seconds: 2), () {
+    if (mounted) {
+      setState(() {
+        _activePoll = null; // Clear the poll so button shows create icon
+      });
     }
-    
-    // Save metadata to database
-    final response = await Supabase.instance.client
-      .from('lesson_recordings')
-      .insert({
-        'lesson_id': widget.lessonId,
-        'room_name': widget.roomName,
-        'teacher_id': _authService.currentUserId,
-        'status': 'recording',
-        'started_at': DateTime.now().toIso8601String(),
-      })
-      .select()
-      .single();
-    
-    _recordingId = response['id'] as String;
-    
-    // ✅ Start screen recording
-    await FlutterScreenRecording.startRecordScreen(
-      'Lesson_${DateTime.now().millisecondsSinceEpoch}',
-      titleNotification: 'Recording...',
-      messageNotification: 'Tap to stop',
-    );
-    
-    setState(() => _isRecording = true);
-    _showNotification('Recording started 🔴', backgroundColor: Colors.red);
-    
-  } catch (e) {
-    debugPrint('Recording error: $e');
-    setState(() => _recordingError = 'Failed to start recording');
-    _showNotification(_recordingError!, backgroundColor: Colors.red);
-  } finally {
-    setState(() => _isRecordingStarting = false);
-  }
+  });
 }
 
-Future<void> _testStorageUpload() async {
-  try {
-    // Create a small test file
-    final testFile = File('${Directory.systemTemp.path}/test.txt');
-    await testFile.writeAsString('Test upload from AfriNova');
-    
-    // Upload
-    await Supabase.instance.client.storage
-      .from('recordings')
-      .upload('test_${DateTime.now().millisecondsSinceEpoch}.txt', testFile);
-    
-    _showNotification('Test upload successful! ✅', backgroundColor: Colors.green);
-  } catch (e) {
-    debugPrint('Test upload error: $e');
-    _showNotification('Upload failed: $e', backgroundColor: Colors.red);
+// Handle incoming poll data
+void _handlePollMessage(Map<String, dynamic> message) {
+  switch (message['type']) {
+    case 'poll_update':
+      final poll = Poll.fromJson(message['poll']);
+      setState(() {
+        _activePoll = poll;
+        // ✅ Auto-show poll panel for everyone
+        _showPollPanel = true;
+      });
+      break;
+      
+    case 'poll_vote':
+      if (widget.isTeacher && _activePoll != null) {
+        final optionIndex = message['optionIndex'] as int;
+        final participantId = message['participantId'] as String;
+        
+        setState(() {
+          _activePoll!.participantVotes[participantId] = optionIndex;
+          _activePoll!.votes[optionIndex.toString()] = 
+              (_activePoll!.votes[optionIndex.toString()] ?? 0) + 1;
+        });
+      }
+      break;
   }
 }
 
 
-
-Future<void> _stopRecording() async {
-  if (!widget.isTeacher || _recordingId == null) return;
-  
-  try {
-    setState(() => _isRecording = false);
-    _showNotification('Saving recording...', backgroundColor: Colors.orange);
-    
-    if (kIsWeb) {
-      // ✅ Web: Get blob from recording
-      await _stopWebRecording();
-    } else {
-      // ✅ Mobile: Get file path
-      await _stopMobileRecording();
-    }
-    
-    _recordingId = null;
-    
-  } catch (e) {
-    debugPrint('Stop recording error: $e');
-    setState(() => _isRecording = false);
-    _showNotification('Failed to save recording: $e', backgroundColor: Colors.red);
-    _recordingId = null;
-  }
-}
-
-// Mobile recording stop
-Future<void> _stopMobileRecording() async {
-  final filePath = await FlutterScreenRecording.stopRecordScreen;
-  
-  if (filePath != null && filePath.isNotEmpty) {
-    final file = File(filePath);
-    await _uploadRecording(file);
-  }
-}
-
-// Web recording stop
-Future<void> _stopWebRecording() async {
-  // Web returns a blob URL
-  final blobUrl = await FlutterScreenRecording.stopRecordScreen;
-  
-  if (blobUrl != null && blobUrl.isNotEmpty) {
-    debugPrint('Blob URL: $blobUrl');
-    
-    // Convert blob to bytes
-    final response = await http.get(Uri.parse(blobUrl));
-    final bytes = response.bodyBytes;
-    
-    // Create temp file
-    final tempDir = Directory.systemTemp;
-    final tempFile = File('${tempDir.path}/recording_${DateTime.now().millisecondsSinceEpoch}.webm');
-    await tempFile.writeAsBytes(bytes);
-    
-    await _uploadRecording(tempFile);
-  }
-}
-
-// Upload to Supabase
-Future<void> _uploadRecording(File file) async {
-  if (!await file.exists()) {
-    throw Exception('Recording file not found');
-  }
-  
-  final fileSize = await file.length();
-  debugPrint('File size: $fileSize bytes');
-  
-  if (fileSize == 0) {
-    throw Exception('Recording file is empty');
-  }
-  
-  final extension = kIsWeb ? 'webm' : 'mp4';
-  final fileName = 'lesson_${widget.lessonId}_${DateTime.now().millisecondsSinceEpoch}.$extension';
-  
-  _showNotification('Uploading...', backgroundColor: Colors.orange);
-  
-  // Upload to Supabase Storage
-  await Supabase.instance.client.storage
-    .from('recordings')
-    .upload(fileName, file);
-  
-  final url = Supabase.instance.client.storage
-    .from('recordings')
-    .getPublicUrl(fileName);
-  
-  // Get duration
-  final recording = await Supabase.instance.client
-    .from('lesson_recordings')
-    .select('started_at')
-    .eq('id', _recordingId!)
-    .single();
-  
-  final startedAt = recording['started_at'] != null 
-      ? DateTime.parse(recording['started_at'] as String)
-      : DateTime.now();
-  final duration = DateTime.now().difference(startedAt).inSeconds;
-  
-  // Update database
-  await Supabase.instance.client
-    .from('lesson_recordings')
-    .update({
-      'status': 'completed',
-      'ended_at': DateTime.now().toIso8601String(),
-      'recording_url': url,
-      'duration_seconds': duration,
-    })
-    .eq('id', _recordingId!);
-  
-  _showNotification('Recording saved ✅', backgroundColor: Colors.green);
-  
-  // Clean up
-  try { await file.delete(); } catch (_) {}
-}
-Future<void> _toggleRecording() async {
-  if (_isRecording) {
-    await _stopRecording();
-  } else {
-    await _startRecording();
-  }
-}
 
 
 void _showNotification(String message, {Color backgroundColor = Colors.blueAccent}) {
@@ -694,7 +666,7 @@ void _startControlsTimer() {
 void _setupDataListener() {
   final dataListener = _room.createListener();
   
-  dataListener.on<DataReceivedEvent>((event) {
+  dataListener.on<DataReceivedEvent>((event) async {
     try {
       final data = event.data is Uint8List 
           ? event.data as Uint8List 
@@ -704,32 +676,64 @@ void _setupDataListener() {
       
       debugPrint('📱 Received message: ${message['type']}');
       
+      // ✅ Handle poll messages for EVERYONE (before teacher-only check)
+      if (message['type'] == 'poll_update' || message['type'] == 'poll_vote') {
+        _handlePollMessage(message);
+        return;
+      }
+      // Handle poll closed
+if (message['type'] == 'poll_closed') {
+  if (!widget.isTeacher) {
+    setState(() {
+      _activePoll?.isActive = false;
+      _showPollPanel = false; // Hide for students too
+    });
+  }
+  return;
+}
+
+// Handle mute request from teacher
+if (message['type'] == 'mute_request') {
+  if (!widget.isTeacher && message['participantId'] == _room.localParticipant?.identity) {
+    await _room.localParticipant?.setMicrophoneEnabled(false);
+    setState(() => _isMuted = true);
+    _showNotification('Teacher requested you to mute', backgroundColor: Colors.orange);
+  }
+  return;
+}
+
+// Handle mute all request
+if (message['type'] == 'mute_all_request') {
+  if (!widget.isTeacher) {
+    await _room.localParticipant?.setMicrophoneEnabled(false);
+    setState(() => _isMuted = true);
+    _showNotification('Teacher muted all students', backgroundColor: Colors.orange);
+  }
+  return;
+}
+      
       // Handle hand raise events
       if (message['type'] == 'hand_raise') {
         _handleHandRaise(message);
         return;
       }
       
-      // ✅ Handle individual hand lowered
-      if (message['type'] == 'hand_lowered') {
-        final targetId = message['participantId'] as String?;
-        if (!widget.isTeacher && targetId == _room.localParticipant?.identity) {
+      // Handle hand lowered
+      if (message['type'] == 'hand_lowered' && !widget.isTeacher) {
+        if (message['participantId'] == _room.localParticipant?.identity) {
           setState(() => _handRaised = false);
           _showNotification('Teacher lowered your hand', backgroundColor: Colors.orange);
         }
         return;
       }
       
-      // ✅ Handle all hands lowered
-      if (message['type'] == 'hand_all_lowered') {
-        if (!widget.isTeacher) {
-          setState(() => _handRaised = false);
-          _showNotification('Teacher lowered all hands', backgroundColor: Colors.orange);
-        }
+      // Handle all hands lowered
+      if (message['type'] == 'hand_all_lowered' && !widget.isTeacher) {
+        setState(() => _handRaised = false);
         return;
       }
       
-      // Skip rest if teacher
+      // ✅ Skip rest if teacher
       if (widget.isTeacher) return;
       
       // Handle whiteboard toggle
@@ -754,7 +758,6 @@ void _setupDataListener() {
   
   debugPrint('👂 Data listener ready');
 }
-
 
   void _onParticipantConnected(Participant participant) {
   // Try to get metadata from the new participant
@@ -977,83 +980,58 @@ Widget build(BuildContext context) {
     );
   }
 
-  // Fullscreen with hidden controls
   if (_isFullScreen && !_showControls) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF121212),
-      body: SafeArea(
-        child: Stack(
-          children: [
-            Column(
-              children: [
-                Expanded(
-                  child: _buildMainContentArea(),
-                ),
-              ],
-            ),
-            // In the Stack of the build method (both normal and fullscreen)
-if (_isRecording)
-  Positioned(
-    top: 8,
-    right: 16,
-    child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: Colors.red.withOpacity(0.8),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.red.withOpacity(0.3),
-            blurRadius: 8,
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
+  return Scaffold(
+    backgroundColor: const Color(0xFF121212),
+    body: SafeArea(
+      child: Stack(
         children: [
-          // Pulsing dot
-          _PulsingDot(),
-          const SizedBox(width: 6),
-          const Text(
-            'Recording',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
+          Column(
+            children: [
+              Expanded(
+                child: _buildMainContentArea(),
+              ),
+            ],
+          ),
+          // ✅ Poll panel in fullscreen
+          if (_showPollPanel && _activePoll != null)
+            Positioned(
+              top: 60,
+              right: 16,
+              child: Material(
+                elevation: 8,
+                borderRadius: BorderRadius.circular(16),
+                child: PollResultCard(
+                  poll: _activePoll!,
+                  showVoteButton: !widget.isTeacher && _activePoll!.isActive,
+                  onVote: (index) => _vote(index),
+                  onClose: widget.isTeacher ? _closePoll : null,
+                ),
+              ),
+            ),
+          // Notification overlay
+          if (_notificationMessage != null)
+            _buildNotificationOverlay(),
+          // Tap area
+          Positioned(
+            bottom: 0, left: 0, right: 0, height: 50,
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: _onScreenTap,
+              child: Container(
+                color: Colors.white.withOpacity(0.05),
+                child: const Center(
+                  child: Text('👆 Tap here to show controls',
+                      style: TextStyle(color: Colors.white54, fontSize: 11)),
+                ),
+              ),
             ),
           ),
         ],
       ),
     ),
-  ),
-            // ✅ Notification overlay for fullscreen
-            if (_notificationMessage != null)
-              _buildNotificationOverlay(),
-            // Tap area
-            Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              height: 50,
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTap: _onScreenTap,
-                child: Container(
-                  color: Colors.white.withOpacity(0.05),
-                  child: const Center(
-                    child: Text(
-                      '👆 Tap here to show controls',
-                      style: TextStyle(color: Colors.white54, fontSize: 11),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  );
+}
 
   // Normal mode with AppBar and controls
   return GestureDetector(
@@ -1078,41 +1056,7 @@ if (_isRecording)
                   _buildControlBar(),
               ],
             ),
-            // In the Stack of the build method (both normal and fullscreen)
-if (_isRecording)
-  Positioned(
-    top: 8,
-    right: 16,
-    child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: Colors.red.withOpacity(0.8),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.red.withOpacity(0.3),
-            blurRadius: 8,
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Pulsing dot
-          _PulsingDot(),
-          const SizedBox(width: 6),
-          const Text(
-            'Recording',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
-      ),
-    ),
-  ),
+ 
             // PiP video
             if (_showWhiteboard && _mainFocusParticipant != null)
               Positioned(
@@ -1143,6 +1087,34 @@ if (_isRecording)
                   child: _buildRaisedHandsPanel(),
                 ),
               ),
+              // Poll panel - ✅ ADD THIS
+if (_showPollPanel && _activePoll != null)
+  Positioned(
+    top: 60,
+    right: 16,
+    child: Material(
+      elevation: 8,
+      borderRadius: BorderRadius.circular(16),
+      child: PollResultCard(
+        poll: _activePoll!,
+        showVoteButton: !widget.isTeacher && _activePoll!.isActive,
+        onVote: (index) => _vote(index),
+        onClose: widget.isTeacher ? _closePoll : null, 
+      ),
+    ),
+  ),
+
+  // Participants panel
+if (_showParticipants)
+  Positioned(
+    top: 60,
+    right: 16,
+    child: Material(
+      elevation: 8,
+      borderRadius: BorderRadius.circular(16),
+      child: _buildParticipantsPanel(),
+    ),
+  ),
           ],
         ),
       ),
@@ -1323,37 +1295,7 @@ PreferredSizeWidget _buildAppBar() {
         ),
       ),
       // Recording indicator
-if (_isRecording)
-  Container(
-    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-    margin: const EdgeInsets.only(right: 4),
-    decoration: BoxDecoration(
-      color: Colors.red.withOpacity(0.2),
-      borderRadius: BorderRadius.circular(8),
-    ),
-    child: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 8,
-          height: 8,
-          decoration: const BoxDecoration(
-            color: Colors.red,
-            shape: BoxShape.circle,
-          ),
-        ),
-        const SizedBox(width: 4),
-        const Text(
-          'REC',
-          style: TextStyle(
-            color: Colors.red,
-            fontSize: 11,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      ],
-    ),
-  ),
+
       // Participant count
       Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -1401,6 +1343,12 @@ if (widget.isTeacher && _raisedHands.isNotEmpty)
         ],
       ),
     ),
+  ),
+  if (widget.isTeacher)
+  IconButton(
+    icon: const Icon(Icons.poll, color: Colors.white70),
+    onPressed: _openCreatePoll,  // ✅ Use the method
+    tooltip: 'Create Poll',
   ),
     ],
   );
@@ -1476,11 +1424,35 @@ Widget _buildRaisedHandsPanel() {
                         overflow: TextOverflow.ellipsis,
                       )
                     : const Text('Raised hand', style: TextStyle(color: Colors.white38, fontSize: 11)),
-                trailing: IconButton(
-                  icon: const Icon(Icons.check, color: Colors.green, size: 20),
-                  onPressed: () => _lowerHand(participantId),
-                  tooltip: 'Lower hand',
-                ),
+                trailing: Row(
+  mainAxisSize: MainAxisSize.min,
+  children: [
+    // Mute request button (teacher only)
+    if (widget.isTeacher)
+      IconButton(
+        icon: Icon(
+          _allParticipants.firstWhere((p) => p.identity == participantId).isMicrophoneEnabled()
+              ? Icons.mic 
+              : Icons.mic_off,
+          color: _allParticipants.firstWhere((p) => p.identity == participantId).isMicrophoneEnabled()
+              ? Colors.green 
+              : Colors.red,
+          size: 18,
+        ),
+        onPressed: () {
+          final name = _participantNames[participantId] ?? 'Student';
+          _requestMute(participantId, name);
+        },
+        tooltip: 'Mute',
+      ),
+    // Lower hand
+    IconButton(
+      icon: const Icon(Icons.check, color: Colors.green, size: 20),
+      onPressed: () => _lowerHand(participantId),
+      tooltip: 'Lower hand',
+    ),
+  ],
+),
               );
             },
           ),
@@ -1598,6 +1570,115 @@ Widget _buildControlBar() {
   );
 }
 
+Widget _buildParticipantsPanel() {
+  return Container(
+    width: 280,
+    decoration: BoxDecoration(
+      color: const Color(0xFF1A1A1A),
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: Colors.grey.withOpacity(0.3)),
+    ),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Header
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.grey.withOpacity(0.1),
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(16),
+              topRight: Radius.circular(16),
+            ),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.people, color: Colors.white, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                'Participants (${_allParticipants.length})',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              const Spacer(),
+              if (widget.isTeacher)
+                GestureDetector(
+                  onTap: _requestMuteAll,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Text('Mute All', style: TextStyle(color: Colors.orange, fontSize: 11)),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        // List
+        Flexible(
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: _allParticipants.length,
+            itemBuilder: (context, index) {
+              final participant = _allParticipants[index];
+              final name = _getParticipantName(participant);
+              final identity = participant.identity ?? '';
+              final isMicOn = participant.isMicrophoneEnabled();
+              final hasHandRaised = _raisedHands.contains(identity);
+              final role = _getParticipantRole(participant);
+              
+              return ListTile(
+                leading: CircleAvatar(
+                  radius: 16,
+                  backgroundColor: role == 'teacher' 
+                      ? Colors.red.withOpacity(0.2) 
+                      : Colors.blueAccent.withOpacity(0.2),
+                  child: Text(
+                    name[0].toUpperCase(),
+                    style: TextStyle(
+                      color: role == 'teacher' ? Colors.red : Colors.blueAccent,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+                title: Row(
+                  children: [
+                    Expanded(
+                      child: Text(name, style: const TextStyle(color: Colors.white, fontSize: 14)),
+                    ),
+                    if (hasHandRaised)
+                      const Icon(Icons.pan_tool, color: Colors.amber, size: 14),
+                  ],
+                ),
+                subtitle: Text(
+                  role == 'teacher' ? 'Teacher' : 'Student',
+                  style: const TextStyle(color: Colors.white38, fontSize: 11),
+                ),
+                trailing: widget.isTeacher && participant != _room.localParticipant
+                    ? IconButton(
+                        icon: Icon(
+                          isMicOn ? Icons.mic : Icons.mic_off,
+                          color: isMicOn ? Colors.green : Colors.red,
+                          size: 18,
+                        ),
+                        onPressed: () => _requestMute(identity, name),
+                        tooltip: isMicOn ? 'Request Mute' : 'Muted',
+                      )
+                    : Icon(
+                        isMicOn ? Icons.mic : Icons.mic_off,
+                        color: isMicOn ? Colors.green : Colors.red,
+                        size: 18,
+                      ),
+              );
+            },
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
 Widget _buildDesktopControlBar() {
   return Row(
     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -1628,15 +1709,7 @@ Widget _buildDesktopControlBar() {
             setState(() {});
           },
         ),
-        if (widget.isTeacher)
-  _buildControlButton(
-    icon: _isRecordingStarting 
-        ? Icons.circle 
-        : _isRecording ? Icons.fiber_manual_record : Icons.fiber_manual_record_outlined,
-    color: _isRecording ? Colors.red : const Color(0xFF2D2D2D),
-    iconColor: _isRecording ? Colors.red : Colors.white70,
-    onPressed: _isRecordingStarting ? () {} : () => _toggleRecording(),  // ✅ Empty function instead of null
-  ),
+        
       _buildControlButton(
         icon: _showWhiteboard ? Icons.videocam : Icons.draw,
         color: _showWhiteboard ? Colors.blueAccent : const Color(0xFF2D2D2D),
@@ -1663,6 +1736,38 @@ if (!widget.isTeacher)
     color: _handRaised ? Colors.amber : const Color(0xFF2D2D2D),
     iconColor: _handRaised ? Colors.white : Colors.white70,
     onPressed: _toggleHandRaise,
+  ),
+  // People/Participants button
+_buildControlButton(
+  icon: Icons.people,
+  color: _showParticipants ? Colors.blueAccent : const Color(0xFF2D2D2D),
+  iconColor: _showParticipants ? Colors.white : Colors.white70,
+  onPressed: () => setState(() {
+    _showParticipants = !_showParticipants;
+    if (_showParticipants) _showRaisedHands = false;
+  }),
+),
+ // Poll button (teacher) - handles both create and view
+if (widget.isTeacher)
+  _buildControlButton(
+    icon: _activePoll != null 
+        ? (_activePoll!.isActive ? Icons.bar_chart : Icons.poll) 
+        : Icons.poll_outlined,
+    color: _activePoll != null && _activePoll!.isActive 
+        ? Colors.green 
+        : const Color(0xFF2D2D2D),
+    iconColor: _activePoll != null && _activePoll!.isActive 
+        ? Colors.white 
+        : Colors.white70,
+    onPressed: () {
+      if (_activePoll != null) {
+        // Toggle poll results view
+        setState(() => _showPollPanel = !_showPollPanel);
+      } else {
+        // Open create poll dialog
+        _openCreatePoll();
+      }
+    },
   ),
       _buildControlButton(
         icon: _isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
@@ -1772,12 +1877,17 @@ Widget _buildMoreButton() {
         case 'raisedhands':
           setState(() => _showRaisedHands = !_showRaisedHands);
           break;
-        case 'recording':  // ✅ Add recording
-          _toggleRecording();
-          break;
-        case 'test_upload':
-  _testStorageUpload();
+        case 'mute_all':
+  _requestMuteAll();
+  break;
+        case 'create_poll':
+  _openCreatePoll();  // ✅ Instead of setState
+  break;
+case 'view_poll':
+  setState(() => _showPollPanel = !_showPollPanel);
   break;  
+        
+        
       }
     },
     itemBuilder: (context) => [
@@ -1799,16 +1909,7 @@ Widget _buildMoreButton() {
           ],
         ),
       ),
-      PopupMenuItem(
-  value: 'test_upload',
-  child: Row(
-    children: [
-      const Icon(Icons.upload, color: Colors.white70, size: 20),
-      const SizedBox(width: 12),
-      const Text('Test Upload', style: TextStyle(color: Colors.white70, fontSize: 14)),
-    ],
-  ),
-),
+      
       
       // Hand Raise (students only)
       if (!widget.isTeacher)
@@ -1829,6 +1930,30 @@ Widget _buildMoreButton() {
             ],
           ),
         ),
+
+        // Mute All / Unmute All (teacher only)
+if (widget.isTeacher)
+  PopupMenuItem(
+    value: 'mute_all',
+    child: Row(
+      children: [
+        Icon(
+          _allParticipants.every((p) => _mutedParticipants.contains(p.identity)) 
+              ? Icons.mic 
+              : Icons.mic_off,
+          color: Colors.white70,
+          size: 20,
+        ),
+        const SizedBox(width: 12),
+        Text(
+          _allParticipants.every((p) => p == _room.localParticipant || _mutedParticipants.contains(p.identity))
+              ? 'Allow Talking'
+              : 'Mute All',
+          style: const TextStyle(color: Colors.white70, fontSize: 14),
+        ),
+      ],
+    ),
+  ),
       
       // Raised Hands (teacher only)
       if (widget.isTeacher && _raisedHands.isNotEmpty)
@@ -1863,25 +1988,39 @@ Widget _buildMoreButton() {
           ),
         ),
       
-      // ✅ Recording (teacher only)
-      if (widget.isTeacher)
-        PopupMenuItem(
-          value: 'recording',
-          child: Row(
-            children: [
-              Icon(
-                _isRecording ? Icons.fiber_manual_record : Icons.fiber_manual_record_outlined,
-                color: _isRecording ? Colors.red : Colors.white70,
-                size: 20,
-              ),
-              const SizedBox(width: 12),
-              Text(
-                _isRecording ? 'Stop Recording' : 'Start Recording',
-                style: TextStyle(color: _isRecording ? Colors.red : Colors.white70, fontSize: 14),
-              ),
-            ],
-          ),
+      // Create Poll (teacher only)
+if (widget.isTeacher)
+  PopupMenuItem(
+    value: 'create_poll',
+    child: Row(
+      children: [
+        const Icon(Icons.poll, color: Colors.white70, size: 20),
+        const SizedBox(width: 12),
+        const Text('Create Poll', style: TextStyle(color: Colors.white70, fontSize: 14)),
+      ],
+    ),
+  ),
+
+// View Poll
+if (_activePoll != null)
+  PopupMenuItem(
+    value: 'view_poll',
+    child: Row(
+      children: [
+        Icon(
+          _showPollPanel ? Icons.poll : Icons.poll_outlined,
+          color: _activePoll!.isActive ? Colors.green : Colors.white70,
+          size: 20,
         ),
+        const SizedBox(width: 12),
+        Text(
+          _showPollPanel ? 'Hide Poll' : 'View Poll',
+          style: const TextStyle(color: Colors.white70, fontSize: 14),
+        ),
+      ],
+    ),
+  ),
+      
       
       // Fullscreen
       PopupMenuItem(
@@ -1948,9 +2087,10 @@ Widget _buildControlButton({
 }
   
 
-  Widget _buildIdentityOverlay(Participant? participant, {required bool isMain}) {
+ Widget _buildIdentityOverlay(Participant? participant, {required bool isMain}) {
   final name = participant != null ? _getParticipantName(participant) : 'Connecting...';
   final isMicMuted = !(participant?.isMicrophoneEnabled() ?? true);
+  final identity = participant?.identity ?? '';
 
   return Positioned(
     bottom: 8, left: 8, right: 8,
@@ -1965,10 +2105,7 @@ Widget _buildControlButton({
           ),
           child: Text(
             name, 
-            style: TextStyle(
-              color: Colors.white, 
-              fontSize: isMain ? 12 : 10,
-            ),
+            style: TextStyle(color: Colors.white, fontSize: isMain ? 12 : 10),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
@@ -1980,7 +2117,13 @@ Widget _buildControlButton({
               color: Colors.red.withOpacity(0.8), 
               shape: BoxShape.circle,
             ),
-            child: const Icon(Icons.mic_off, color: Colors.white, size: 12),
+            child: Icon(
+              _mutedParticipants.contains(identity) 
+                  ? Icons.voice_over_off  // Teacher muted them
+                  : Icons.mic_off,        // Self-muted
+              color: Colors.white, 
+              size: 12,
+            ),
           ),
       ],
     ),
