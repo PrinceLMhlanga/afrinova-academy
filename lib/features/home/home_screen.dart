@@ -588,7 +588,7 @@ Container(
       LayoutBuilder(
         builder: (context, constraints) {
           final isSmallScreen = constraints.maxWidth < 400;
-          final crossAxisCount = isSmallScreen ? 3 : 4;
+          final crossAxisCount = isSmallScreen ? 2 : 4;
           final spacing = 12.0;
           final totalSpacing = spacing * (crossAxisCount - 1);
           final cardWidth = (constraints.maxWidth - totalSpacing) / crossAxisCount;
