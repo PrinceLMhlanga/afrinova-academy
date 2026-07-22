@@ -458,7 +458,7 @@ double _uploadProgress = 0;
     }
   }
 
-  void _showAttachmentSheet() {
+ void _showAttachmentSheet() {
   showModalBottomSheet(
     context: context,
     backgroundColor: Colors.transparent,
@@ -481,14 +481,7 @@ double _uploadProgress = 0;
           ),
           const SizedBox(height: 20),
           
-          // Recent images (like WhatsApp)
-          _buildRecentImages(),
-          
-          const SizedBox(height: 16),
-          const Divider(),
-          const SizedBox(height: 8),
-          
-          // Attachment options
+          // Attachment options only
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
@@ -537,41 +530,69 @@ double _uploadProgress = 0;
   );
 }
 
-Widget _buildRecentImages() {
-  return Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      const Text('Recent', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-      const SizedBox(height: 12),
-      SizedBox(
-        height: 100,
-        child: ListView.builder(
-          scrollDirection: Axis.horizontal,
-          itemCount: 6, // Placeholder
-          itemBuilder: (context, index) {
-            return GestureDetector(
-              onTap: () {
-                Navigator.pop(context);
-                // Open gallery to select
-                _pickFromGallery();
-              },
-              child: Container(
-                width: 80,
-                height: 100,
-                margin: const EdgeInsets.only(right: 8),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade200,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(Icons.photo_library, color: Colors.grey.shade400, size: 30),
-              ),
-            );
-          },
-        ),
-      ),
-    ],
-  );
+Future<void> _uploadAndSend({
+  required Uint8List bytes,
+  required String fileName,
+  required String fileType,
+  String caption = '',
+}) async {
+  if (_sessionId == null || _currentUserId == null) return;
+  
+  final tempId = 'temp_${DateTime.now().millisecondsSinceEpoch}';
+  
+  // Add optimistic message
+  setState(() {
+    _messages.add({
+      'id': tempId,
+      'sender_id': _currentUserId,
+      'content': caption.isNotEmpty ? caption : (fileType == 'image' ? '📷 Image' : '📎 $fileName'),
+      'message_type': fileType,
+      'file_url': null,
+      'file_name': fileName,
+      'sender_name': _userNames[_currentUserId] ?? 'You',
+      'created_at': DateTime.now().toIso8601String(),
+      '_uploading': true,
+    });
+  });
+  _scrollToBottom();
+  
+  try {
+    final filePath = 'tutoring/$_sessionId/${DateTime.now().millisecondsSinceEpoch}_$fileName';
+    
+    await _supabase.storage
+        .from('tutoring')
+        .uploadBinary(filePath, bytes);  // ✅ Upload bytes directly
+    
+    final url = _supabase.storage.from('tutoring').getPublicUrl(filePath);
+    
+    if (mounted) {
+      setState(() {
+        _messages.removeWhere((m) => m['id'] == tempId);
+      });
+    }
+    
+    final content = caption.isNotEmpty ? caption : (fileType == 'image' ? '📷 Image' : '📎 $fileName');
+    
+    await _sendFileMessage(
+      content: content,
+      fileUrl: url,
+      fileName: fileName,
+      messageType: fileType,
+    );
+    
+  } catch (e) {
+    debugPrint('Upload error: $e');
+    if (mounted) {
+      setState(() {
+        _messages.removeWhere((m) => m['id'] == tempId);
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Upload failed: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
 }
+
 
 Widget _attachmentOption({
   required IconData icon,
@@ -610,12 +631,8 @@ Future<void> _pickFromCamera() async {
     );
     if (image == null) return;
     
-    setState(() {
-      _pendingFile = File(image.path);
-      _pendingFileName = image.name;
-      _pendingFileType = 'image';
-      _pendingFileUrl = null;
-    });
+    final bytes = await image.readAsBytes();
+    _showCaptionDialog(bytes, image.name, 'image');
   } catch (e) {
     debugPrint('Camera error: $e');
   }
@@ -631,12 +648,8 @@ Future<void> _pickFromGallery() async {
     );
     if (image == null) return;
     
-    setState(() {
-      _pendingFile = File(image.path);
-      _pendingFileName = image.name;
-      _pendingFileType = 'image';
-      _pendingFileUrl = null;
-    });
+    final bytes = await image.readAsBytes();
+    _showCaptionDialog(bytes, image.name, 'image');
   } catch (e) {
     debugPrint('Gallery error: $e');
   }
@@ -651,17 +664,135 @@ Future<void> _pickDocument() async {
     if (result == null || result.files.isEmpty) return;
     
     final file = result.files.first;
-    setState(() {
-      _pendingFile = File(file.path!);
-      _pendingFileName = file.name;
-      _pendingFileType = _getFileType(file.name);
-      _pendingFileUrl = null;
-    });
+    final bytes = file.bytes;
+    if (bytes == null) return;
+    
+    _showCaptionDialog(bytes, file.name, _getFileType(file.name));
   } catch (e) {
     debugPrint('Document error: $e');
   }
 }
 
+// Also fix the existing file picker
+Future<void> _pickAndSendFile() async {
+  try {
+    final result = await FilePicker.platform.pickFiles();
+    if (result == null || result.files.isEmpty) return;
+
+    final file = result.files.first;
+    final bytes = file.bytes;
+    if (bytes == null) return;
+    
+    _showCaptionDialog(bytes, file.name, _getFileType(file.name));
+  } catch (e) {
+    debugPrint('File error: $e');
+  }
+}
+
+final TextEditingController _captionController = TextEditingController();
+
+void _showCaptionDialog(Uint8List bytes, String fileName, String fileType) {
+  _captionController.clear();
+  
+  showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.white,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    ),
+    builder: (ctx) => Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(ctx).viewInsets.bottom,
+        left: 16, right: 16, top: 16,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // File preview
+          Row(
+            children: [
+              Container(
+                width: 50,
+                height: 50,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: fileType == 'image'
+                    ? ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Image.memory(bytes, fit: BoxFit.cover),  // ✅ Use memory
+                      )
+                    : Icon(
+                        fileType == 'pdf' ? Icons.picture_as_pdf : Icons.insert_drive_file,
+                        color: const Color(0xFF075E54),
+                        size: 28,
+                      ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  fileName,
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          
+          // Caption input
+          TextField(
+            controller: _captionController,
+            autofocus: true,
+            decoration: InputDecoration(
+              hintText: 'Add a caption...',
+              hintStyle: const TextStyle(color: Colors.grey, fontSize: 14),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none,
+              ),
+              filled: true,
+              fillColor: Colors.grey.shade100,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            ),
+            maxLines: 3,
+            minLines: 1,
+          ),
+          const SizedBox(height: 12),
+          
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                _uploadAndSend(
+                  bytes: bytes,
+                  fileName: fileName,
+                  fileType: fileType,
+                  caption: _captionController.text.trim(),
+                );
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF075E54),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+              child: const Text('Send', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
+      ),
+    ),
+  );
+}
 Future<void> _uploadAndSendFile({String caption = ''}) async {
   if (_pendingFile == null || _sessionId == null) return;
   
@@ -769,43 +900,7 @@ void _cancelAttachment() {
     }
   }
 
-  Future<void> _pickAndSendFile() async {
-    try {
-      final result = await FilePicker.platform.pickFiles();
-      if (result == null || result.files.isEmpty) return;
-
-      final file = result.files.first;
-      final bytes = file.bytes ?? await File(file.path!).readAsBytes();
-      final fileName = file.name;
-      final filePath = 'tutoring/${_sessionId}/${DateTime.now().millisecondsSinceEpoch}_$fileName';
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Uploading file...'), duration: Duration(seconds: 2)),
-        );
-      }
-
-      await _supabase.storage
-          .from('tutoring')
-          .uploadBinary(filePath, Uint8List.fromList(bytes));
-
-      final url = _supabase.storage.from('tutoring').getPublicUrl(filePath);
-
-      await _sendFileMessage(
-        content: '📎 $fileName',
-        fileUrl: url,
-        fileName: fileName,
-        messageType: _getFileType(fileName),
-      );
-    } catch (e) {
-      debugPrint('❌ Error uploading file: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error uploading file: $e')),
-        );
-      }
-    }
-  }
+  
 
   Future<void> _pickAndSendImage() async {
     try {
