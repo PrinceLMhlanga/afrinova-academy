@@ -63,6 +63,14 @@ Timer? _typingTimer;
 StreamSubscription? _sessionSubscription;
 bool _whiteboardVisible = false;
 
+// Attachment state
+File? _pendingFile;
+String? _pendingFileName;
+String? _pendingFileType; // 'image', 'pdf', 'document', 'video'
+String? _pendingFileUrl;
+bool _isUploading = false;
+double _uploadProgress = 0;
+
   @override
   void initState() {
     super.initState();
@@ -98,41 +106,44 @@ bool _whiteboardVisible = false;
     try {
       // Get or create session
       _sessionId = await _tutoringService.getOrCreateSession(
-  studentId: widget.studentId,
-  teacherId: widget.teacherId,
-  subjectId: widget.subjectId,
-);
+        studentId: widget.studentId,
+        teacherId: widget.teacherId,
+        subjectId: widget.subjectId,
+      );
       debugPrint('📝 Session ID: $_sessionId');
-      _sessionState = await _supabase
-    .from('tutoring_sessions')
-    .select('*')
-    .eq('id', _sessionId!)
-    .single();
 
-      // Load initial whiteboard state
-final session = await _supabase
-    .from('tutoring_sessions')
-    .select('whiteboard_visible')
-    .eq('id', _sessionId!)
-    .single();
+      // ✅ Get session state once (combine both queries)
+      final session = await _supabase
+          .from('tutoring_sessions')
+          .select('*')
+          .eq('id', _sessionId!)
+          .single();
 
-if (session['whiteboard_visible'] == true && mounted) {
-  setState(() => _showWhiteboard = true);
-}
+      debugPrint('📊 Session state: ${session}');
+      
+      // Store session state for whiteboard
+      _sessionState = session;
+      
+      // Set initial whiteboard visibility
+      if (session['whiteboard_visible'] == true && mounted) {
+        setState(() => _showWhiteboard = true);
+        debugPrint('📡 Whiteboard is visible from previous state');
+      }
 
-_subscribeToSession();
+      // ✅ Set up session subscription FIRST (before other operations)
+      _subscribeToSession();
 
       // Load resources
       _resources = await _tutoringService.loadResources(_sessionId!);
       debugPrint('📚 Loaded ${_resources.length} resources');
 
-      // ✅ Load user profiles first
+      // Load user profiles
       await _loadUserProfiles();
 
-      // ✅ Load existing messages into local state
+      // Load existing messages
       await _loadExistingMessages();
 
-      // ✅ Set up real-time subscription for new messages
+      // Set up real-time subscription for new messages
       _setupRealtimeSubscription();
 
     } catch (e) {
@@ -145,48 +156,84 @@ _subscribeToSession();
   }
 
   void _subscribeToSession() {
-  _sessionSubscription?.cancel();
-  
-  _sessionSubscription = _supabase
-      .from('tutoring_sessions')
-      .stream(primaryKey: ['id'])
-      .eq('id', _sessionId!)
-      .listen((data) {
-    if (data.isNotEmpty && mounted) {
-      final session = data.first;
-      final showBoard = session['whiteboard_visible'] == true;
-      
-      debugPrint('📡 Session update: whiteboard_visible=$showBoard');
-      
-      if (showBoard != _showWhiteboard) {
-        setState(() => _showWhiteboard = showBoard);
-      }
-    }
-  });
-}
-
-// In _TutoringScreenState, fix the _toggleWhiteboard method:
-
-void _toggleWhiteboard() async {
-  final newState = !_showWhiteboard;
-  
-  // ✅ Update local state immediately
-  setState(() => _showWhiteboard = newState);
-  
-  // ✅ Update database - this triggers the stream for other users
-  try {
-    await _supabase
+    _sessionSubscription?.cancel();
+    
+    debugPrint('📡 Subscribing to session changes for session: $_sessionId');
+    
+    _sessionSubscription = _supabase
         .from('tutoring_sessions')
-        .update({'whiteboard_visible': newState})
-        .eq('id', _sessionId!);
-    debugPrint('🔄 Whiteboard toggled to: $newState');
-  } catch (e) {
-    debugPrint('❌ Failed to toggle whiteboard: $e');
-    // Revert local state if update fails
-    setState(() => _showWhiteboard = !newState);
+        .stream(primaryKey: ['id'])
+        .eq('id', _sessionId!)
+        .listen(
+          (data) {
+            debugPrint('📡 STREAM: Received ${data.length} session rows');
+            
+            if (!mounted) {
+              debugPrint('📡 STREAM: Widget not mounted, ignoring');
+              return;
+            }
+            
+            if (data.isEmpty) {
+              debugPrint('📡 STREAM: Empty data, ignoring');
+              return;
+            }
+            
+            final session = data.first;
+            final showBoard = session['whiteboard_visible'] == true;
+            
+            debugPrint('📡 STREAM: whiteboard_visible=$showBoard, current=$_showWhiteboard');
+            
+            // Update whiteboard visibility if changed
+            if (showBoard != _showWhiteboard) {
+              debugPrint('📡 STREAM: Updating whiteboard to $showBoard');
+              setState(() {
+                _showWhiteboard = showBoard;
+                _sessionState = session;
+              });
+            }
+          },
+          onError: (error) {
+            debugPrint('❌ Session stream error: $error');
+          },
+        );
+    
+    debugPrint('📡 Session subscription created successfully');
   }
-}
 
+  void _toggleWhiteboard() async {
+    final newState = !_showWhiteboard;
+    debugPrint('🔄 Toggling whiteboard to: $newState (session: $_sessionId)');
+    
+    // ✅ Update local state immediately
+    setState(() => _showWhiteboard = newState);
+    
+    // ✅ Update database
+    try {
+      final result = await _supabase
+          .from('tutoring_sessions')
+          .update({'whiteboard_visible': newState})
+          .eq('id', _sessionId!)
+          .select();
+      
+      debugPrint('✅ Whiteboard toggle saved: ${result}');
+      
+      // ✅ Verify the update took effect
+      final verify = await _supabase
+          .from('tutoring_sessions')
+          .select('whiteboard_visible')
+          .eq('id', _sessionId!)
+          .single();
+      
+      debugPrint('🔍 Database verification: whiteboard_visible=${verify['whiteboard_visible']}');
+      
+    } catch (e) {
+      debugPrint('❌ Failed to toggle whiteboard: $e');
+      // Revert if save fails
+      setState(() => _showWhiteboard = !newState);
+    }
+  }
+
+  
 
   Future<void> _loadUserProfiles() async {
     try {
@@ -410,6 +457,264 @@ void _toggleWhiteboard() async {
       }
     }
   }
+
+  void _showAttachmentSheet() {
+  showModalBottomSheet(
+    context: context,
+    backgroundColor: Colors.transparent,
+    builder: (ctx) => Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Handle
+          Container(
+            width: 40, height: 4,
+            decoration: BoxDecoration(
+              color: Colors.grey.shade300,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 20),
+          
+          // Recent images (like WhatsApp)
+          _buildRecentImages(),
+          
+          const SizedBox(height: 16),
+          const Divider(),
+          const SizedBox(height: 8),
+          
+          // Attachment options
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              _attachmentOption(
+                icon: Icons.camera_alt_rounded,
+                label: 'Camera',
+                color: Colors.red,
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pickFromCamera();
+                },
+              ),
+              _attachmentOption(
+                icon: Icons.image_rounded,
+                label: 'Gallery',
+                color: Colors.purple,
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pickFromGallery();
+                },
+              ),
+              _attachmentOption(
+                icon: Icons.description_rounded,
+                label: 'Document',
+                color: Colors.blue,
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pickDocument();
+                },
+              ),
+              _attachmentOption(
+                icon: Icons.folder_rounded,
+                label: 'Browse',
+                color: Colors.orange,
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pickAndSendFile();
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+        ],
+      ),
+    ),
+  );
+}
+
+Widget _buildRecentImages() {
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      const Text('Recent', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+      const SizedBox(height: 12),
+      SizedBox(
+        height: 100,
+        child: ListView.builder(
+          scrollDirection: Axis.horizontal,
+          itemCount: 6, // Placeholder
+          itemBuilder: (context, index) {
+            return GestureDetector(
+              onTap: () {
+                Navigator.pop(context);
+                // Open gallery to select
+                _pickFromGallery();
+              },
+              child: Container(
+                width: 80,
+                height: 100,
+                margin: const EdgeInsets.only(right: 8),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade200,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(Icons.photo_library, color: Colors.grey.shade400, size: 30),
+              ),
+            );
+          },
+        ),
+      ),
+    ],
+  );
+}
+
+Widget _attachmentOption({
+  required IconData icon,
+  required String label,
+  required Color color,
+  required VoidCallback onTap,
+}) {
+  return GestureDetector(
+    onTap: onTap,
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 60,
+          height: 60,
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.1),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(icon, color: color, size: 28),
+        ),
+        const SizedBox(height: 8),
+        Text(label, style: const TextStyle(fontSize: 12, color: Colors.black87)),
+      ],
+    ),
+  );
+}
+
+Future<void> _pickFromCamera() async {
+  try {
+    final XFile? image = await _imagePicker.pickImage(
+      source: ImageSource.camera,
+      maxWidth: 1920,
+      maxHeight: 1920,
+      imageQuality: 85,
+    );
+    if (image == null) return;
+    
+    setState(() {
+      _pendingFile = File(image.path);
+      _pendingFileName = image.name;
+      _pendingFileType = 'image';
+      _pendingFileUrl = null;
+    });
+  } catch (e) {
+    debugPrint('Camera error: $e');
+  }
+}
+
+Future<void> _pickFromGallery() async {
+  try {
+    final XFile? image = await _imagePicker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 1920,
+      maxHeight: 1920,
+      imageQuality: 85,
+    );
+    if (image == null) return;
+    
+    setState(() {
+      _pendingFile = File(image.path);
+      _pendingFileName = image.name;
+      _pendingFileType = 'image';
+      _pendingFileUrl = null;
+    });
+  } catch (e) {
+    debugPrint('Gallery error: $e');
+  }
+}
+
+Future<void> _pickDocument() async {
+  try {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx'],
+    );
+    if (result == null || result.files.isEmpty) return;
+    
+    final file = result.files.first;
+    setState(() {
+      _pendingFile = File(file.path!);
+      _pendingFileName = file.name;
+      _pendingFileType = _getFileType(file.name);
+      _pendingFileUrl = null;
+    });
+  } catch (e) {
+    debugPrint('Document error: $e');
+  }
+}
+
+Future<void> _uploadAndSendFile({String caption = ''}) async {
+  if (_pendingFile == null || _sessionId == null) return;
+  
+  setState(() => _isUploading = true);
+  
+  try {
+    final bytes = await _pendingFile!.readAsBytes();
+    final fileName = _pendingFileName ?? 'file';
+    final filePath = 'tutoring/$_sessionId/${DateTime.now().millisecondsSinceEpoch}_$fileName';
+    
+    await _supabase.storage
+        .from('tutoring')
+        .uploadBinary(filePath, Uint8List.fromList(bytes));
+    
+    final url = _supabase.storage.from('tutoring').getPublicUrl(filePath);
+    
+    // Send message with file
+    await _sendFileMessage(
+      content: caption.isNotEmpty ? caption : (_pendingFileType == 'image' ? '📷 Image' : '📎 $fileName'),
+      fileUrl: url,
+      fileName: fileName,
+      messageType: _pendingFileType ?? 'file',
+    );
+    
+    // Clear pending
+    setState(() {
+      _pendingFile = null;
+      _pendingFileName = null;
+      _pendingFileType = null;
+      _pendingFileUrl = null;
+      _isUploading = false;
+    });
+    
+  } catch (e) {
+    debugPrint('Upload error: $e');
+    setState(() => _isUploading = false);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Upload failed: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+}
+
+void _cancelAttachment() {
+  setState(() {
+    _pendingFile = null;
+    _pendingFileName = null;
+    _pendingFileType = null;
+    _pendingFileUrl = null;
+    _isUploading = false;
+  });
+}
 
   Future<void> _sendFileMessage({
     required String content,
@@ -666,7 +971,8 @@ void _toggleWhiteboard() async {
     _focusNode.dispose();
     _timer?.cancel();
     _realtimeSubscription?.cancel();
-     _sessionSubscription?.cancel();
+    _sessionSubscription?.cancel();
+    _typingTimer?.cancel();
     super.dispose();
   }
 
@@ -764,12 +1070,101 @@ void _toggleWhiteboard() async {
                 // In the Column, after the Expanded chat area:
 
                 
-                // Message input
-                _buildMessageInput(),
+                // Pending attachment preview
+if (_pendingFile != null)
+  _buildAttachmentPreview(),
+
+// Message input
+_buildMessageInput(),
               ],
             ),
     );
   }
+
+  Widget _buildAttachmentPreview() {
+  return Container(
+    padding: const EdgeInsets.all(12),
+    color: Colors.grey.shade100,
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // File preview
+        Container(
+          width: 60,
+          height: 60,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Colors.grey.shade300),
+          ),
+          child: _pendingFileType == 'image'
+              ? ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Image.file(_pendingFile!, fit: BoxFit.cover),
+                )
+              : Icon(
+                  _pendingFileType == 'pdf' ? Icons.picture_as_pdf : Icons.insert_drive_file,
+                  color: const Color(0xFF075E54),
+                  size: 30,
+                ),
+        ),
+        const SizedBox(width: 12),
+        
+        // Caption input
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _pendingFileName ?? 'File',
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      autofocus: true,
+                      decoration: const InputDecoration(
+                        hintText: 'Add a caption...',
+                        hintStyle: TextStyle(fontSize: 13, color: Colors.grey),
+                        border: InputBorder.none,
+                        isDense: true,
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                      style: const TextStyle(fontSize: 13),
+                      onSubmitted: (caption) => _uploadAndSendFile(caption: caption),
+                    ),
+                  ),
+                  if (_isUploading)
+                    const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        
+        // Send button
+        IconButton(
+          icon: const Icon(Icons.send, color: Color(0xFF075E54), size: 22),
+          onPressed: _isUploading ? null : () => _uploadAndSendFile(),
+        ),
+        
+        // Cancel
+        IconButton(
+          icon: const Icon(Icons.close, color: Colors.red, size: 20),
+          onPressed: _cancelAttachment,
+        ),
+      ],
+    ),
+  );
+}
 
   PreferredSizeWidget _buildAppBar() {
     return AppBar(
@@ -935,16 +1330,12 @@ void _toggleWhiteboard() async {
       child: SafeArea(
         child: Row(
           children: [
-            IconButton(
-              icon: const Icon(Icons.attach_file, color: Color(0xFF075E54)),
-              onPressed: _isSending ? null : _pickAndSendFile,
-              iconSize: 22,
-            ),
-            IconButton(
-              icon: const Icon(Icons.image, color: Color(0xFF075E54)),
-              onPressed: _isSending ? null : _pickAndSendImage,
-              iconSize: 22,
-            ),
+            // With this:
+IconButton(
+  icon: const Icon(Icons.attach_file, color: Color(0xFF075E54)),
+  onPressed: _showAttachmentSheet,
+  iconSize: 22,
+),
             Expanded(
               child: Card(
                 shape: RoundedRectangleBorder(
@@ -1171,37 +1562,83 @@ class ChatBubble extends StatelessWidget {
     );
   }
 
+  void _showFullImage(BuildContext context, String url) {
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => Scaffold(
+        backgroundColor: Colors.black,
+        appBar: AppBar(
+          backgroundColor: Colors.black,
+          foregroundColor: Colors.white,
+          elevation: 0,
+        ),
+        body: Center(
+          child: Hero(
+            tag: url,
+            child: InteractiveViewer(
+              child: Image.network(url),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
   Widget _buildMessageContent(BuildContext context) {
     switch (messageType) {
       case 'image':
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (fileUrl != null)
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Image.network(
-                  fileUrl!,
-                  fit: BoxFit.cover,
-                  width: 200,
-                  height: 150,
-                  errorBuilder: (context, error, stackTrace) {
-                    return Container(
-                      width: 200,
-                      height: 150,
-                      color: Colors.grey.shade200,
-                      child: const Icon(Icons.error_outline, size: 40, color: Colors.grey),
-                    );
-                  },
-                ),
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      if (fileUrl != null)
+        GestureDetector(
+          onTap: () => _showFullImage(context, fileUrl!), // Open full screen
+          child: Hero(
+            tag: fileUrl!,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.network(
+                fileUrl!,
+                fit: BoxFit.cover,
+                width: 200,
+                height: 150,
+                loadingBuilder: (context, child, loadingProgress) {
+                  if (loadingProgress == null) return child;
+                  return Container(
+                    width: 200,
+                    height: 150,
+                    color: Colors.grey.shade200,
+                    child: Center(
+                      child: CircularProgressIndicator(
+                        value: loadingProgress.expectedTotalBytes != null
+                            ? loadingProgress.cumulativeBytesLoaded / loadingProgress.expectedTotalBytes!
+                            : null,
+                        strokeWidth: 2,
+                      ),
+                    ),
+                  );
+                },
+                errorBuilder: (context, error, stackTrace) {
+                  return Container(
+                    width: 200,
+                    height: 150,
+                    color: Colors.grey.shade200,
+                    child: const Icon(Icons.error_outline, size: 40, color: Colors.grey),
+                  );
+                },
               ),
-            if (content.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(content, style: const TextStyle(fontSize: 16, color: Colors.black87)),
-              ),
-          ],
-        );
+            ),
+          ),
+        ),
+      if (content.isNotEmpty && content != '📷 Image')
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(content, style: TextStyle(fontSize: 16, color: isMe ? Colors.black87 : Colors.black87)),
+        ),
+    ],
+  );
       case 'file':
       case 'pdf':
       case 'document':

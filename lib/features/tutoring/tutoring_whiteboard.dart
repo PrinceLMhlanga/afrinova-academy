@@ -1,4 +1,3 @@
-
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -24,19 +23,19 @@ class _TutoringWhiteboardState extends State<TutoringWhiteboard> {
   final List<_StrokeData> _strokes = [];
   _StrokeData? _currentStroke;
   
-  // Tool state
   late Color _color;
   late double _strokeWidth;
   late bool _isEraser;
   
-  // Track deleted stroke IDs
   final Set<String> _deletedStrokeIds = {};
   DateTime? _lastClearTime;
   StreamSubscription? _strokeSubscription;
   StreamSubscription? _stateSubscription;
 
-  // Canvas size
   Size _canvasSize = Size.zero;
+  
+  // ✅ Track if we're on web for eraser mode
+  bool get _isWeb => identical(0, 0.0);
 
   @override
   void initState() {
@@ -130,15 +129,12 @@ class _TutoringWhiteboardState extends State<TutoringWhiteboard> {
 
   Future<void> _loadStrokes() async {
     try {
-      debugPrint('📥 Loading strokes from DB...');
       final data = await _supabase
           .from('tutoring_whiteboard')
           .select('*')
           .eq('session_id', widget.sessionId)
           .order('created_at', ascending: true);
 
-      debugPrint('📥 Found ${data.length} strokes');
-      
       if (!mounted) return;
       
       setState(() {
@@ -148,8 +144,6 @@ class _TutoringWhiteboardState extends State<TutoringWhiteboard> {
           _strokes.add(_parseStroke(row));
         }
       });
-      
-      debugPrint('📥 Loaded ${_strokes.length} strokes into local state');
     } catch (e) {
       debugPrint('❌ Load strokes error: $e');
     }
@@ -157,28 +151,22 @@ class _TutoringWhiteboardState extends State<TutoringWhiteboard> {
 
   _StrokeData _parseStroke(Map<String, dynamic> row) {
     final strokeData = row['stroke_data'] as Map<String, dynamic>;
-    
-    // ✅ Get points - they could be absolute or relative
     final pointsData = strokeData['points'] as List;
     final List<Offset> points;
     
     if (pointsData.isNotEmpty) {
       final firstPoint = pointsData.first as Map<String, dynamic>;
-      
-      // ✅ Check if points are relative (0.0-1.0 range) or absolute
       final firstX = (firstPoint['x'] as num).toDouble();
       final firstY = (firstPoint['y'] as num).toDouble();
       
       if (firstX <= 1.0 && firstY <= 1.0 && _canvasSize.width > 0) {
         // Relative coordinates - convert to absolute
-        debugPrint('🔄 Converting relative coordinates to absolute (canvas: ${_canvasSize.width}x${_canvasSize.height})');
         points = pointsData.map((p) {
           final px = (p['x'] as num).toDouble();
           final py = (p['y'] as num).toDouble();
           return Offset(px * _canvasSize.width, py * _canvasSize.height);
         }).toList();
       } else {
-        // Absolute coordinates - use as-is
         points = pointsData.map((p) {
           return Offset(
             (p['x'] as num).toDouble(),
@@ -207,6 +195,8 @@ class _TutoringWhiteboardState extends State<TutoringWhiteboard> {
   void _subscribeToStrokes() {
     _strokeSubscription?.cancel();
     
+    debugPrint('🎧 SUBSCRIBE: Setting up stroke stream for session: ${widget.sessionId}');
+    
     _strokeSubscription = _supabase
         .from('tutoring_whiteboard')
         .stream(primaryKey: ['id'])
@@ -215,23 +205,34 @@ class _TutoringWhiteboardState extends State<TutoringWhiteboard> {
         .listen((data) {
       if (!mounted) return;
       
-      debugPrint('🎧 Stream received ${data.length} strokes');
+      debugPrint('🎧 STREAM: Received ${data.length} strokes');
       
-      // Filter out deleted strokes
-      final filteredData = data.where((row) {
-        return !_deletedStrokeIds.contains(row['id'] as String);
-      }).toList();
+      // ✅ CRITICAL: If data is empty, someone cleared the whiteboard
+      if (data.isEmpty) {
+        debugPrint('🎧 STREAM: Database is empty - whiteboard was cleared!');
+        setState(() {
+          _strokes.clear();
+          _deletedStrokeIds.clear(); // ✅ Clear the filter set too
+          _lastClearTime = null;     // ✅ Reset clear time
+        });
+        return;
+      }
       
-      // If recently cleared, only accept new strokes
+      // ✅ If WE just cleared (within last 3 seconds), only accept NEW strokes
       if (_lastClearTime != null) {
         final timeSinceClear = DateTime.now().difference(_lastClearTime!);
         
         if (timeSinceClear.inSeconds < 3) {
-          final newStrokesOnly = filteredData.where((row) {
+          debugPrint('🎧 STREAM: We cleared ${timeSinceClear.inSeconds}s ago - filtering old strokes');
+          
+          // Only keep strokes created AFTER our clear
+          final newStrokesOnly = data.where((row) {
             final createdAt = row['created_at'] as String?;
             if (createdAt == null) return false;
             return DateTime.parse(createdAt).isAfter(_lastClearTime!);
           }).toList();
+          
+          debugPrint('🎧 STREAM: ${newStrokesOnly.length} new strokes, ${data.length - newStrokesOnly.length} filtered out');
           
           setState(() {
             _strokes.clear();
@@ -243,14 +244,17 @@ class _TutoringWhiteboardState extends State<TutoringWhiteboard> {
         }
       }
       
-      // Empty data means someone cleared
-      if (data.isEmpty) {
-        setState(() {
-          _strokes.clear();
-          _deletedStrokeIds.clear();
-        });
-        return;
-      }
+      // ✅ Normal update - filter out any deleted stroke IDs (for cached data)
+      final filteredData = data.where((row) {
+        final id = row['id'] as String;
+        final isDeleted = _deletedStrokeIds.contains(id);
+        if (isDeleted) {
+          debugPrint('🎧 STREAM: Filtering out deleted stroke: $id');
+        }
+        return !isDeleted;
+      }).toList();
+      
+      debugPrint('🎧 STREAM: Updating to ${filteredData.length} strokes (${data.length - filteredData.length} filtered)');
       
       setState(() {
         _strokes.clear();
@@ -259,17 +263,15 @@ class _TutoringWhiteboardState extends State<TutoringWhiteboard> {
         }
       });
       
-      debugPrint('🎧 Local state now has ${_strokes.length} strokes');
+    }, onError: (error) {
+      debugPrint('🎧 STREAM ERROR: $error');
     });
-  }
-
+}
   Future<void> _saveStroke(List<Offset> points) async {
     try {
       _lastClearTime = null;
       
-      debugPrint('💾 Saving stroke with ${points.length} points, canvas: ${_canvasSize.width}x${_canvasSize.height}');
-      
-      // ✅ Store points as relative coordinates (0.0 to 1.0)
+      // Store points as relative coordinates
       final relativePoints = _canvasSize.width > 0 && _canvasSize.height > 0
           ? points.map((p) => {
               'x': p.dx / _canvasSize.width,
@@ -277,24 +279,20 @@ class _TutoringWhiteboardState extends State<TutoringWhiteboard> {
             }).toList()
           : points.map((p) => {'x': p.dx, 'y': p.dy}).toList();
       
-      // ✅ Add to local state IMMEDIATELY with absolute points
+      // Add to local state immediately
       final tempId = 'temp_${DateTime.now().millisecondsSinceEpoch}';
       final newStroke = _StrokeData(
         id: tempId,
-        points: List.from(points), // Absolute points for rendering
-        color: _color,
+        points: List.from(points),
+        color: _isEraser ? Colors.white : _color,
         width: _isEraser ? 20.0 : _strokeWidth,
         isEraser: _isEraser,
         createdAt: DateTime.now(),
       );
       
-      setState(() {
-        _strokes.add(newStroke);
-      });
+      setState(() => _strokes.add(newStroke));
       
-      debugPrint('💾 Added to local state with temp ID: $tempId');
-      
-      // Save to database with relative points
+      // Save to database
       final result = await _supabase
           .from('tutoring_whiteboard')
           .insert({
@@ -311,15 +309,13 @@ class _TutoringWhiteboardState extends State<TutoringWhiteboard> {
           .single();
 
       final realId = result['id'] as String;
-      debugPrint('💾 Saved to DB with real ID: $realId');
       
-      // Update temp ID with real ID (keep absolute points)
       setState(() {
         final index = _strokes.indexWhere((s) => s.id == tempId);
         if (index != -1) {
           _strokes[index] = _StrokeData(
             id: realId,
-            points: newStroke.points, // Keep absolute points
+            points: newStroke.points,
             color: newStroke.color,
             width: newStroke.width,
             isEraser: newStroke.isEraser,
@@ -327,12 +323,9 @@ class _TutoringWhiteboardState extends State<TutoringWhiteboard> {
           );
         }
       });
-      
     } catch (e) {
       debugPrint('❌ Save stroke error: $e');
-      setState(() {
-        _strokes.removeWhere((s) => s.id?.startsWith('temp_') == true);
-      });
+      setState(() => _strokes.removeWhere((s) => s.id?.startsWith('temp_') == true));
     }
   }
 
@@ -344,19 +337,26 @@ class _TutoringWhiteboardState extends State<TutoringWhiteboard> {
       _deletedStrokeIds.addAll(idsToDelete);
       _lastClearTime = DateTime.now();
       
+      // ✅ Clear local state immediately
       setState(() {
         _strokes.clear();
         _currentStroke = null;
       });
       
-      await _supabase
+      // ✅ Delete from database - this triggers stream for other user
+      final deleted = await _supabase
           .from('tutoring_whiteboard')
           .delete()
-          .eq('session_id', widget.sessionId);
+          .eq('session_id', widget.sessionId)
+          .select();
       
-      debugPrint('🧹 Deleted from DB, verifying...');
+      debugPrint('🧹 Deleted ${deleted.length} strokes from database');
       
-      await Future.delayed(const Duration(milliseconds: 300));
+      // ✅ Force the stream to send empty update for other users
+      // This ensures the other user's stream receives empty data
+      
+      // Verify database is empty
+      await Future.delayed(const Duration(milliseconds: 500));
       final remaining = await _supabase
           .from('tutoring_whiteboard')
           .select('id')
@@ -374,6 +374,7 @@ class _TutoringWhiteboardState extends State<TutoringWhiteboard> {
       
       debugPrint('✅ Clear complete');
       
+      // Reset clear time after 3 seconds
       Future.delayed(const Duration(seconds: 3), () {
         if (mounted) _lastClearTime = null;
       });
@@ -460,15 +461,11 @@ class _TutoringWhiteboardState extends State<TutoringWhiteboard> {
         Expanded(
           child: LayoutBuilder(
             builder: (context, constraints) {
-              // ✅ Update canvas size when layout changes
               final newSize = Size(constraints.maxWidth, constraints.maxHeight);
               if (newSize != _canvasSize && newSize.width > 0 && newSize.height > 0) {
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   if (mounted && _canvasSize != newSize) {
-                    setState(() {
-                      _canvasSize = newSize;
-                    });
-                    // ✅ Reload strokes with new canvas size for proper coordinate conversion
+                    setState(() => _canvasSize = newSize);
                     _loadStrokes();
                   }
                 });
@@ -485,7 +482,7 @@ class _TutoringWhiteboardState extends State<TutoringWhiteboard> {
                     setState(() {
                       _currentStroke = _StrokeData(
                         points: [pos],
-                        color: _color,
+                        color: _isEraser ? Colors.white : _color,
                         width: _isEraser ? 20.0 : _strokeWidth,
                         isEraser: _isEraser,
                       );
@@ -512,6 +509,7 @@ class _TutoringWhiteboardState extends State<TutoringWhiteboard> {
                       painter: _WhiteboardPainter(
                         strokes: _strokes,
                         currentStroke: _currentStroke,
+                        isWeb: _isWeb,
                       ),
                       size: Size.infinite,
                     ),
@@ -651,21 +649,23 @@ class _StrokeData {
 class _WhiteboardPainter extends CustomPainter {
   final List<_StrokeData> strokes;
   final _StrokeData? currentStroke;
+  final bool isWeb;
 
   _WhiteboardPainter({
     required this.strokes,
     this.currentStroke,
+    this.isWeb = false,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     for (final stroke in strokes) {
-      _drawStroke(canvas, stroke);
+      _drawStroke(canvas, stroke, size);
     }
-    if (currentStroke != null) _drawStroke(canvas, currentStroke!);
+    if (currentStroke != null) _drawStroke(canvas, currentStroke!, size);
   }
 
-  void _drawStroke(Canvas canvas, _StrokeData stroke) {
+  void _drawStroke(Canvas canvas, _StrokeData stroke, Size size) {
     if (stroke.points.isEmpty) return;
 
     final paint = Paint()
@@ -674,10 +674,11 @@ class _WhiteboardPainter extends CustomPainter {
       ..style = PaintingStyle.stroke;
 
     if (stroke.isEraser) {
+      // ✅ Cross-platform eraser: paint white instead of using BlendMode.clear
       paint
-        ..blendMode = BlendMode.clear
-        ..color = Colors.transparent
-        ..strokeWidth = stroke.width;
+        ..color = Colors.white
+        ..strokeWidth = stroke.width
+        ..blendMode = BlendMode.srcOver;
     } else {
       paint
         ..color = stroke.color
