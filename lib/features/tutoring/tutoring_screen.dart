@@ -14,6 +14,7 @@ import 'tutoring_whiteboard.dart';
 import '../pdf/pdf_viewer_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'markable_image_viewer.dart';
+import '../../core/call_sound_service.dart';
 
 class TutoringScreen extends StatefulWidget {
   final String teacherId;
@@ -205,6 +206,7 @@ if (callStatus != null) {
   debugPrint('📞 DEBUG: _iAmCaller=$_iAmCaller, _isCallIncoming=$_isCallIncoming');
   
   if (callStatus == 'accepted' && callRoom != null) {
+    CallSoundService.stop();
     // Accepted - join call
     if (_iAmCaller) {
       _iAmCaller = false;
@@ -221,6 +223,7 @@ if (callStatus != null) {
     _joinCall(callRoom);
   } 
   else if (callStatus == 'declined') {
+    CallSoundService.stop();
     // Declined
     if (_iAmCaller) {
       _iAmCaller = false;
@@ -239,6 +242,7 @@ if (callStatus != null) {
     });
   } 
   else if (callStatus == 'ended') {
+    CallSoundService.stop();
     // ✅ Ended - close BOTH sides
     if (_iAmCaller) {
       _iAmCaller = false;
@@ -723,6 +727,7 @@ Future<void> _startCall() async {
       .eq('id', _sessionId!);
   
   // Show calling screen
+  CallSoundService.startCalling();
   _showCallingScreen(roomName);
 }
 
@@ -759,6 +764,7 @@ void _showCallingScreen(String roomName) {
 }
 
 void _showIncomingCallDialog() {
+  CallSoundService.startRinging();
   showDialog(
     context: context,
     barrierDismissible: false,
@@ -773,10 +779,11 @@ void _showIncomingCallDialog() {
         await _declineCall();
       },
     ),
-  );
+  ).then((_) => CallSoundService.stop());
 }
 
 Future<void> _acceptCall() async {
+  CallSoundService.stop();
   if (_sessionId == null || _callRoomName == null) return;
   
   await _supabase
@@ -788,6 +795,7 @@ Future<void> _acceptCall() async {
 }
 
 Future<void> _declineCall() async {
+  CallSoundService.stop();
   if (_sessionId == null) return;
   
   debugPrint('📞 Declining call...');
@@ -808,6 +816,7 @@ Future<void> _declineCall() async {
 }
 
 Future<void> _cancelCall() async {
+  CallSoundService.stop(); 
   if (_sessionId == null) return;
   
   _iAmCaller = false;
