@@ -72,6 +72,7 @@ bool _isInCall = false;
 bool _isCallIncoming = false;
 String? _callRoomName;
 StreamSubscription? _callSubscription;
+bool _iAmCaller = false;
 
 // Attachment state
 File? _pendingFile;
@@ -80,6 +81,10 @@ String? _pendingFileType; // 'image', 'pdf', 'document', 'video'
 String? _pendingFileUrl;
 bool _isUploading = false;
 double _uploadProgress = 0;
+
+Timer? _callTimeoutTimer;
+
+BuildContext? _callingDialogContext;
 
   @override
   void initState() {
@@ -143,7 +148,7 @@ double _uploadProgress = 0;
       // ✅ Set up session subscription FIRST (before other operations)
       _subscribeToSession();
 
-      _setupCallListener();
+      
 
       // Load resources
       _resources = await _tutoringService.loadResources(_sessionId!);
@@ -168,49 +173,108 @@ double _uploadProgress = 0;
   }
 
   void _subscribeToSession() {
-    _sessionSubscription?.cancel();
-    
-    debugPrint('📡 Subscribing to session changes for session: $_sessionId');
-    
-    _sessionSubscription = _supabase
-        .from('tutoring_sessions')
-        .stream(primaryKey: ['id'])
-        .eq('id', _sessionId!)
-        .listen(
-          (data) {
-            debugPrint('📡 STREAM: Received ${data.length} session rows');
-            
-            if (!mounted) {
-              debugPrint('📡 STREAM: Widget not mounted, ignoring');
-              return;
-            }
-            
-            if (data.isEmpty) {
-              debugPrint('📡 STREAM: Empty data, ignoring');
-              return;
-            }
-            
-            final session = data.first;
-            final showBoard = session['whiteboard_visible'] == true;
-            
-            debugPrint('📡 STREAM: whiteboard_visible=$showBoard, current=$_showWhiteboard');
-            
-            // Update whiteboard visibility if changed
-            if (showBoard != _showWhiteboard) {
-              debugPrint('📡 STREAM: Updating whiteboard to $showBoard');
-              setState(() {
-                _showWhiteboard = showBoard;
-                _sessionState = session;
-              });
-            }
-          },
-          onError: (error) {
-            debugPrint('❌ Session stream error: $error');
-          },
-        );
-    
-    debugPrint('📡 Session subscription created successfully');
+  _sessionSubscription?.cancel();
+  
+  _sessionSubscription = _supabase
+      .from('tutoring_sessions')
+      .stream(primaryKey: ['id'])
+      .eq('id', _sessionId!)
+      .listen(
+        (data) {
+          if (!mounted || data.isEmpty) return;
+          
+          final session = data.first;
+          
+          // ✅ Handle whiteboard visibility
+          final showBoard = session['whiteboard_visible'] == true;
+          if (showBoard != _showWhiteboard) {
+            setState(() {
+              _showWhiteboard = showBoard;
+              _sessionState = session;
+            });
+          }
+          
+          // ✅ Handle call events
+          // ✅ Handle call events
+final callStatus = session['call_status'] as String?;
+final callRoom = session['call_room'] as String?;
+final callInitiator = session['call_initiator'] as String?;
+
+if (callStatus != null) {
+  debugPrint('📞 Call event: status=$callStatus, room=$callRoom, initiator=$callInitiator');
+  debugPrint('📞 DEBUG: _iAmCaller=$_iAmCaller, _isCallIncoming=$_isCallIncoming');
+  
+  if (callStatus == 'accepted' && callRoom != null) {
+    // Accepted - join call
+    if (_iAmCaller) {
+      _iAmCaller = false;
+      if (_callingDialogContext != null) {
+        Navigator.of(_callingDialogContext!).pop();
+        _callingDialogContext = null;
+      }
+    }
+    if (_isCallIncoming) {
+      if (Navigator.of(context).canPop()) {
+        Navigator.of(context).pop();
+      }
+    }
+    _joinCall(callRoom);
+  } 
+  else if (callStatus == 'declined') {
+    // Declined
+    if (_iAmCaller) {
+      _iAmCaller = false;
+      if (_callingDialogContext != null) {
+        Navigator.of(_callingDialogContext!).pop();
+        _callingDialogContext = null;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Call declined'), backgroundColor: Colors.orange),
+      );
+    }
+    setState(() {
+      _isInCall = false;
+      _isCallIncoming = false;
+      _callRoomName = null;
+    });
+  } 
+  else if (callStatus == 'ended') {
+    // ✅ Ended - close BOTH sides
+    if (_iAmCaller) {
+      _iAmCaller = false;
+      if (_callingDialogContext != null) {
+        Navigator.of(_callingDialogContext!).pop();
+        _callingDialogContext = null;
+      }
+    }
+    if (_isCallIncoming) {
+      if (Navigator.of(context).canPop()) {
+        Navigator.of(context).pop();
+      }
+    }
+    setState(() {
+      _isInCall = false;
+      _isCallIncoming = false;
+      _callRoomName = null;
+    });
+  } 
+  else if (callStatus == 'ringing' && !_iAmCaller) {
+    // Incoming call
+    if (!_isCallIncoming) {
+      setState(() {
+        _isCallIncoming = true;
+        _callRoomName = callRoom;
+      });
+      _showIncomingCallDialog();
+    }
   }
+}
+        },
+        onError: (error) {
+          debugPrint('❌ Session stream error: $error');
+        },
+      );
+}
 
   void _toggleWhiteboard() async {
     final newState = !_showWhiteboard;
@@ -625,53 +689,16 @@ Future<void> _submitQuizAnswer(String messageId, int selectedOption, Map<String,
   
 }
 
-void _setupCallListener() {
-  _callSubscription?.cancel();
-  _callSubscription = _supabase
-      .from('tutoring_sessions')
-      .stream(primaryKey: ['id'])
-      .eq('id', _sessionId!)
-      .listen((data) {
-    if (data.isNotEmpty && mounted) {
-      final session = data.first;
-      _handleCallEvent(session);
-    }
+
+void _dismissCallDialog() {
+  setState(() {
+    _isInCall = false;
+    _isCallIncoming = false;
+    _callRoomName = null;
   });
 }
 
-void _handleCallEvent(Map<String, dynamic> session) {
-  final callStatus = session['call_status'] as String?;
-  final callRoom = session['call_room'] as String?;
-  final callInitiator = session['call_initiator'] as String?;
-  
-  if (callStatus == null) return;
-  
-  if (callStatus == 'ringing' && callInitiator != _currentUserId) {
-    // Incoming call
-    if (!_isCallIncoming) {
-      setState(() {
-        _isCallIncoming = true;
-        _callRoomName = callRoom;
-      });
-      _showIncomingCallDialog();
-    }
-  } else if (callStatus == 'accepted' && callRoom != null) {
-    // Call accepted - both enter
-    if (_isInCall || _isCallIncoming) {
-      _joinCall(callRoom);
-    }
-  } else if (callStatus == 'declined' || callStatus == 'ended') {
-    setState(() {
-      _isInCall = false;
-      _isCallIncoming = false;
-      _callRoomName = null;
-    });
-    // Pop any dialogs
-    if (Navigator.of(context).canPop()) {
-      Navigator.of(context).popUntil((route) => route.isFirst);
-    }
-  }
-}
+
 
 Future<void> _startCall() async {
   if (_sessionId == null) return;
@@ -680,6 +707,7 @@ Future<void> _startCall() async {
   
   setState(() {
     _isInCall = true;
+    _iAmCaller = true; 
     _callRoomName = roomName;
   });
   
@@ -702,16 +730,32 @@ void _showCallingScreen(String roomName) {
   showDialog(
     context: context,
     barrierDismissible: false,
-    builder: (ctx) => _CallingDialog(
-      callerName: widget.teacherName,
-      roomName: roomName,
-      onCancel: _cancelCall,
-      onConnected: () {
-        Navigator.pop(ctx);
-        _joinCall(roomName);
-      },
-    ),
-  );
+    builder: (ctx) {
+      _callingDialogContext = ctx;
+      
+      // ✅ Auto-cancel after 30 seconds
+      _callTimeoutTimer?.cancel();
+      _callTimeoutTimer = Timer(const Duration(seconds: 30), () {
+        if (_callingDialogContext != null) {
+          Navigator.of(_callingDialogContext!).pop();
+          _callingDialogContext = null;
+        }
+        _cancelCall();
+      });
+      
+      return _CallingDialog(
+        callerName: widget.teacherName,
+        onCancel: () {
+          _callTimeoutTimer?.cancel();
+          Navigator.pop(ctx);
+          _cancelCall();
+        },
+      );
+    },
+  ).then((_) {
+    _callTimeoutTimer?.cancel();
+    _callingDialogContext = null;
+  });
 }
 
 void _showIncomingCallDialog() {
@@ -721,11 +765,11 @@ void _showIncomingCallDialog() {
     builder: (ctx) => _IncomingCallDialog(
       callerName: widget.teacherName,
       onAccept: () async {
-        Navigator.pop(ctx);
+        Navigator.pop(ctx); // ✅ Only dismiss dialog
         await _acceptCall();
       },
       onDecline: () async {
-        Navigator.pop(ctx);
+        Navigator.pop(ctx); // ✅ Only dismiss dialog
         await _declineCall();
       },
     ),
@@ -746,11 +790,14 @@ Future<void> _acceptCall() async {
 Future<void> _declineCall() async {
   if (_sessionId == null) return;
   
+  debugPrint('📞 Declining call...');
+  
   await _supabase
       .from('tutoring_sessions')
       .update({
         'call_status': 'declined',
         'call_room': null,
+        'call_initiator': null,
       })
       .eq('id', _sessionId!);
   
@@ -763,18 +810,16 @@ Future<void> _declineCall() async {
 Future<void> _cancelCall() async {
   if (_sessionId == null) return;
   
+  _iAmCaller = false;
+  
   await _supabase
       .from('tutoring_sessions')
       .update({
         'call_status': 'ended',
         'call_room': null,
+        'call_initiator': null,
       })
       .eq('id', _sessionId!);
-  
-  setState(() {
-    _isInCall = false;
-    _callRoomName = null;
-  });
 }
 
 void _joinCall(String roomName) {
@@ -1358,6 +1403,7 @@ void _cancelAttachment() {
     _realtimeSubscription?.cancel();
     _sessionSubscription?.cancel();
     _typingTimer?.cancel();
+    _callTimeoutTimer?.cancel();
     super.dispose();
   }
 
@@ -2957,15 +3003,15 @@ class _QuestionData {
 // ===== CALLING DIALOG =====
 class _CallingDialog extends StatefulWidget {
   final String callerName;
-  final String roomName;
+  
   final VoidCallback onCancel;
-  final VoidCallback onConnected;
+  
 
   const _CallingDialog({
     required this.callerName,
-    required this.roomName,
+    
     required this.onCancel,
-    required this.onConnected,
+    
   });
 
   @override
