@@ -84,6 +84,7 @@ bool _isUploading = false;
 double _uploadProgress = 0;
 
 Timer? _callTimeoutTimer;
+Timer? _saveTimer;
 
 BuildContext? _callingDialogContext;
 
@@ -130,12 +131,14 @@ BuildContext? _callingDialogContext;
 
       // ✅ Get session state once (combine both queries)
       final session = await _supabase
-          .from('tutoring_sessions')
-          .select('*')
-          .eq('id', _sessionId!)
-          .single();
+      .from('tutoring_sessions')
+      .select('*, elapsed_seconds')
+      .eq('id', _sessionId!)
+      .single();
 
       debugPrint('📊 Session state: ${session}');
+      _elapsedSeconds = (session['elapsed_seconds'] as int?) ?? 0;
+
       
       // Store session state for whiteboard
       _sessionState = session;
@@ -199,11 +202,9 @@ BuildContext? _callingDialogContext;
           // ✅ Handle call events
 final callStatus = session['call_status'] as String?;
 final callRoom = session['call_room'] as String?;
-final callInitiator = session['call_initiator'] as String?;
+
 
 if (callStatus != null) {
-  debugPrint('📞 Call event: status=$callStatus, room=$callRoom, initiator=$callInitiator');
-  debugPrint('📞 DEBUG: _iAmCaller=$_iAmCaller, _isCallIncoming=$_isCallIncoming');
   
   if (callStatus == 'accepted' && callRoom != null) {
     CallSoundService.stop();
@@ -475,14 +476,30 @@ if (callStatus != null) {
   }
 
   void _startTimer() {
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (mounted) {
-        setState(() {
-          _elapsedSeconds++;
-        });
-      }
-    });
-  }
+  _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+    if (mounted) {
+      setState(() {
+        _elapsedSeconds++;
+      });
+    }
+  });
+  
+  // ✅ Save to database every 10 seconds
+  _saveTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+    _saveElapsedTime();
+  });
+}
+
+Future<void> _saveElapsedTime() async {
+  if (_sessionId == null) return;
+  if (_currentUserId != widget.teacherId) return;
+  try {
+    await _supabase
+        .from('tutoring_sessions')
+        .update({'elapsed_seconds': _elapsedSeconds})
+        .eq('id', _sessionId!);
+  } catch (_) {}
+}
 
   Future<void> _sendMessage() async {
     final text = _messageController.text.trim();
@@ -1408,7 +1425,9 @@ void _cancelAttachment() {
     _messageController.dispose();
     _scrollController.dispose();
     _focusNode.dispose();
-    _timer?.cancel();
+    _saveElapsedTime();  // ✅ Save immediately on close
+  _saveTimer?.cancel();
+  _timer?.cancel();
     _realtimeSubscription?.cancel();
     _sessionSubscription?.cancel();
     _typingTimer?.cancel();

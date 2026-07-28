@@ -1,3 +1,4 @@
+import 'package:afrinova_academy/widgets/gpt_clone.dart';
 import 'package:flutter/material.dart';
 import '../../core/auth_service.dart';
 import '../auth/welcome_screen.dart';
@@ -18,6 +19,9 @@ import '../account/my_account_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../generated_exams/exam_generator_screen.dart'; // Added import
 import '../tutoring/my_tutors_screen.dart';
+import '../generated_exams/exam_history_screen.dart';
+import '../summaries/my_summaries_screen.dart';
+import '../flashcards/my_flashcards_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -934,7 +938,7 @@ const SizedBox(height: 30),
                         LayoutBuilder(
                           builder: (context, constraints) {
                             final isSmallScreen = constraints.maxWidth < 400;
-                            final crossAxisCount = isSmallScreen ? 2 : 3;
+                            final crossAxisCount = isSmallScreen ? 2 : 4;
                             final spacing = 12.0;
                             final totalSpacing = spacing * (crossAxisCount - 1);
                             final cardWidth = (constraints.maxWidth - totalSpacing) / crossAxisCount;
@@ -982,22 +986,54 @@ const SizedBox(height: 30),
                                 ),
                                 // Premium Content - Placeholder for future
                                 _AnimatedQuickActionCard(
-                                  icon: Icons.star_rounded,
-                                  label: 'Premium Content',
-                                  color: const Color(0xFFFFD700),
-                                  index: 2,
-                                  width: cardWidth,
-                                  isPremium: true,
-                                  onTap: () {
-                                    // Coming soon
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text('Premium Content coming soon! 🚀'),
-                                        backgroundColor: Color(0xFFFF9800),
-                                      ),
-                                    );
-                                  },
-                                ),
+  icon: Icons.history_rounded,
+  label: 'Exam History',
+  color: const Color(0xFFFF9800),
+  index: 2,
+  width: cardWidth,
+  isPremium: true,
+  onTap: () {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const ExamHistoryScreen(),
+      ),
+    );
+  },
+),
+
+_AnimatedQuickActionCard(
+  icon: Icons.style_rounded,
+  label: 'Flashcards',
+  color: Colors.purple,
+  index: 4,
+  width: cardWidth,
+  isPremium: true,
+  onTap: () {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const MyFlashcardsScreen(),
+      ),
+    );
+  },
+),
+_AnimatedQuickActionCard(
+  icon: Icons.summarize_rounded,
+  label: 'Summaries',
+  color: Colors.teal,
+  index: 5,
+  width: cardWidth,
+  isPremium: true,
+  onTap: () {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const MySummariesScreen()),
+    );
+  },
+),
+
+
                               ],
                             );
                           },

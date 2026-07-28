@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/auth_service.dart';
 import '../../widgets/math_renderer.dart';
+import 'package:uuid/uuid.dart';
+import '../../core/ai_service.dart';
+import 'package:gpt_markdown/gpt_markdown.dart';
 
 class StudentExamTakerScreen extends StatefulWidget {
   final List<Map<String, dynamic>> questions;
@@ -24,6 +27,7 @@ class StudentExamTakerScreen extends StatefulWidget {
 
 class _StudentExamTakerScreenState extends State<StudentExamTakerScreen> {
   final AuthService _authService = AuthService();
+  final AIService _aiService = AIService();
   final Map<int, String> _answers = {};
   final Map<int, bool> _flagged = {};
   
@@ -34,10 +38,16 @@ class _StudentExamTakerScreenState extends State<StudentExamTakerScreen> {
   bool _isSubmitting = false;
   bool _showResults = false;
 
+  Map<String, String> _perQuestionFeedback = {};
+
   // Results
   int _score = 0;
   int _totalMarks = 0;
   List<Map<String, dynamic>> _results = [];
+
+  bool _isAnalyzing = false;
+  String _aiFeedback = '';
+  bool _showAIFeedback = false;
 
   @override
   void initState() {
@@ -151,27 +161,10 @@ class _StudentExamTakerScreenState extends State<StudentExamTakerScreen> {
       });
     }
 
-    // Save attempt
-    try {
-      final userId = _authService.currentUserId;
-      if (userId != null) {
-        final totalQuestions = widget.questions.length;
-        final percentage = totalQuestions > 0 ? (correct / totalQuestions * 100) : 0;
+    final examSessionId = const Uuid().v4();
+    await _saveExamHistory(examSessionId);
 
-        await Supabase.instance.client.from('exam_attempts').insert({
-          'student_id': userId,
-          'subject_id': widget.questions.first['subject_id'],
-          'score': correct,
-          'total_marks': totalQuestions,
-          'percentage': percentage,
-          'passed': percentage >= 50,
-          'completed_at': DateTime.now().toIso8601String(),
-          'time_taken_seconds': (widget.timeMinutes * 60) - _remainingSeconds,
-        });
-      }
-    } catch (e) {
-      debugPrint('Error saving attempt: $e');
-    }
+    
 
     setState(() {
       _showResults = true;
@@ -180,8 +173,110 @@ class _StudentExamTakerScreenState extends State<StudentExamTakerScreen> {
       _results = results;
       _isSubmitting = false;
     });
+    _getAIFeedback();
   }
 
+  
+
+  Future<void> _saveExamHistory(String examSessionId) async {
+  final userId = _authService.currentUserId;
+  if (userId == null) return;
+
+  for (int i = 0; i < widget.questions.length; i++) {
+    final question = widget.questions[i];
+    final difficulty = question['difficulty'] as String? ?? 'medium';
+    
+    debugPrint('🔍 Saving Q$i: difficulty=$difficulty');  // ✅ Debug
+
+    await Supabase.instance.client
+        .from('practice_exam_history')
+        .insert({
+          'student_id': userId,
+          'question_id': question['id'],
+          'subject_id': question['subject_id'],
+          'topic_id': question['topic_id'],
+          'level_id': question['level_id'],
+          'selected_answer': _answers[i] ?? '',
+          'correct_answer': (question['correct_answer'] as String?)?.toUpperCase() ?? '',
+          'is_correct': (_answers[i] ?? '').toUpperCase() == (question['correct_answer'] as String?)?.toUpperCase() ?? '',
+          'difficulty': difficulty,  // ✅ Use extracted variable
+          'exam_session_id': examSessionId,
+        });
+  }
+}
+
+Future<void> _getAIFeedback() async {
+  final failedResults = _results
+      .where((r) => r['is_correct'] != true)
+      .toList();
+
+  if (failedResults.isEmpty) return;
+
+  setState(() => _isAnalyzing = true);
+
+  try {
+    final List<Map<String, dynamic>> needsGemini = [];
+    
+    // Check cache for each failed question
+    for (final r in failedResults) {
+      final questionIndex = (r['index'] as int) - 1;
+      final question = widget.questions[questionIndex];
+      final questionId = question['id'] as String;
+      
+      final cached = await Supabase.instance.client
+          .from('exam_ai_feedback')
+          .select('ai_explanation')
+          .eq('question_id', questionId)
+          .maybeSingle();
+      
+      if (cached != null && cached['ai_explanation'] != null) {
+        // Use cached explanation
+        _perQuestionFeedback[questionId] = cached['ai_explanation'] as String;
+      } else {
+        needsGemini.add({
+          'question_text': r['question'],
+          'option_a': r['option_a'],
+          'option_b': r['option_b'],
+          'option_c': r['option_c'],
+          'option_d': r['option_d'],
+          'correct_answer': r['correct_answer'],
+          'student_answer': r['student_answer'],
+          'question_id': questionId,
+        });
+      }
+    }
+    
+    // Call Gemini for uncached questions
+    if (needsGemini.isNotEmpty) {
+      final result = await _aiService.analyzeExam(needsGemini);
+      final perQuestion = result['perQuestion'] as List<String>;
+      
+      for (int i = 0; i < needsGemini.length; i++) {
+        final q = needsGemini[i];
+        final explanation = i < perQuestion.length ? perQuestion[i] : '';
+        final qId = q['question_id'] as String;
+        
+        if (explanation.isNotEmpty) {
+          _perQuestionFeedback[qId] = explanation;
+          
+          // Save to database
+          await Supabase.instance.client
+              .from('exam_ai_feedback')
+              .insert({
+                'question_id': qId,
+                'ai_explanation': explanation,
+              });
+        }
+      }
+    }
+    
+    if (mounted) {
+      setState(() => _isAnalyzing = false);
+    }
+  } catch (e) {
+    if (mounted) setState(() => _isAnalyzing = false);
+  }
+}
   @override
   void dispose() {
     _timer?.cancel();
@@ -501,7 +596,6 @@ class _StudentExamTakerScreenState extends State<StudentExamTakerScreen> {
   final percentage = _totalMarks > 0 ? (_score / _totalMarks * 100).toStringAsFixed(1) : '0.0';
   final passed = double.parse(percentage) >= 50;
 
-  // ✅ Helper to get option text from letter
   String _getOptionText(String letter, Map<String, dynamic> question) {
     switch (letter.toUpperCase()) {
       case 'A': return question['option_a'] ?? '';
@@ -546,6 +640,25 @@ class _StudentExamTakerScreenState extends State<StudentExamTakerScreen> {
               Text('$percentage%', style: const TextStyle(fontSize: 18, color: Colors.white70)),
               const SizedBox(height: 4),
               Text(passed ? 'You passed!' : 'Need 50% to pass', style: const TextStyle(fontSize: 13, color: Colors.white70)),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.auto_awesome, color: Colors.white, size: 14),
+                    const SizedBox(width: 6),
+                    Text(
+                      _isAnalyzing ? 'Analyzing...' : 'AI Feedback Ready',
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
@@ -560,18 +673,20 @@ class _StudentExamTakerScreenState extends State<StudentExamTakerScreen> {
           final r = entry.value;
           final isCorrect = r['is_correct'] as bool;
           final question = widget.questions[index];
+          final questionId = question['id'] as String;
           
-          // ✅ Get actual option text for student's answer
           final studentLetter = r['student_answer'] as String? ?? '';
           final studentText = studentLetter.isNotEmpty 
               ? _getOptionText(studentLetter, question) 
               : 'Not answered';
           
-          // ✅ Get actual option text for correct answer
           final correctLetter = r['correct_answer'] as String? ?? '';
           final correctText = correctLetter.isNotEmpty 
               ? _getOptionText(correctLetter, question) 
               : '';
+
+          // ✅ Get AI explanation for this specific question
+          final aiExplanation = _perQuestionFeedback[questionId];
 
           return Card(
             margin: const EdgeInsets.only(bottom: 10),
@@ -581,6 +696,7 @@ class _StudentExamTakerScreenState extends State<StudentExamTakerScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Question header
                   Row(
                     children: [
                       Icon(isCorrect ? Icons.check_circle : Icons.cancel, 
@@ -597,62 +713,79 @@ class _StudentExamTakerScreenState extends State<StudentExamTakerScreen> {
                   ),
                   const SizedBox(height: 8),
                   
-                  // ✅ Use MathRenderer for student answer with LaTeX
+                  // Student answer
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
                         'Your answer: ',
-                        style: TextStyle(
-                          fontSize: 13, 
-                          color: isCorrect ? const Color(0xFF4CAF50) : Colors.red,
-                          fontWeight: FontWeight.w500,
-                        ),
+                        style: TextStyle(fontSize: 13, color: isCorrect ? const Color(0xFF4CAF50) : Colors.red, fontWeight: FontWeight.w500),
                       ),
                       if (studentLetter.isEmpty)
-                        Text(
-                          'Not answered',
-                          style: TextStyle(
-                            fontSize: 13, 
-                            color: Colors.grey.shade600,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        )
+                        Text('Not answered', style: TextStyle(fontSize: 13, color: Colors.grey.shade600, fontWeight: FontWeight.w500))
                       else
                         Expanded(
-                          child: MathRenderer(
-                            '$studentLetter. $studentText',
-                            fontSize: 13,
-                            textColor: isCorrect ? const Color(0xFF4CAF50) : Colors.red,
-                          ),
+                          child: MathRenderer('$studentLetter. $studentText', fontSize: 13, textColor: isCorrect ? const Color(0xFF4CAF50) : Colors.red),
                         ),
                     ],
                   ),
                   
+                  // Correct answer (if wrong)
                   if (!isCorrect && correctText.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
-                            'Correct: ',
-                            style: TextStyle(
-                              fontSize: 13, 
-                              color: Color(0xFF4CAF50),
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
+                          const Text('Correct: ', style: TextStyle(fontSize: 13, color: Color(0xFF4CAF50), fontWeight: FontWeight.w500)),
                           Expanded(
-                            child: MathRenderer(
-                              '$correctLetter. $correctText',
-                              fontSize: 13,
-                              textColor: const Color(0xFF4CAF50),
-                            ),
+                            child: MathRenderer('$correctLetter. $correctText', fontSize: 13, textColor: const Color(0xFF4CAF50)),
                           ),
                         ],
                       ),
                     ),
+
+                  // ✅ AI Feedback for this question (only for failed questions)
+                  // ✅ AI Feedback for this question (only for failed questions)
+if (!isCorrect && aiExplanation != null && aiExplanation.isNotEmpty)
+  Container(
+    margin: const EdgeInsets.only(top: 12),
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      gradient: LinearGradient(
+        colors: [Colors.purple.shade50, Colors.blue.shade50],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: Colors.purple.withOpacity(0.15)),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.auto_awesome, color: Colors.purple, size: 14),
+            const SizedBox(width: 6),
+            const Text('AI Feedback', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: Colors.purple)),
+            const Spacer(),
+            if (_isAnalyzing)
+              const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.purple)),
+          ],
+        ),
+        const SizedBox(height: 8),
+        GptMarkdown(  // ✅ Use GptMarkdown like your original
+          aiExplanation,
+          useDollarSignsForLatex: true,
+          style: const TextStyle(
+            fontSize: 13,
+            height: 1.5,
+            color: Colors.black87,
+          ),
+        ),
+      ],
+    ),
+  ),
                 ],
               ),
             ),

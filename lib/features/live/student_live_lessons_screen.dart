@@ -46,44 +46,65 @@ class _StudentLiveLessonsScreenState extends State<StudentLiveLessonsScreen> {
 }
 
   Future<void> _loadData() async {
-    try {
-      final userId = _authService.currentUserId;
-      if (userId == null) return;
+  try {
+    final userId = _authService.currentUserId;
+    if (userId == null) return;
 
-      // Get enrollments with trial + subscription info
-      final enrollments = await Supabase.instance.client
-          .from('enrollments')
-          .select('id, teacher_id, subject_id, level_id, status, trial_ends_at, is_subscribed, subscription_expires_at')
-          .eq('student_id', userId)
-          .inFilter('status', ['approved', 'paid']);
+    // ✅ Get student's level from profiles
+    final profile = await Supabase.instance.client
+        .from('profiles')
+        .select('level_id')
+        .eq('id', userId)
+        .single();
+    
+    final studentLevelId = profile['level_id'] as String?;
 
-      final enrollmentMap = <String, Map<String, dynamic>>{};
-      final teacherIds = <String>{};
-      for (final e in enrollments) {
-        final teacherId = e['teacher_id'] as String;
-        teacherIds.add(teacherId);
-        enrollmentMap[teacherId] = e;
-      }
+    // Get enrollments
+    final enrollments = await Supabase.instance.client
+        .from('enrollments')
+        .select('id, teacher_id, subject_id, level_id, status, trial_ends_at, is_subscribed, subscription_expires_at')
+        .eq('student_id', userId)
+        .inFilter('status', ['approved', 'paid']);
 
-      // Get live lessons only from enrolled teachers
-      List<Map<String, dynamic>> lessons = [];
-      if (teacherIds.isNotEmpty) {
-        lessons = await _liveService.getStudentLiveLessons(userId);
-        // Filter to only enrolled teachers
-        lessons = lessons.where((l) => teacherIds.contains(l['teacher_id'] as String)).toList();
-      }
-
-      if (mounted) {
-        setState(() {
-          _lessons = lessons;
-          _enrollments = enrollmentMap;
-          _isLoading = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) setState(() => _isLoading = false);
+    final enrollmentMap = <String, Map<String, dynamic>>{};
+    final teacherIds = <String>{};
+    for (final e in enrollments) {
+      final teacherId = e['teacher_id'] as String;
+      teacherIds.add(teacherId);
+      enrollmentMap[teacherId] = e;
     }
+
+    // ✅ Get live lessons filtered by student's level
+    List<Map<String, dynamic>> lessons = [];
+    if (teacherIds.isNotEmpty && studentLevelId != null) {
+      lessons = await _liveService.getStudentLiveLessons(userId);
+      
+      // ✅ Filter by student's level AND enrolled teachers
+      lessons = lessons.where((l) {
+        final lessonLevelId = l['level_id'] as String?;
+        final lessonTeacherId = l['teacher_id'] as String?;
+        
+        // Must match student's level (or be null/open to all)
+        final levelMatch = lessonLevelId == null || lessonLevelId == studentLevelId;
+        // Must be from an enrolled teacher
+        final teacherMatch = lessonTeacherId != null && teacherIds.contains(lessonTeacherId);
+        
+        return levelMatch && teacherMatch;
+      }).toList();
+    }
+
+    if (mounted) {
+      setState(() {
+        _lessons = lessons;
+        _enrollments = enrollmentMap;
+        _isLoading = false;
+      });
+    }
+  } catch (e) {
+    debugPrint('Error: $e');
+    if (mounted) setState(() => _isLoading = false);
   }
+}
 
   // ✅ Access check
   bool _canAccess(Map<String, dynamic> lesson) {
@@ -191,63 +212,102 @@ class _StudentLiveLessonsScreenState extends State<StudentLiveLessonsScreen> {
 }
 
   @override
-  Widget build(BuildContext context) {
-    final liveLessons = _lessons.where((l) => l['status'] == 'live').toList();
-    final upcomingLessons = _lessons.where((l) => l['status'] == 'scheduled').toList();
+Widget build(BuildContext context) {
+  final liveLessons = _lessons.where((l) => l['status'] == 'live').toList();
+  final upcomingLessons = _lessons.where((l) => l['status'] == 'scheduled').toList();
+  
+  // ✅ Group by subject
+  final liveBySubject = _groupBySubject(liveLessons);
+  final upcomingBySubject = _groupBySubject(upcomingLessons);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Live Lessons'),
-        backgroundColor: Colors.red.shade700,
-        foregroundColor: Colors.white,
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Colors.red))
-          : _lessons.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Container(width: 100, height: 100,
-                        decoration: BoxDecoration(color: Colors.red.withOpacity(0.1), shape: BoxShape.circle),
-                        child: const Icon(Icons.live_tv, size: 48, color: Colors.red),
+  return Scaffold(
+    appBar: AppBar(
+      title: const Text('Live Lessons'),
+      backgroundColor: Colors.red.shade700,
+      foregroundColor: Colors.white,
+    ),
+    body: _isLoading
+        ? const Center(child: CircularProgressIndicator(color: Colors.red))
+        : _lessons.isEmpty
+            ? _buildEmptyState()
+            : RefreshIndicator(
+                onRefresh: _loadData,
+                child: ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    if (liveLessons.isNotEmpty) ...[
+                      const Padding(
+                        padding: EdgeInsets.only(bottom: 12),
+                        child: Row(children: [
+                          Icon(Icons.circle, color: Colors.red, size: 12),
+                          SizedBox(width: 6),
+                          Text('LIVE NOW', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 14)),
+                        ]),
                       ),
+                      ...liveBySubject.entries.map((entry) => _buildSubjectGroup(entry.key, entry.value, true)),
                       const SizedBox(height: 20),
-                      const Text('No live lessons', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF1A237E))),
-                      const SizedBox(height: 8),
-                      const Text('Live lessons from your teachers\nwill appear here', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
                     ],
-                  ),
-                )
-              : RefreshIndicator(
-                  onRefresh: _loadData,
-                  child: ListView(
-                    padding: const EdgeInsets.all(16),
-                    children: [
-                      if (liveLessons.isNotEmpty) ...[
-                        const Padding(
-                          padding: EdgeInsets.only(bottom: 12),
-                          child: Row(children: [
-                            Icon(Icons.circle, color: Colors.red, size: 12),
-                            SizedBox(width: 6),
-                            Text('LIVE NOW', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 14)),
-                          ]),
-                        ),
-                        ...liveLessons.map((lesson) => _buildLessonCard(lesson, isLive: true)),
-                        const SizedBox(height: 20),
-                      ],
-                      if (upcomingLessons.isNotEmpty) ...[
-                        const Padding(
-                          padding: EdgeInsets.only(bottom: 12),
-                          child: Text('UPCOMING', style: TextStyle(color: Color(0xFF1A237E), fontWeight: FontWeight.bold, fontSize: 14)),
-                        ),
-                        ...upcomingLessons.map((lesson) => _buildLessonCard(lesson, isLive: false)),
-                      ],
+                    if (upcomingLessons.isNotEmpty) ...[
+                      const Padding(
+                        padding: EdgeInsets.only(bottom: 12),
+                        child: Text('UPCOMING', style: TextStyle(color: Color(0xFF1A237E), fontWeight: FontWeight.bold, fontSize: 14)),
+                      ),
+                      ...upcomingBySubject.entries.map((entry) => _buildSubjectGroup(entry.key, entry.value, false)),
                     ],
-                  ),
+                  ],
                 ),
-    );
+              ),
+  );
+}
+
+Map<String, List<Map<String, dynamic>>> _groupBySubject(List<Map<String, dynamic>> lessons) {
+  final grouped = <String, List<Map<String, dynamic>>>{};
+  for (final lesson in lessons) {
+    final subjectName = lesson['subjects']?['name'] as String? ?? 'General';
+    if (!grouped.containsKey(subjectName)) {
+      grouped[subjectName] = [];
+    }
+    grouped[subjectName]!.add(lesson);
   }
+  return grouped;
+}
+
+Widget _buildSubjectGroup(String subjectName, List<Map<String, dynamic>> lessons, bool isLive) {
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      // Subject header
+      Padding(
+        padding: const EdgeInsets.only(bottom: 8, top: 4),
+        child: Row(
+          children: [
+            Container(
+              width: 8, height: 8,
+              decoration: BoxDecoration(
+                color: isLive ? Colors.red : const Color(0xFF1A237E),
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              subjectName,
+              style: TextStyle(
+                color: isLive ? Colors.red : const Color(0xFF1A237E),
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text('${lessons.length} lesson${lessons.length > 1 ? 's' : ''}',
+                style: const TextStyle(color: Colors.grey, fontSize: 12)),
+          ],
+        ),
+      ),
+      ...lessons.map((lesson) => _buildLessonCard(lesson, isLive: isLive)),
+      const SizedBox(height: 12),
+    ],
+  );
+}
 
   Widget _buildLessonCard(Map<String, dynamic> lesson, {required bool isLive}) {
     final canAccess = _canAccess(lesson);
@@ -257,67 +317,70 @@ class _StudentLiveLessonsScreenState extends State<StudentLiveLessonsScreen> {
     final isSubscriptionExpired = statusText == 'Subscription Ended';
     final teacherName = lesson['profiles']?['display_name'] ?? lesson['profiles']?['full_name'] ?? 'Teacher';
     final teacherId = lesson['teacher_id'] as String? ?? '';
+    final topicName = lesson['teacher_topics']?['name'] as String?;
+    final lessonTitle = lesson['topic'] as String?;
     final subjectName = lesson['subjects']?['name'] ?? '';
     final enrollment = _enrollments[teacherId];
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: isLive ? Border.all(color: Colors.red.shade300, width: 2) : null,
-        boxShadow: [BoxShadow(
-          color: isLive ? Colors.red.withOpacity(0.1) : Colors.black.withOpacity(0.04),
-          blurRadius: 12, offset: const Offset(0, 3),
-        )],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(children: [
-              if (isLive)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(6)),
-                  child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                    Icon(Icons.circle, color: Colors.white, size: 8), SizedBox(width: 4),
-                    Text('LIVE', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
-                  ]),
-                ),
-              if (isLive) const SizedBox(width: 8),
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(lesson['topic'] ?? '', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: Color(0xFF1A237E))),
-                  if (!isLive && lesson['scheduled_at'] != null)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Row(children: [
-                        const Icon(Icons.access_time, size: 14, color: Color(0xFF1A237E)),
-                        const SizedBox(width: 4),
-                        Text(_formatScheduledTime(lesson['scheduled_at'] as String?),
-                            style: const TextStyle(fontSize: 13, color: Color(0xFF1A237E), fontWeight: FontWeight.w600)),
-                      ]),
-                    ),
+    margin: const EdgeInsets.only(bottom: 10),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(14),
+      border: isLive ? Border.all(color: Colors.red.shade300, width: 2) : null,
+      boxShadow: [BoxShadow(
+        color: isLive ? Colors.red.withOpacity(0.1) : Colors.black.withOpacity(0.04),
+        blurRadius: 8, offset: const Offset(0, 2),
+      )],
+    ),
+    child: Padding(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            if (isLive)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(6)),
+                child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.circle, color: Colors.white, size: 8), SizedBox(width: 4),
+                  Text('LIVE', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
                 ]),
               ),
-              // Status badge
-              if (statusText.isNotEmpty)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(color: statusColor.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
-                  child: Text(statusText, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: statusColor)),
-                ),
-            ]),
-            const SizedBox(height: 8),
-            Row(children: [
-              const Icon(Icons.person_outline, size: 14, color: Colors.grey), const SizedBox(width: 4),
-              Text(teacherName, style: const TextStyle(fontSize: 13, color: Colors.grey)),
-              const SizedBox(width: 12),
-              const Icon(Icons.book_outlined, size: 14, color: Colors.grey), const SizedBox(width: 4),
-              Text(subjectName, style: const TextStyle(fontSize: 13, color: Colors.grey)),
-            ]),
+            if (isLive) const SizedBox(width: 8),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                // ✅ Show topic name
+                if (topicName != null)
+                  Text(topicName, style: const TextStyle(fontSize: 12, color: Color(0xFF1A237E), fontWeight: FontWeight.w500)),
+                // ✅ Show lesson title
+                if (lessonTitle != null)
+                  Text(lessonTitle, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF1A237E))),
+                if (!isLive && lesson['scheduled_at'] != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Row(children: [
+                      const Icon(Icons.access_time, size: 14, color: Color(0xFF1A237E)),
+                      const SizedBox(width: 4),
+                      Text(_formatScheduledTime(lesson['scheduled_at'] as String?),
+                          style: const TextStyle(fontSize: 13, color: Color(0xFF1A237E), fontWeight: FontWeight.w600)),
+                    ]),
+                  ),
+              ]),
+            ),
+            if (statusText.isNotEmpty)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(color: statusColor.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
+                child: Text(statusText, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: statusColor)),
+              ),
+          ]),
+          const SizedBox(height: 8),
+          Row(children: [
+            const Icon(Icons.person_outline, size: 14, color: Colors.grey), const SizedBox(width: 4),
+            Text(teacherName, style: const TextStyle(fontSize: 13, color: Colors.grey)),
+          ]),
             if (lesson['description']?.toString().isNotEmpty == true) ...[
               const SizedBox(height: 6),
               Text(lesson['description'] ?? '', style: const TextStyle(fontSize: 13, color: Colors.grey), maxLines: 2, overflow: TextOverflow.ellipsis),
@@ -395,4 +458,37 @@ class _StudentLiveLessonsScreenState extends State<StudentLiveLessonsScreen> {
       ),
     );
   }
+  Widget _buildEmptyState() {
+  return Center(
+    child: Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Container(
+          width: 100,
+          height: 100,
+          decoration: BoxDecoration(
+            color: Colors.red.withOpacity(0.1),
+            shape: BoxShape.circle,
+          ),
+          child: const Icon(Icons.live_tv, size: 48, color: Colors.red),
+        ),
+        const SizedBox(height: 20),
+        const Text(
+          'No Live Lessons',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF1A237E),
+          ),
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          'Live lessons from your teachers\nwill appear here',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: Colors.grey, fontSize: 14),
+        ),
+      ],
+    ),
+  );
+}
 }

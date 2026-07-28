@@ -5,7 +5,9 @@ import '../../core/ai_service.dart';
 import '../../core/chat_service.dart';
 import '../../core/auth_service.dart';
 import 'chat_history_screen.dart';
-import 'math_message_renderer.dart';
+import 'package:gpt_markdown/gpt_markdown.dart';
+import '../../core/chat_stream_controller.dart';
+import 'chat_sidebar.dart';
 
 class AITutorScreen extends StatefulWidget {
   final String? subjectName;
@@ -125,74 +127,94 @@ class _AITutorScreenState extends State<AITutorScreen>
   }
 
   Future<void> _sendMessage() async {
-    final text = _inputController.text.trim();
-    if (text.isEmpty || _isLoading) return;
+  final text = _inputController.text.trim();
+  if (text.isEmpty || _isLoading) return;
 
-    _inputController.clear();
-    setState(() {
-      _messages.add(_ChatMessage(text: text, isUser: true));
-      _isLoading = true;
-    });
-    _scrollToBottom();
+  _inputController.clear();
+  
+  final streamController = ChatStreamController();
+  
+  setState(() {
+    _messages.add(_ChatMessage(text: text, isUser: true));
+    _messages.add(_ChatMessage(
+      text: '',
+      isUser: false,
+      isStreaming: true,
+      streamController: streamController,
+    ));
+    _isLoading = true;
+  });
+  _scrollToBottom();
 
-    // Save to DB
-    if (_sessionId != null) {
-      final studentMessages = _messages.where((m) => m.isUser).length;
-      if (studentMessages == 1) {
-        await _chatService.autoNameSession(_sessionId!, text);
-      }
-      await _chatService.saveMessage(sessionId: _sessionId!, sender: 'student', message: text);
-      await _chatService.updateSessionTimestamp(_sessionId!);
+  // Save user message
+  if (_sessionId != null) {
+    final studentMessages = _messages.where((m) => m.isUser).length;
+    if (studentMessages == 1) {
+      await _chatService.autoNameSession(_sessionId!, text);
     }
-
-    // Build history
-    final history = _messages
-        .map((m) => {'sender': m.isUser ? 'student' : 'ai', 'message': m.text})
-        .toList()
-        .reversed
-        .take(10)
-        .toList()
-        .reversed
-        .toList();
-
-    // Get AI reply
-    final reply = await _aiService.askAI(
-      message: text,
-      subject: widget.subjectName ?? 'General',
-      history: history,
-    );
-
-    if (mounted) {
-      final aiMsg = _ChatMessage(text: '', isUser: false);
-      setState(() => _messages.add(aiMsg));
-
-      // Stream the text
-      _streamText(reply, aiMsg);
-    }
+    await _chatService.saveMessage(sessionId: _sessionId!, sender: 'student', message: text);
+    await _chatService.updateSessionTimestamp(_sessionId!);
   }
 
-  void _streamText(String fullText, _ChatMessage message) {
-    final words = fullText.split(' ');
-    int wordIndex = 0;
+  // Build history
+  final history = _messages
+      .where((m) => !m.isStreaming)
+      .map((m) => {'sender': m.isUser ? 'student' : 'ai', 'message': m.text})
+      .toList()
+      .reversed
+      .take(10)
+      .toList()
+      .reversed
+      .toList();
 
-    _streamTimer?.cancel();
-    _streamTimer = Timer.periodic(const Duration(milliseconds: 20), (timer) {
-      if (wordIndex >= words.length) {
-        timer.cancel();
+  // ✅ Call your working askAI
+  final reply = await _aiService.askAI(
+    message: text,
+    subject: widget.subjectName ?? 'General',
+    history: history,
+  );
+
+  // ✅ Stream characters smoothly (not words)
+  _streamToController(reply, streamController);
+}
+
+void _streamToController(String fullText, ChatStreamController controller) {
+  int charIndex = 0;
+  const charsPerTick = 2; // Small chunks for smooth effect
+  const tickMs = 10; // Fast ticks for smoothness
+
+  _streamTimer?.cancel();
+  _streamTimer = Timer.periodic(const Duration(milliseconds: tickMs), (timer) {
+    if (charIndex >= fullText.length) {
+      timer.cancel();
+      if (mounted) {
         setState(() => _isLoading = false);
+        
         if (_sessionId != null) {
           _chatService.saveMessage(sessionId: _sessionId!, sender: 'ai', message: fullText);
         }
-        return;
+        
+        final aiMsgIndex = _messages.indexWhere((m) => m.streamController == controller);
+        if (aiMsgIndex != -1) {
+          setState(() {
+            _messages[aiMsgIndex].text = fullText;
+            _messages[aiMsgIndex].isStreaming = false;
+            _messages[aiMsgIndex].streamController = null;
+          });
+        }
       }
+      controller.closeStream();
+      return;
+    }
 
-      setState(() {
-        message.text = words.sublist(0, wordIndex + 1).join(' ');
-        wordIndex++;
-      });
-      _scrollToBottom();
-    });
-  }
+    charIndex += charsPerTick;
+    if (charIndex > fullText.length) charIndex = fullText.length;
+    controller.addChunk(fullText.substring(0, charIndex));
+    _scrollToBottom();
+  });
+}
+
+  
 
   void _scrollToBottom() {
     Future.delayed(const Duration(milliseconds: 50), () {
@@ -206,93 +228,132 @@ class _AITutorScreenState extends State<AITutorScreen>
     });
   }
 
-  @override
-  Widget build(BuildContext context) {
-    if (_isInitializing) {
-      return Scaffold(
-        backgroundColor: Colors.white,
-        appBar: _buildAppBar(),
-        body: const Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              CircularProgressIndicator(color: Color(0xFF1A237E)),
-              SizedBox(height: 16),
-              Text('Loading your AI tutor...', style: TextStyle(color: Colors.grey)),
-            ],
-          ),
-        ),
-      );
-    }
+  void _startNewChat() {
+  Navigator.pushReplacement(
+    context,
+    MaterialPageRoute(
+      builder: (_) => AITutorScreen(subjectName: widget.subjectName),
+    ),
+  );
+}
 
+  @override
+Widget build(BuildContext context) {
+  if (_isInitializing) {
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: _buildAppBar(),
-      body: Column(
-        children: [
-          // Messages
-          Expanded(
-            child: _messages.isEmpty
-                ? _buildWelcomeScreen()
-                : Stack(
-                    children: [
-                      ListView.builder(
-                        controller: _scrollController,
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-                        itemCount: _messages.length + (_isLoading ? 1 : 0),
-                        itemBuilder: (context, index) {
-                          if (_isLoading && index == _messages.length) {
-                            return const _TypingIndicator();
-                          }
-                          final msg = _messages[index];
-                          final isLastAiMessage = !msg.isUser &&
-                              _isLoading &&
-                              index == _messages.length - 1;
-                          return _MessageBubble(
-                            text: msg.text,
-                            isUser: msg.isUser,
-                            isStreaming: isLastAiMessage,
-                          );
-                        },
-                      ),
-                      // Scroll to bottom button
-                      if (_showScrollToBottom)
-                        Positioned(
-                          bottom: 16,
-                          right: 16,
-                          child: GestureDetector(
-                            onTap: _scrollToBottom,
-                            child: Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF1A237E),
-                                shape: BoxShape.circle,
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: const Color(0xFF1A237E).withOpacity(0.3),
-                                    blurRadius: 12,
-                                    offset: const Offset(0, 4),
-                                  ),
-                                ],
-                              ),
-                              child: const Icon(
-                                Icons.arrow_downward_rounded,
-                                color: Colors.white,
-                                size: 20,
-                              ),
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-          ),
-
-          // Input bar
-          _buildInputBar(),
-        ],
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        title: const Text('AI Tutor', style: TextStyle(color: Colors.black87, fontSize: 16, fontWeight: FontWeight.w600)),
+        centerTitle: true,
+      ),
+      body: const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(color: Color(0xFF1A237E)),
+            SizedBox(height: 16),
+            Text('Loading your AI tutor...', style: TextStyle(color: Colors.grey)),
+          ],
+        ),
       ),
     );
   }
+
+  return Scaffold(
+    backgroundColor: const Color(0xFFFAFAFA),
+    appBar: AppBar(
+      leading: Builder(
+        builder: (ctx) => IconButton(
+          icon: const Icon(Icons.menu, color: Colors.black87),
+          onPressed: () => Scaffold.of(ctx).openDrawer(),
+        ),
+      ),
+      title: Text(
+        widget.subjectName != null ? '${widget.subjectName} Tutor' : 'AI Tutor',
+        style: const TextStyle(color: Colors.black87, fontSize: 16, fontWeight: FontWeight.w600),
+      ),
+      centerTitle: true,
+      backgroundColor: Colors.white,
+      elevation: 0,
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.edit_outlined, color: Colors.black54),
+          onPressed: _startNewChat,
+          tooltip: 'New Chat',
+        ),
+      ],
+    ),
+    drawer: Builder(
+  builder: (drawerContext) => ChatSidebar(
+    currentSessionId: _sessionId,
+    currentSubject: widget.subjectName,
+    onSessionSelected: (sessionId, subject) {
+      // Closes only the drawer using the unique drawerContext
+      Navigator.pop(drawerContext); 
+      
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => AITutorScreen(
+            sessionId: sessionId,
+            subjectName: subject,
+          ),
+        ),
+      );
+    },
+    onNewChat: () {
+      // Closes only the drawer using the unique drawerContext
+      Navigator.pop(drawerContext); 
+      _startNewChat();
+    },
+  ),
+),
+
+
+    body: Column(
+      children: [
+        // Messages
+        Expanded(
+          child: _messages.isEmpty
+              ? _buildWelcomeScreen()
+              : Stack(
+                  children: [
+                    ListView.builder(
+                      controller: _scrollController,
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+                      itemCount: _messages.length,
+                      itemBuilder: (context, index) {
+                        final msg = _messages[index];
+                        return _MessageBubble(message: msg);
+                      },
+                    ),
+                    if (_showScrollToBottom)
+                      Positioned(
+                        bottom: 16,
+                        right: 16,
+                        child: GestureDetector(
+                          onTap: _scrollToBottom,
+                          child: Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF1A237E),
+                              shape: BoxShape.circle,
+                              boxShadow: [BoxShadow(color: const Color(0xFF1A237E).withOpacity(0.3), blurRadius: 12, offset: const Offset(0, 4))],
+                            ),
+                            child: const Icon(Icons.arrow_downward_rounded, color: Colors.white, size: 20),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+        ),
+        _buildInputBar(),
+      ],
+    ),
+  );
+}
 
   PreferredSizeWidget _buildAppBar() {
     return AppBar(
@@ -667,121 +728,80 @@ class _AITutorScreenState extends State<AITutorScreen>
 class _ChatMessage {
   String text;
   final bool isUser;
+  bool isStreaming;
+  ChatStreamController? streamController;
 
-  _ChatMessage({required this.text, required this.isUser});
+  _ChatMessage({
+    required this.text,
+    required this.isUser,
+    this.isStreaming = false,
+    this.streamController,
+  });
 }
 
 // ===== MESSAGE BUBBLE =====
 class _MessageBubble extends StatelessWidget {
-  final String text;
-  final bool isUser;
-  final bool isStreaming;
+  final _ChatMessage message;
 
-  const _MessageBubble({
-    required this.text,
-    required this.isUser,
-    this.isStreaming = false,
-  });
+  const _MessageBubble({required this.message, super.key});
 
   @override
   Widget build(BuildContext context) {
-    if (text.isEmpty && isStreaming) {
-      return const SizedBox.shrink();
+    // ✅ Three dots while waiting for first chunk
+    if (message.text.isEmpty && message.isStreaming) {
+      return const _TypingIndicator();
     }
 
+    // ✅ Max width for large screens, full width for phones
+    final screenWidth = MediaQuery.of(context).size.width;
+    final maxWidth = screenWidth > 800 ? 700.0 : screenWidth * 0.9;
+
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Row(
-        mainAxisAlignment: isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (!isUser) ...[
-            Container(
-              width: 34,
-              height: 34,
-              margin: const EdgeInsets.only(top: 4),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF1A237E), Color(0xFFFF9800)],
-                ),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(
-                Icons.auto_awesome,
-                color: Colors.white,
-                size: 16,
-              ),
-            ),
-            const SizedBox(width: 10),
-          ],
-          Flexible(
-            child: Container(
-              constraints: BoxConstraints(
-                maxWidth: MediaQuery.of(context).size.width * 0.78,
-              ),
-              padding: const EdgeInsets.symmetric(
-                horizontal: 16,
-                vertical: 14,
-              ),
-              decoration: BoxDecoration(
-                color: isUser
-                    ? const Color(0xFF1A237E)
-                    : Colors.grey.shade50,
-                borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(20),
-                  topRight: const Radius.circular(20),
-                  bottomLeft: Radius.circular(isUser ? 20 : 6),
-                  bottomRight: Radius.circular(isUser ? 6 : 20),
-                ),
-                boxShadow: isUser
-                    ? []
-                    : [
-                        BoxShadow(
-                          color: Colors.grey.withOpacity(0.05),
-                          blurRadius: 4,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-              ),
-              child: text.isEmpty
-                  ? const SizedBox(
-                      width: 60,
-                      height: 20,
-                      child: Center(
-                        child: SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Color(0xFF1A237E),
-                          ),
-                        ),
-                      ),
-                    )
-                  : MathMessageRenderer(
-                      text: text,
-                      textColor: isUser ? Colors.white : const Color(0xFF1E1E1E),
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Center(
+        child: SizedBox(
+          width: maxWidth,
+          child: message.isUser
+              // User message - right aligned within the max-width
+              ? Align(
+                  alignment: Alignment.centerRight,
+                  child: Container(
+                    constraints: BoxConstraints(
+                      maxWidth: maxWidth * 0.75,
                     ),
-            ),
-          ),
-          if (isUser) ...[
-            const SizedBox(width: 10),
-            Container(
-              width: 34,
-              height: 34,
-              margin: const EdgeInsets.only(top: 4),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1A237E).withOpacity(0.08),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(
-                Icons.person,
-                color: Color(0xFF1A237E),
-                size: 18,
-              ),
-            ),
-          ],
-        ],
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1A237E),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: GptMarkdown(
+                      message.text,
+                      useDollarSignsForLatex: true,
+                      style: const TextStyle(fontSize: 16, height: 1.6, color: Colors.white),
+                    ),
+                  ),
+                )
+              // AI message - left aligned within max-width, large font
+              : message.isStreaming && message.streamController != null
+                  ? StreamBuilder<String>(
+  stream: message.streamController!.textStream,
+  initialData: '',
+  builder: (context, snapshot) {
+    final text = snapshot.data ?? '';
+    if (text.isEmpty) return const SizedBox.shrink();
+    return GptMarkdown(
+      text,
+      useDollarSignsForLatex: true,
+      style: const TextStyle(fontSize: 17, height: 1.7, color: Color(0xFF1E1E1E)),
+    );
+  },
+)
+                  : GptMarkdown(
+                      message.text,
+                      useDollarSignsForLatex: true,
+                      style: const TextStyle(fontSize: 17, height: 1.7, color: Color(0xFF1E1E1E)),
+                    ),
+        ),
       ),
     );
   }

@@ -119,76 +119,118 @@ final oneOnOneEnrollments = validEnrollments.where((e) {
     }
   }
 
-  Future<Map<String, String?>> _getLastMessage(String teacherId) async {
+  Future<Map<String, dynamic>> _getLastMessage(String teacherId) async {
   try {
     final userId = _authService.currentUserId;
-    if (userId == null) return {'message': 'Tap to start tutoring', 'time': ''};
+    if (userId == null) return {
+      'message': 'Tap to start tutoring', 
+      'time': '', 
+      'unread': 0,
+    };
     
     // Find active session
     final session = await Supabase.instance.client
         .from('tutoring_sessions')
-        .select('id')
+        .select('id, student_last_read_at')
         .eq('student_id', userId)
         .eq('teacher_id', teacherId)
         .eq('status', 'active')
         .maybeSingle();
     
-    if (session != null) {
-      // Get last message
-      final messages = await Supabase.instance.client
-          .from('tutoring_messages')
-          .select('content, created_at')
-          .eq('session_id', session['id'] as String)
-          .order('created_at', ascending: false)
-          .limit(1);
-      
-      if (messages.isNotEmpty) {
-        final msg = messages.first;
-        final time = DateTime.parse(msg['created_at'] as String);
-        final now = DateTime.now();
-        String timeStr;
-        
-        if (now.difference(time).inDays == 0) {
-          timeStr = '${time.hour}:${time.minute.toString().padLeft(2, '0')}';
-        } else if (now.difference(time).inDays == 1) {
-          timeStr = 'Yesterday';
-        } else {
-          timeStr = '${time.day}/${time.month}';
-        }
-        
-        return {
-          'message': msg['content'] as String? ?? 'File shared',
-          'time': timeStr,
-        };
-      }
+    if (session == null) {
+      return {'message': 'Tap to start tutoring', 'time': '', 'unread': 0};
     }
     
+    final sessionId = session['id'] as String;
+    final lastReadAt = session['student_last_read_at'] as String?;
+    
+    // Get last message
+    final messages = await Supabase.instance.client
+        .from('tutoring_messages')
+        .select('content, created_at, sender_id')
+        .eq('session_id', sessionId)
+        .order('created_at', ascending: false)
+        .limit(1);
+    
+    String message = 'No messages yet • Tap to start';
+    String time = '';
+    
+    if (messages.isNotEmpty) {
+      final msg = messages.first;
+      final msgTime = DateTime.parse(msg['created_at'] as String);
+      final now = DateTime.now();
+      
+      if (now.difference(msgTime).inDays == 0) {
+        time = '${msgTime.hour}:${msgTime.minute.toString().padLeft(2, '0')}';
+      } else if (now.difference(msgTime).inDays == 1) {
+        time = 'Yesterday';
+      } else {
+        time = '${msgTime.day}/${msgTime.month}';
+      }
+      
+      message = msg['content'] as String? ?? 'File shared';
+    }
+    
+    // ✅ Count unread messages (after last_read_at)
+    
+// ✅ Count unread messages (after last_read_at)
+int unread = 0;
+if (lastReadAt != null) {
+  unread = await Supabase.instance.client
+      .from('tutoring_messages')
+      .count(CountOption.exact)
+      .eq('session_id', sessionId)
+      .neq('sender_id', userId)
+      .gt('created_at', lastReadAt);
+} else {
+  unread = await Supabase.instance.client
+      .from('tutoring_messages')
+      .count(CountOption.exact)
+      .eq('session_id', sessionId)
+      .neq('sender_id', userId);
+}
+
+    
     return {
-      'message': 'No messages yet • Tap to start',
-      'time': '',
+      'message': message,
+      'time': time,
+      'unread': unread,
     };
   } catch (e) {
-    return {'message': 'Tap to start tutoring', 'time': ''};
+    return {'message': 'Tap to start tutoring', 'time': '', 'unread': 0};
   }
 }
 
-  void _openChat(Map<String, dynamic> enrollment) {
-    final teacher = enrollment['teacher'] as Map<String, dynamic>;
-    final subject = enrollment['subject'] as Map<String, dynamic>?;
-    
+  void _openChat(Map<String, dynamic> enrollment) async {
+  final teacher = enrollment['teacher'] as Map<String, dynamic>;
+  final subject = enrollment['subject'] as Map<String, dynamic>?;
+  
+  // ✅ Mark as read when opening
+  final userId = _authService.currentUserId;
+  if (userId != null) {
+    await Supabase.instance.client
+        .from('tutoring_sessions')
+        .update({'student_last_read_at': DateTime.now().toUtc().toIso8601String()})
+        .eq('student_id', userId)
+        .eq('teacher_id', teacher['id'] as String)
+        .eq('status', 'active');
+  }
+  
+  if (mounted) {
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => TutoringScreen(
           teacherId: teacher['id'] as String,
-          studentId: _authService.currentUserId!,
+          studentId: userId!,
           teacherName: teacher['display_name'] ?? teacher['full_name'] ?? 'Tutor',
           subjectId: subject?['id'] as String?,
           subjectName: subject?['name'] as String?,
         ),
       ),
-    ).then((_) => _loadEnrollments()); // Refresh on return
+    ).then((_) => _loadEnrollments());
   }
+}
 
   bool _hasValidAccess(Map<String, dynamic> enrollment) {
     final now = DateTime.now();
@@ -344,155 +386,167 @@ final oneOnOneEnrollments = validEnrollments.where((e) {
   final hasAccess = _hasValidAccess(enrollment);
   final status = _getAccessStatus(enrollment);
 
-  return FutureBuilder<Map<String, String?>>(
-    future: _getLastMessage(teacherId),
-    builder: (context, snapshot) {
-      final data = snapshot.data ?? {};
-      final lastMessage = data['message'] ?? (hasAccess ? 'Tap to start tutoring' : 'Access required');
-      final lastTime = data['time'] ?? '';
+  return FutureBuilder<Map<String, dynamic>>(
+  future: _getLastMessage(teacherId),
+  builder: (context, snapshot) {
+    // 1. Extract the map from snapshot data
+    final data = snapshot.data ?? {};
+    
+    // 2. Extract all variables from the map (including unread)
+    final lastMessage = data['message'] ?? (hasAccess ? 'Tap to start tutoring' : 'Access required');
+    final lastTime = data['time'] ?? '';
+    final unread = data['unread'] ?? 0; // <-- ADD THIS LINE
 
-      return Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        decoration: BoxDecoration(
-          color: Colors.white,
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
           borderRadius: BorderRadius.circular(14),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Material(
-          color: Colors.transparent,
-          borderRadius: BorderRadius.circular(14),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(14),
-            onTap: hasAccess ? () => _openChat(enrollment) : null,
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Row(
-                children: [
-                  // Avatar
-                  Stack(
-                    children: [
-                      CircleAvatar(
-                        radius: 28,
-                        backgroundColor: const Color(0xFF1A237E).withOpacity(0.1),
-                        backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl) : null,
-                        child: avatarUrl == null
-                            ? Text(
-                                teacherName[0].toUpperCase(),
-                                style: const TextStyle(
-                                  color: Color(0xFF1A237E),
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 22,
-                                ),
-                              )
-                            : null,
-                      ),
+          onTap: hasAccess ? () => _openChat(enrollment) : null,
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(
+              children: [
+                // Avatar
+                Stack(
+                  children: [
+                    CircleAvatar(
+                      radius: 28,
+                      backgroundColor: const Color(0xFF1A237E).withOpacity(0.1),
+                      backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl) : null,
+                      child: avatarUrl == null
+                          ? Text(
+                              teacherName[0].toUpperCase(),
+                              style: const TextStyle(
+                                color: Color(0xFF1A237E),
+                                fontWeight: FontWeight.bold,
+                                fontSize: 22,
+                              ),
+                            )
+                          : null,
+                    ),
+                    if (unread > 0)
                       Positioned(
-                        bottom: 2,
-                        right: 2,
+                        top: -2,
+                        right: -2,
                         child: Container(
-                          width: 12,
-                          height: 12,
-                          decoration: BoxDecoration(
-                            color: hasAccess ? const Color(0xFF4CAF50) : Colors.grey,
+                          width: 22,
+                          height: 22,
+                          decoration: const BoxDecoration(
+                            color: Color(0xFF4CAF50),
                             shape: BoxShape.circle,
-                            border: Border.all(color: Colors.white, width: 2),
+                          ),
+                          child: Center(
+                            child: Text(
+                              unread > 9 ? '9+' : '$unread',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
                           ),
                         ),
                       ),
-                    ],
-                  ),
-                  const SizedBox(width: 14),
-                  
-                  // Info
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                teacherName,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 16,
-                                  color: Color(0xFF1A237E),
-                                ),
+                  ],
+                ),
+                const SizedBox(width: 14),
+                // Info
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              teacherName,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 16,
+                                color: Color(0xFF1A237E),
                               ),
                             ),
-                            if (lastTime.isNotEmpty)
-                              Text(
-                                lastTime,
-                                style: const TextStyle(fontSize: 11, color: Colors.grey),
-                              ),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                lastMessage,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: hasAccess ? Colors.grey.shade600 : Colors.grey.shade400,
-                                ),
+                          ),
+                          if (lastTime.isNotEmpty)
+                            Text(
+                              lastTime,
+                              style: const TextStyle(fontSize: 11, color: Colors.grey),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              lastMessage,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: hasAccess ? Colors.grey.shade600 : Colors.grey.shade400,
                               ),
                             ),
-                            const SizedBox(width: 8),
+                          ),
+                          const SizedBox(width: 8),
+                          if (unread > 0)
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                               decoration: BoxDecoration(
-                                color: hasAccess
-                                    ? const Color(0xFF4CAF50).withOpacity(0.1)
-                                    : Colors.grey.withOpacity(0.1),
+                                color: const Color(0xFF4CAF50).withOpacity(0.15),
                                 borderRadius: BorderRadius.circular(8),
                               ),
-                              child: Text(
-                                status,
+                              child: const Text(
+                                'New',
                                 style: TextStyle(
                                   fontSize: 10,
                                   fontWeight: FontWeight.w600,
-                                  color: hasAccess ? const Color(0xFF4CAF50) : Colors.grey,
+                                  color: Color(0xFF4CAF50),
                                 ),
                               ),
                             ),
-                          ],
-                        ),
-                      ],
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                if (hasAccess)
+                  Container(
+                    width: 40,
+                    height: 40,
+                    margin: const EdgeInsets.only(left: 8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1A237E).withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.chat_bubble_outline,
+                      color: Color(0xFF1A237E),
+                      size: 20,
                     ),
                   ),
-                  
-                  if (hasAccess)
-                    Container(
-                      width: 40,
-                      height: 40,
-                      margin: const EdgeInsets.only(left: 8),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1A237E).withOpacity(0.08),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Icon(
-                        Icons.chat_bubble_outline,
-                        color: Color(0xFF1A237E),
-                        size: 20,
-                      ),
-                    ),
-                ],
-              ),
+              ],
             ),
           ),
         ),
-      );
-    },
-  );
+      ),
+    );
+  },
+);
+
 }
 }

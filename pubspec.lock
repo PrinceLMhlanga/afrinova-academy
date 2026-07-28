@@ -589,6 +589,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.20.0"
+  gpt_markdown:
+    dependency: "direct main"
+    description:
+      name: gpt_markdown
+      sha256: ab6fe339f500104816139a034b8a23a125dadbc1988eda1641c6616562a4962b
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.1.8"
   gtk:
     dependency: transitive
     description:
@@ -1466,6 +1474,22 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.7.10"
+  tex_markdown:
+    dependency: "direct main"
+    description:
+      name: tex_markdown
+      sha256: fc48b7d93034136056d2ffa124860201d18763edf5e0d22a71bb67bcc697730b
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.1.10"
+  tex_text:
+    dependency: transitive
+    description:
+      name: tex_text
+      sha256: c1069b0f08aa8fbb9f6a670f2ed27328311e0e0b5445417cab710f30c0c28084
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.1.9"
   tuple:
     dependency: transitive
     description:

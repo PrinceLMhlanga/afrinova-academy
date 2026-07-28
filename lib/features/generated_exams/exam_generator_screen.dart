@@ -83,75 +83,209 @@ class _ExamGeneratorScreenState extends State<ExamGeneratorScreen> {
   }
 
   Future<void> _generateExam() async {
-  if (_selectedSubjectId == null) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Please select a subject'), backgroundColor: Colors.red),
-    );
-    return;
-  }
-
-  if (_studentLevelId == null) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Please set your class level in My Account'), backgroundColor: Colors.red),
-    );
-    return;
-  }
+  if (_selectedSubjectId == null || _studentLevelId == null) return;
 
   setState(() => _isGenerating = true);
 
   try {
-    // ✅ Build the query as a PostgrestFilterBuilder first
-    final filterQuery = Supabase.instance.client
-        .from('question_bank')
-        .select('*, levels(name)')
-        .eq('subject_id', _selectedSubjectId!)
-        .eq('level_id', _studentLevelId!)
-        .eq('is_approved', true);
+    final userId = _authService.currentUserId;
+    if (userId == null) return;
 
-    // ✅ Apply topic filter if selected
-    final filteredQuery = _selectedTopicId != null && _selectedTopicId!.isNotEmpty
-        ? filterQuery.eq('topic_id', _selectedTopicId!)
-        : filterQuery;
+    // 1. Get recently attempted questions (last 30 days)
+    final recentAttempts = await Supabase.instance.client
+        .from('practice_exam_history')
+        .select('question_id')
+        .eq('student_id', userId)
+        .gte('attempted_at', DateTime.now().subtract(const Duration(days: 30)).toIso8601String());
 
-    // ✅ Apply limit LAST - this returns PostgrestTransformBuilder
-    final finalQuery = filteredQuery.limit(_questionCount);
+    final Set<String> recentQuestionIds = recentAttempts.map((a) => a['question_id'] as String).toSet();
 
-    final response = await finalQuery;
-    final questions = List<Map<String, dynamic>>.from(response);
-
-    if (questions.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No questions found for this selection'), backgroundColor: Colors.orange),
-        );
-      }
-      return;
+    // 2. Resolve Topic IDs
+    List<String> topicIds = [];
+    if (_selectedTopicId != null && _selectedTopicId!.isNotEmpty) {
+      topicIds = [_selectedTopicId!];
+    } else {
+      final topics = await Supabase.instance.client
+          .from('topics')
+          .select('id')
+          .eq('subject_id', _selectedSubjectId!)
+          .eq('level_id', _studentLevelId!);
+      topicIds = topics.map((t) => t['id'] as String).toList();
     }
 
-    // Shuffle questions
-    questions.shuffle(Random());
+    if (topicIds.isEmpty) return;
+
+    // 3. Fetch all approved questions across target topics
+    final allQuestions = await Supabase.instance.client
+        .from('question_bank')
+        .select('*')
+        .eq('subject_id', _selectedSubjectId!)
+        .eq('level_id', _studentLevelId!)
+        .inFilter('topic_id', topicIds)
+        .eq('is_approved', true);
+
+    if (allQuestions.isEmpty) return;
+
+    // 4. Calculate GLOBAL exact difficulty limits to prevent rounding degradation
+    int targetEasy = (_questionCount * 0.3).round();
+    int targetMedium = (_questionCount * 0.5).round();
+    int targetHard = _questionCount - targetEasy - targetMedium;
+
+    final List<Map<String, dynamic>> selectedQuestions = [];
+    final Set<String> usedIds = {};
+
+    // Helper closure to draw matching questions while observing global limits
+    void drawFromPool(List<dynamic> pool, String difficulty, int perTopicTarget) {
+      int addedForThisTopic = 0;
+      
+      // Check which global count limit we need to respect
+      int getGlobalNeeded() {
+        if (difficulty == 'easy') return targetEasy;
+        if (difficulty == 'medium') return targetMedium;
+        return targetHard;
+      }
+
+      void decrementGlobal() {
+        if (difficulty == 'easy') targetEasy--;
+        else if (difficulty == 'medium') targetMedium--;
+        else targetHard--;
+      }
+
+      // Pass 1: Try unattempted questions
+      for (final q in pool) {
+        if (addedForThisTopic >= perTopicTarget || getGlobalNeeded() <= 0) break;
+        final id = q['id'] as String;
+        if (!usedIds.contains(id) && !recentQuestionIds.contains(id)) {
+          selectedQuestions.add(q);
+          usedIds.add(id);
+          addedForThisTopic++;
+          decrementGlobal();
+        }
+      }
+
+      // Pass 2: Fallback to recently attempted questions
+      for (final q in pool) {
+        if (addedForThisTopic >= perTopicTarget || getGlobalNeeded() <= 0) break;
+        final id = q['id'] as String;
+        if (!usedIds.contains(id)) {
+          selectedQuestions.add(q);
+          usedIds.add(id);
+          addedForThisTopic++;
+          decrementGlobal();
+        }
+      }
+    }
+
+    // 5. Distribute evenly across topics using the pre-shuffled global database pool
+    final questionsPerTopic = (_questionCount / topicIds.length).floor();
+    final remainder = _questionCount - (questionsPerTopic * topicIds.length);
+
+    for (int i = 0; i < topicIds.length; i++) {
+      final topicId = topicIds[i];
+      final topicQuestionCount = questionsPerTopic + (i < remainder ? 1 : 0);
+
+      final topicQuestions = allQuestions.where((q) => q['topic_id'] == topicId).toList();
+      if (topicQuestions.isEmpty) continue;
+
+      final tEasy = topicQuestions.where((q) => q['difficulty'] == 'easy').toList()..shuffle();
+      final tMedium = topicQuestions.where((q) => q['difficulty'] == 'medium').toList()..shuffle();
+      final tHard = topicQuestions.where((q) => q['difficulty'] == 'hard').toList()..shuffle();
+
+      // Calculate how many to ideally pull per difficulty slot for this topic
+      int idealEasy = (topicQuestionCount * 0.3).round();
+      int idealMedium = (topicQuestionCount * 0.5).round();
+      int idealHard = topicQuestionCount - idealEasy - idealMedium;
+
+      // Draw up to the target amount while adjusting global capacity parameters
+      drawFromPool(tEasy, 'easy', idealEasy > 0 ? idealEasy : 1);
+      drawFromPool(tMedium, 'medium', idealMedium > 0 ? idealMedium : 1);
+      drawFromPool(tHard, 'hard', idealHard > 0 ? idealHard : 1);
+    }
+
+    // 6. Global fallback: If pools are unevenly distributed across topics, fill remaining targets directly from the global pool
+    for (final diff in ['easy', 'medium', 'hard']) {
+      final globalPool = allQuestions.where((q) => q['difficulty'] == diff && !usedIds.contains(q['id'] as String)).toList()..shuffle();
+      int needed = diff == 'easy' ? targetEasy : diff == 'medium' ? targetMedium : targetHard;
+      
+      for (final q in globalPool) {
+        if (needed <= 0) break;
+        selectedQuestions.add(q);
+        usedIds.add(q['id'] as String);
+        needed--;
+        if (diff == 'easy') targetEasy--;
+        else if (diff == 'medium') targetMedium--;
+        else targetHard--;
+      }
+    }
+
+    // 7. Absolute Safety Net Fallback
+    if (selectedQuestions.length < _questionCount) {
+      final leftovers = allQuestions.where((q) => !usedIds.contains(q['id'] as String)).toList()..shuffle();
+      for (final q in leftovers) {
+        if (selectedQuestions.length >= _questionCount) break;
+        selectedQuestions.add(q);
+      }
+    }
+
+    // Trim excess items safely if necessary
+    if (selectedQuestions.length > _questionCount) {
+      selectedQuestions.shuffle();
+      selectedQuestions.removeRange(_questionCount, selectedQuestions.length);
+    }
+
+    selectedQuestions.shuffle(Random());
 
     if (mounted) {
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (_) => StudentExamTakerScreen(
-            questions: questions,
+            questions: selectedQuestions,
             subjectName: _subjects.firstWhere((s) => s['id'] == _selectedSubjectId)['name'] ?? 'Exam',
-            totalQuestions: questions.length,
-            timeMinutes: (questions.length * 1.5).ceil(), // Round up to give full minutes
+            totalQuestions: selectedQuestions.length,
+            timeMinutes: (selectedQuestions.length * 1.5).ceil(),
           ),
         ),
       );
     }
   } catch (e) {
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
-      );
-    }
+    debugPrint('Generation Error: $e');
   } finally {
     if (mounted) setState(() => _isGenerating = false);
+  }
+}
+
+
+// ✅ Helper to pick questions avoiding duplicates
+void _pickQuestions(
+  List<Map<String, dynamic>> source,
+  int count,
+  List<Map<String, dynamic>> target,
+  Set<String> usedIds,
+  Set<String> recentIds,
+) {
+  int picked = 0;
+  // First pass: skip recent questions
+  for (final q in source) {
+    if (picked >= count) break;
+    final qId = q['id'] as String;
+    if (!usedIds.contains(qId) && !recentIds.contains(qId)) {
+      target.add(q);
+      usedIds.add(qId);
+      picked++;
+    }
+  }
+  // Second pass: allow recent if not enough
+  if (picked < count) {
+    for (final q in source) {
+      if (picked >= count) break;
+      final qId = q['id'] as String;
+      if (!usedIds.contains(qId)) {
+        target.add(q);
+        usedIds.add(qId);
+        picked++;
+      }
+    }
   }
 }
   @override
@@ -320,7 +454,7 @@ class _ExamGeneratorScreenState extends State<ExamGeneratorScreen> {
                   const SizedBox(height: 8),
                   Center(
                     child: Text(
-                      'Approx. ${_questionCount} minutes',
+                      'Approx. ${_questionCount * 1.5 } minutes',
                       style: const TextStyle(fontSize: 12, color: Colors.grey),
                     ),
                   ),

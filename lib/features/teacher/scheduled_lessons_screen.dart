@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:url_launcher/url_launcher.dart';
+
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/auth_service.dart';
-import '../../core/live_lesson_service.dart';
+
+import '../live/live_classroom_screen.dart';
 
 class ScheduledLessonsScreen extends StatefulWidget {
   const ScheduledLessonsScreen({super.key});
@@ -14,11 +15,10 @@ class ScheduledLessonsScreen extends StatefulWidget {
 
 class _ScheduledLessonsScreenState extends State<ScheduledLessonsScreen> {
   final AuthService _authService = AuthService();
-  final LiveLessonService _liveService = LiveLessonService();
+  
   List<Map<String, dynamic>> _lessons = [];
   bool _isLoading = true;
-  String? _activeLessonId;
-  String? _activeRoomId;
+  
 
   @override
   void initState() {
@@ -52,55 +52,36 @@ class _ScheduledLessonsScreenState extends State<ScheduledLessonsScreen> {
   }
 
   Future<void> _startLesson(Map<String, dynamic> lesson) async {
-    final lessonId = lesson['id'] as String;
-    final roomId = lesson['room_id'] as String;
+  final lessonId = lesson['id'] as String;
+  final roomId = lesson['room_id'] as String;
 
-    await Supabase.instance.client
-        .from('live_lessons')
-        .update({'status': 'live', 'started_at': DateTime.now().toIso8601String()})
-        .eq('id', lessonId);
+  // Update status to live
+  await Supabase.instance.client
+      .from('live_lessons')
+      .update({
+        'status': 'live', 
+        'started_at': DateTime.now().toIso8601String(),
+      })
+      .eq('id', lessonId);
 
-    if (kIsWeb) {
-      // ✅ Web: Open Jitsi in new tab + show end lesson banner
-      final uri = Uri.parse('https://meet.ffmuc.net/$roomId#userInfo.displayName=Teacher&config.prejoinPageEnabled=false');
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-      
-      setState(() {
-        _activeLessonId = lessonId;
-        _activeRoomId = roomId;
-      });
-    } else {
-      // Mobile: Join in-app
-      if (mounted) {
-        //await _joinInApp(roomId, lessonId);
-      }
-    }
-
-    _loadLessons();
+  // ✅ Navigate directly to LiveKit classroom
+  if (mounted) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => LiveClassroomScreen(
+          roomName: roomId,
+          lessonId: lessonId,
+          isTeacher: true,
+        ),
+      ),
+    ).then((_) => _loadLessons()); // Refresh when returning
   }
+}
 
   
 
-  Future<void> _endLesson() async {
-    if (_activeLessonId == null) return;
-    
-    await Supabase.instance.client
-        .from('live_lessons')
-        .update({'status': 'ended', 'ended_at': DateTime.now().toIso8601String()})
-        .eq('id', _activeLessonId!);
-    
-    setState(() {
-      _activeLessonId = null;
-      _activeRoomId = null;
-    });
-    
-    _loadLessons();
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Lesson ended ✅'), backgroundColor: Color(0xFF4CAF50)),
-      );
-    }
-  }
+  
 
   Future<void> _cancelLesson(String lessonId) async {
     final confirm = await showDialog<bool>(
@@ -146,42 +127,7 @@ class _ScheduledLessonsScreenState extends State<ScheduledLessonsScreen> {
       ),
       body: Column(
         children: [
-          // ✅ Active lesson banner (for web)
-          if (_activeLessonId != null)
-            Container(
-              padding: const EdgeInsets.all(14),
-              margin: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(colors: [Colors.red.shade600, Colors.red.shade800]),
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 10, height: 10,
-                    decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
-                  ),
-                  const SizedBox(width: 10),
-                  const Expanded(
-                    child: Text('Lesson is LIVE in another tab', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                  ),
-                  const SizedBox(width: 8),
-                  TextButton(
-                    onPressed: () async {
-                      final uri = Uri.parse('https://meet.ffmuc.net/$_activeRoomId');
-                      await launchUrl(uri, mode: LaunchMode.externalApplication);
-                    },
-                    style: TextButton.styleFrom(foregroundColor: Colors.white),
-                    child: const Text('Rejoin'),
-                  ),
-                  ElevatedButton(
-                    onPressed: _endLesson,
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.white, foregroundColor: Colors.red),
-                    child: const Text('End Lesson'),
-                  ),
-                ],
-              ),
-            ),
+          
 
           // Lesson list
           Expanded(

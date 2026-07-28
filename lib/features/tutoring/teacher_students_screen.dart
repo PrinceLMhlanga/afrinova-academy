@@ -16,6 +16,7 @@ class _TeacherStudentsScreenState extends State<TeacherStudentsScreen> {
   Map<String, Map<String, List<Map<String, dynamic>>>> _groupedData = {};
   Map<String, int> _unreadCounts = {};
   bool _isLoading = true;
+  Map<String, Map<String, dynamic>> _studentInfo = {};
 
   @override
   void initState() {
@@ -106,7 +107,7 @@ class _TeacherStudentsScreenState extends State<TeacherStudentsScreen> {
       }
 
       // Load unread counts
-      await _loadUnreadCounts(tutoringEnrollments);
+      await _loadStudentDetails(tutoringEnrollments);
 
       if (mounted) {
         setState(() {
@@ -121,47 +122,153 @@ class _TeacherStudentsScreenState extends State<TeacherStudentsScreen> {
     }
   }
 
-  Future<void> _loadUnreadCounts(List<Map<String, dynamic>> enrollments) async {
-    final userId = _authService.currentUserId;
-    if (userId == null) return;
+  // Change from Map<String, int> to store more info
 
-    for (final enrollment in enrollments) {
-      final studentId = enrollment['student_id'] as String;
-      try {
-        // Find active session with this student
-        final session = await Supabase.instance.client
-            .from('tutoring_sessions')
-            .select('id')
-            .eq('student_id', studentId)
-            .eq('teacher_id', userId)
-            .eq('status', 'active')
-            .maybeSingle();
 
-        if (session != null) {
-          // Count messages (for now, just check if session exists)
-          final count = await Supabase.instance.client
+Future<void> _loadStudentDetails(List<Map<String, dynamic>> enrollments) async {
+  final userId = _authService.currentUserId;
+  if (userId == null) return;
+
+  for (final enrollment in enrollments) {
+    final studentId = enrollment['student_id'] as String;
+    try {
+      final session = await Supabase.instance.client
+          .from('tutoring_sessions')
+          .select('id, teacher_last_read_at')
+          .eq('student_id', studentId)
+          .eq('teacher_id', userId)
+          .eq('status', 'active')
+          .maybeSingle();
+
+      if (session != null) {
+        final sessionId = session['id'] as String;
+        final lastReadAt = session['teacher_last_read_at'] as String?;
+        
+        // Get last message
+        final messages = await Supabase.instance.client
+            .from('tutoring_messages')
+            .select('content, created_at, sender_id')
+            .eq('session_id', sessionId)
+            .order('created_at', ascending: false)
+            .limit(1);
+        
+        String lastMsg = 'Tap to start tutoring';
+        String lastTime = '';
+        
+        if (messages.isNotEmpty) {
+          final msg = messages.first;
+          final msgTime = DateTime.parse(msg['created_at'] as String).toLocal();
+          final now = DateTime.now();
+          
+          if (now.difference(msgTime).inDays == 0) {
+            lastTime = '${msgTime.hour}:${msgTime.minute.toString().padLeft(2, '0')}';
+          } else if (now.difference(msgTime).inDays == 1) {
+            lastTime = 'Yesterday';
+          } else {
+            lastTime = '${msgTime.day}/${msgTime.month}';
+          }
+          
+          lastMsg = msg['content'] as String? ?? 'File shared';
+        }
+        
+        // Count unread
+        int count = 0;
+        if (lastReadAt != null) {
+          count = await Supabase.instance.client
               .from('tutoring_messages')
               .count(CountOption.exact)
-              .eq('session_id', session['id'] as String);
-
-          if (count > 0) {
-            _unreadCounts[studentId] = count;
-          }
+              .eq('session_id', sessionId)
+              .neq('sender_id', userId)
+              .gt('created_at', lastReadAt);
+        } else {
+          count = await Supabase.instance.client
+              .from('tutoring_messages')
+              .count(CountOption.exact)
+              .eq('session_id', sessionId)
+              .neq('sender_id', userId);
         }
-      } catch (_) {}
+        
+        _studentInfo[studentId] = {
+          'message': lastMsg,
+          'time': lastTime,
+          'unread': count,
+        };
+      }
+    } catch (e) {
+      debugPrint('Error for $studentId: $e');
     }
   }
+}
 
-  void _openChat(Map<String, dynamic> enrollment) {
-    final student = enrollment['student'] as Map<String, dynamic>;
-    final subject = enrollment['subject'] as Map<String, dynamic>?;
+  Future<void> _loadUnreadCounts(List<Map<String, dynamic>> enrollments) async {
+  final userId = _authService.currentUserId;
+  if (userId == null) return;
 
+  for (final enrollment in enrollments) {
+    final studentId = enrollment['student_id'] as String;
+    try {
+      // Find active session with this student
+      final session = await Supabase.instance.client
+          .from('tutoring_sessions')
+          .select('id, teacher_last_read_at')
+          .eq('student_id', studentId)
+          .eq('teacher_id', userId)
+          .eq('status', 'active')
+          .maybeSingle();
+
+      if (session != null) {
+        final sessionId = session['id'] as String;
+        final lastReadAt = session['teacher_last_read_at'] as String?;
+        
+        int count = 0;
+        if (lastReadAt != null) {
+          // Only count messages after teacher last read
+          count = await Supabase.instance.client
+              .from('tutoring_messages')
+              .count(CountOption.exact)
+              .eq('session_id', sessionId)
+              .neq('sender_id', userId)  // Don't count teacher's own messages
+              .gt('created_at', lastReadAt);
+        } else {
+          // Never read - count all from student
+          count = await Supabase.instance.client
+              .from('tutoring_messages')
+              .count(CountOption.exact)
+              .eq('session_id', sessionId)
+              .neq('sender_id', userId);
+        }
+        
+        _unreadCounts[studentId] = count;
+      }
+    } catch (e) {
+      debugPrint('Count error for $studentId: $e');
+    }
+  }
+}
+
+  void _openChat(Map<String, dynamic> enrollment) async {
+  final student = enrollment['student'] as Map<String, dynamic>;
+  final subject = enrollment['subject'] as Map<String, dynamic>?;
+  final userId = _authService.currentUserId;
+  final studentId = student['id'] as String;
+
+  // ✅ Mark as read when teacher opens chat
+  if (userId != null) {
+    await Supabase.instance.client
+        .from('tutoring_sessions')
+        .update({'teacher_last_read_at': DateTime.now().toUtc().toIso8601String()}) 
+        .eq('student_id', studentId)
+        .eq('teacher_id', userId)
+        .eq('status', 'active');
+  }
+
+  if (mounted) {
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => TutoringScreen(
-          teacherId: _authService.currentUserId!,
-          studentId: student['id'],
+          teacherId: userId!,
+          studentId: studentId,
           teacherName: student['display_name'] ?? student['full_name'] ?? 'Student',
           subjectId: subject?['id'] as String?,
           subjectName: subject?['name'] as String?,
@@ -169,6 +276,7 @@ class _TeacherStudentsScreenState extends State<TeacherStudentsScreen> {
       ),
     ).then((_) => _loadStudents());
   }
+}
 
   @override
   Widget build(BuildContext context) {
@@ -335,12 +443,14 @@ class _TeacherStudentsScreenState extends State<TeacherStudentsScreen> {
   }
 
   Widget _buildStudentCard(Map<String, dynamic> enrollment) {
-    final student = enrollment['student'] as Map<String, dynamic>;
-    final studentName = student['display_name'] ?? student['full_name'] ?? 'Student';
-    final avatarUrl = student['avatar_url'] as String?;
-    final studentId = student['id'] as String;
-    final unreadCount = _unreadCounts[studentId] ?? 0;
-
+   final student = enrollment['student'] as Map<String, dynamic>;
+  final studentName = student['display_name'] ?? student['full_name'] ?? 'Student';
+  final avatarUrl = student['avatar_url'] as String?;
+  final studentId = student['id'] as String;
+  final info = _studentInfo[studentId] ?? {};
+  final unreadCount = info['unread'] as int? ?? 0;
+  final lastMessage = info['message'] as String? ?? 'Tap to start tutoring';
+  final lastTime = info['time'] as String? ?? '';
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
@@ -407,37 +517,42 @@ class _TeacherStudentsScreenState extends State<TeacherStudentsScreen> {
                       ),
                   ],
                 ),
-                const SizedBox(width: 14),
+                
 
                 // Student info
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        studentName,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 16,
-                          color: Color(0xFF1A237E),
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        unreadCount > 0
-                            ? '$unreadCount new message${unreadCount > 1 ? 's' : ''}'
-                            : 'Tap to start tutoring',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: unreadCount > 0 ? const Color(0xFF4CAF50) : Colors.grey,
-                          fontWeight: unreadCount > 0 ? FontWeight.w600 : FontWeight.normal,
-                        ),
-                      ),
-                    ],
+                const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(child: Text(studentName, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16, color: Color(0xFF1A237E)))),
+                  if (lastTime.isNotEmpty)
+                    Text(lastTime, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      lastMessage,
+                      maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 13, color: unreadCount > 0 ? const Color(0xFF4CAF50) : Colors.grey.shade600, fontWeight: unreadCount > 0 ? FontWeight.w600 : FontWeight.normal),
+                    ),
                   ),
-                ),
+                  if (unreadCount > 0)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(color: const Color(0xFF4CAF50).withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
+                      child: const Text('New', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: Color(0xFF4CAF50))),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
 
                 // Chat icon
                 Container(
