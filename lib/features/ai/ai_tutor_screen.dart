@@ -134,19 +134,26 @@ class _AITutorScreenState extends State<AITutorScreen>
   
   final streamController = ChatStreamController();
   
+  // 1. Create mutable reference index safely
+  int? streamingIndex;
+
   setState(() {
     _messages.add(_ChatMessage(text: text, isUser: true));
-    _messages.add(_ChatMessage(
-      text: '',
+    
+    // Create the loading placeholder bubble
+    final placeholder = _ChatMessage(
+      text: 'Thinking...', // Non-empty initial text prevents layout collapse
       isUser: false,
       isStreaming: true,
       streamController: streamController,
-    ));
+    );
+    _messages.add(placeholder);
+    streamingIndex = _messages.length - 1;
     _isLoading = true;
   });
   _scrollToBottom();
 
-  // Save user message
+  // Save user message to database
   if (_sessionId != null) {
     final studentMessages = _messages.where((m) => m.isUser).length;
     if (studentMessages == 1) {
@@ -156,63 +163,72 @@ class _AITutorScreenState extends State<AITutorScreen>
     await _chatService.updateSessionTimestamp(_sessionId!);
   }
 
-  // Build history
+  // Build clean non-streaming conversational history context
   final history = _messages
       .where((m) => !m.isStreaming)
       .map((m) => {'sender': m.isUser ? 'student' : 'ai', 'message': m.text})
-      .toList()
-      .reversed
-      .take(10)
-      .toList()
-      .reversed
       .toList();
 
-  // ✅ Call your working askAI
-  final reply = await _aiService.askAI(
-    message: text,
-    subject: widget.subjectName ?? 'General',
-    history: history,
-  );
+  // Limit history slice smoothly to avoid bloated payloads
+  final trimmedHistory = history.length > 10 
+      ? history.sublist(history.length - 10) 
+      : history;
 
-  // ✅ Stream characters smoothly (not words)
-  _streamToController(reply, streamController);
-}
+  try {
+    final stream = _aiService.chatStream(
+      message: text,
+      subject: widget.subjectName ?? 'General',
+      history: trimmedHistory,
+    );
 
-void _streamToController(String fullText, ChatStreamController controller) {
-  int charIndex = 0;
-  const charsPerTick = 2; // Small chunks for smooth effect
-  const tickMs = 10; // Fast ticks for smoothness
-
-  _streamTimer?.cancel();
-  _streamTimer = Timer.periodic(const Duration(milliseconds: tickMs), (timer) {
-    if (charIndex >= fullText.length) {
-      timer.cancel();
+    await for (final chunk in stream) {
+      streamController.addChunk(chunk);
+      
+      // 2. Force the list view to accommodate changing text height
       if (mounted) {
-        setState(() => _isLoading = false);
-        
-        if (_sessionId != null) {
-          _chatService.saveMessage(sessionId: _sessionId!, sender: 'ai', message: fullText);
-        }
-        
-        final aiMsgIndex = _messages.indexWhere((m) => m.streamController == controller);
-        if (aiMsgIndex != -1) {
-          setState(() {
-            _messages[aiMsgIndex].text = fullText;
-            _messages[aiMsgIndex].isStreaming = false;
-            _messages[aiMsgIndex].streamController = null;
-          });
-        }
+        _scrollToBottom(); 
       }
-      controller.closeStream();
-      return;
     }
+  } catch (e) {
+    streamController.addChunk('\n\n*Error generating response. Please try again.*');
+  } finally {
+    if (mounted) {
+      setState(() => _isLoading = false);
+    }
+    
+    final finalAiText = streamController.fullText.isNotEmpty 
+        ? streamController.fullText 
+        : 'No response received from tutor.';
 
-    charIndex += charsPerTick;
-    if (charIndex > fullText.length) charIndex = fullText.length;
-    controller.addChunk(fullText.substring(0, charIndex));
-    _scrollToBottom();
-  });
+    // Save complete response string to database
+    if (_sessionId != null && streamController.fullText.isNotEmpty) {
+      await _chatService.saveMessage(
+        sessionId: _sessionId!,
+        sender: 'ai',
+        message: finalAiText,
+      );
+    }
+    
+    streamController.closeStream();
+    
+    // 3. Re-locate index safely and replace entirely to dodge immutability issues
+    if (mounted) {
+      final targetIndex = _messages.indexWhere((m) => m.streamController == streamController);
+      if (targetIndex != -1) {
+        setState(() {
+          _messages[targetIndex] = _ChatMessage(
+            text: finalAiText,
+            isUser: false,
+            isStreaming: false,
+            streamController: null,
+          );
+        });
+      }
+      _scrollToBottom();
+    }
+  }
 }
+
 
   
 
@@ -783,24 +799,29 @@ class _MessageBubble extends StatelessWidget {
                 )
               // AI message - left aligned within max-width, large font
               : message.isStreaming && message.streamController != null
-                  ? StreamBuilder<String>(
-  stream: message.streamController!.textStream,
-  initialData: '',
-  builder: (context, snapshot) {
-    final text = snapshot.data ?? '';
-    if (text.isEmpty) return const SizedBox.shrink();
-    return GptMarkdown(
-      text,
-      useDollarSignsForLatex: true,
-      style: const TextStyle(fontSize: 17, height: 1.7, color: Color(0xFF1E1E1E)),
-    );
-  },
-)
-                  : GptMarkdown(
-                      message.text,
-                      useDollarSignsForLatex: true,
-                      style: const TextStyle(fontSize: 17, height: 1.7, color: Color(0xFF1E1E1E)),
-                    ),
+    ? StreamBuilder<String>(
+        stream: message.streamController!.textStream,
+        initialData: message.text, // Starts with 'Thinking...' baseline placeholder
+        builder: (context, snapshot) {
+          final text = snapshot.data ?? '';
+          
+          if (text == 'Thinking...' || text.isEmpty) {
+            return const PremiumTypingIndicator();
+          }
+
+          return GptMarkdown(
+            text,
+            useDollarSignsForLatex: true,
+            style: const TextStyle(fontSize: 17, height: 1.7, color: Color(0xFF1E1E1E)),
+          );
+        },
+      )
+    : GptMarkdown(
+        message.text,
+        useDollarSignsForLatex: true,
+        style: const TextStyle(fontSize: 17, height: 1.7, color: Color(0xFF1E1E1E)),
+      ),
+
         ),
       ),
     );
@@ -1038,3 +1059,24 @@ class _BouncingDotState extends State<_BouncingDot>
     );
   }
 } 
+
+class PremiumTypingIndicator extends StatelessWidget {
+  const PremiumTypingIndicator({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 4.0),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: const [
+          _BouncingDot(delay: 0),
+          SizedBox(width: 4),
+          _BouncingDot(delay: 200),
+          SizedBox(width: 4),
+          _BouncingDot(delay: 400),
+        ],
+      ),
+    );
+  }
+}

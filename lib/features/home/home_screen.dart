@@ -22,6 +22,7 @@ import '../tutoring/my_tutors_screen.dart';
 import '../generated_exams/exam_history_screen.dart';
 import '../summaries/my_summaries_screen.dart';
 import '../flashcards/my_flashcards_screen.dart';
+import '../../widgets/ai_feature_guard.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -956,12 +957,12 @@ const SizedBox(height: 30),
                                   width: cardWidth,
                                   isPremium: true,
                                   onTap: () {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) => const AITutorScreen(),
-                                      ),
-                                    );
+                                    Navigator.push(context, MaterialPageRoute(
+  builder: (_) => AIFeatureGuard(
+    featureName: 'AI Tutor',
+    child: const AITutorScreen(),
+  ),
+));
                                   },
                                 ),
                                 // Generate Exams - NEW Premium Feature
@@ -976,12 +977,12 @@ const SizedBox(height: 30),
                                     // Navigate to Generate Exams Screen
                                     // This will use the QuestionBankEntryScreen but with a different mode
                                     // For now, we'll navigate to a new screen
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) => const ExamGeneratorScreen(),
-                                      ),
-                                    );
+                                    Navigator.push(context, MaterialPageRoute(
+  builder: (_) => AIFeatureGuard(
+    featureName: 'Exam Generator',
+    child: const ExamGeneratorScreen(),
+  ),
+));
                                   },
                                 ),
                                 // Premium Content - Placeholder for future
@@ -993,12 +994,12 @@ const SizedBox(height: 30),
   width: cardWidth,
   isPremium: true,
   onTap: () {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => const ExamHistoryScreen(),
-      ),
-    );
+    Navigator.push(context, MaterialPageRoute(
+  builder: (_) => AIFeatureGuard(
+    featureName: 'Exam History',
+    child: const ExamHistoryScreen(),
+  ),
+));
   },
 ),
 
@@ -1010,12 +1011,12 @@ _AnimatedQuickActionCard(
   width: cardWidth,
   isPremium: true,
   onTap: () {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => const MyFlashcardsScreen(),
-      ),
-    );
+    Navigator.push(context, MaterialPageRoute(
+  builder: (_) => AIFeatureGuard(
+    featureName: 'FlashCards',
+    child: const MyFlashcardsScreen(),
+  ),
+));
   },
 ),
 _AnimatedQuickActionCard(
@@ -1026,10 +1027,12 @@ _AnimatedQuickActionCard(
   width: cardWidth,
   isPremium: true,
   onTap: () {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const MySummariesScreen()),
-    );
+    Navigator.push(context, MaterialPageRoute(
+  builder: (_) => AIFeatureGuard(
+    featureName: 'Summaries',
+    child: const MySummariesScreen(),
+  ),
+));
   },
 ),
 

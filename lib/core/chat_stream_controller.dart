@@ -2,17 +2,19 @@ import 'dart:async';
 
 class ChatStreamController {
   final StreamController<String> _textStreamController = StreamController<String>.broadcast();
-  String _fullText = '';
+  final StringBuffer _textBuffer = StringBuffer();
 
   Stream<String> get textStream => _textStreamController.stream;
-  String get fullText => _fullText;
+  String get fullText => _textBuffer.toString();
 
-  void addChunk(String fullTextSoFar) {  // ✅ Receives complete text so far
-    _fullText = fullTextSoFar;
-    _textStreamController.add(_fullText);
+  void addChunk(String newChunk) {
+    _textBuffer.write(newChunk);
+    _textStreamController.add(_textBuffer.toString());
   }
 
   void closeStream() {
-    _textStreamController.close();
+    if (!_textStreamController.isClosed) {
+      _textStreamController.close();
+    }
   }
 }
