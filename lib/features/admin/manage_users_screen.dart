@@ -122,24 +122,15 @@ class _ManageUsersScreenState extends State<ManageUsersScreen>
     setState(() => _filteredUsers = filtered);
   }
 
-  Future<void> _showEnrollmentManager(Map<String, dynamic> user) async {
-  final enrollments = await Supabase.instance.client
-      .from('enrollments')
-      .select('*, subjects(name), profiles!teacher_id(full_name)')
-      .eq('student_id', user['id'])
-      .inFilter('status', ['paid', 'approved', 'pending']);
-
-  if (!mounted) return;
-
+  Future<void> _showAIManager(Map<String, dynamic> user) async {
   showModalBottomSheet(
     context: context,
     isScrollControlled: true,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
     ),
-    builder: (ctx) => _EnrollmentManagerSheet(
+    builder: (ctx) => _StudentAIManagerSheet(
       student: user,
-      enrollments: List<Map<String, dynamic>>.from(enrollments),
       onUpdate: _loadData,
     ),
   );
@@ -164,7 +155,7 @@ class _ManageUsersScreenState extends State<ManageUsersScreen>
     builder: (ctx) => _UserDetailSheet(
       user: user,
       onUpdate: _loadData,
-      onManageSubscriptions: _showEnrollmentManager,  // ✅ Pass callback
+      onManageSubscriptions: _showAIManager,  // ✅ Pass callback
     ),
   );
 }
@@ -731,53 +722,106 @@ if (role == 'student')
   
 }
 
-class _EnrollmentManagerSheet extends StatefulWidget {
+class _StudentAIManagerSheet extends StatefulWidget {
   final Map<String, dynamic> student;
-  final List<Map<String, dynamic>> enrollments;
   final VoidCallback onUpdate;
 
-  const _EnrollmentManagerSheet({
+  const _StudentAIManagerSheet({
     required this.student,
-    required this.enrollments,
     required this.onUpdate,
   });
 
   @override
-  State<_EnrollmentManagerSheet> createState() => _EnrollmentManagerSheetState();
+  State<_StudentAIManagerSheet> createState() => _StudentAIManagerSheetState();
 }
 
-class _EnrollmentManagerSheetState extends State<_EnrollmentManagerSheet> {
+class _StudentAIManagerSheetState extends State<_StudentAIManagerSheet> {
   bool _isSaving = false;
+  Map<String, dynamic> _aiStatus = {};
 
-  Future<void> _grantSubscription(Map<String, dynamic> enrollment, int days) async {
+  @override
+  void initState() {
+    super.initState();
+    _loadAIStatus();
+  }
+
+  Future<void> _loadAIStatus() async {
+    try {
+      final profile = await Supabase.instance.client
+          .from('profiles')
+          .select('is_subscribed, subscription_expires_at, trial_started_at, trial_ends_at')
+          .eq('id', widget.student['id'])
+          .single();
+
+      final now = DateTime.now();
+      String statusType = 'none'; // none, trial_active, trial_expired, subscribed, expired
+      String statusMessage = '';
+      bool isActive = false;
+
+      // Check subscription
+      if (profile['is_subscribed'] == true && profile['subscription_expires_at'] != null) {
+        final expiry = DateTime.parse(profile['subscription_expires_at'] as String);
+        if (expiry.isAfter(now)) {
+          isActive = true;
+          statusType = 'subscribed';
+          final daysLeft = expiry.difference(now).inDays;
+          statusMessage = 'Active · $daysLeft day${daysLeft == 1 ? '' : 's'} left';
+        } else {
+          statusType = 'expired';
+          statusMessage = 'Subscription expired';
+        }
+      }
+
+      // Check trial (only if no active subscription)
+      if (!isActive && profile['trial_ends_at'] != null) {
+        final trialEnd = DateTime.parse(profile['trial_ends_at'] as String);
+        if (trialEnd.isAfter(now)) {
+          isActive = true;
+          statusType = 'trial_active';
+          final daysLeft = trialEnd.difference(now).inDays;
+          statusMessage = 'Trial · $daysLeft day${daysLeft == 1 ? '' : 's'} left';
+        } else if (statusType == 'none') {
+          statusType = 'trial_expired';
+          statusMessage = 'Trial ended';
+        }
+      }
+
+      if (statusType == 'none') {
+        statusMessage = 'No subscription or trial';
+      }
+
+      if (mounted) setState(() => _aiStatus = {
+        'active': isActive,
+        'type': statusType,
+        'message': statusMessage,
+        'expires_at': profile['subscription_expires_at'],
+        'trial_ends_at': profile['trial_ends_at'],
+      });
+    } catch (e) {
+      debugPrint('Load AI status error: $e');
+    }
+  }
+
+  Future<void> _grantAISubscription(int days) async {
     setState(() => _isSaving = true);
     try {
       final expiresAt = DateTime.now().add(Duration(days: days)).toIso8601String();
       
       await Supabase.instance.client
-          .from('enrollments')
-          .update({
-            'is_subscribed': true,
-            'subscription_expires_at': expiresAt,
-            'status': 'paid',
-            'amount_paid': 0, // Manual grant
-          })
-          .eq('id', enrollment['id']);
-
-      // Also update profile
-      await Supabase.instance.client
           .from('profiles')
           .update({
             'is_subscribed': true,
             'subscription_expires_at': expiresAt,
-            'subscription_plan': 'paid',
+            'subscription_plan': 'ai_premium',
           })
           .eq('id', widget.student['id']);
 
       widget.onUpdate();
+      await _loadAIStatus();
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Subscription granted for $days days ✅'), backgroundColor: const Color(0xFF4CAF50)),
+          SnackBar(content: Text('AI Premium granted for $days days ✅'), backgroundColor: const Color(0xFF4CAF50)),
         );
       }
     } catch (e) {
@@ -791,19 +835,61 @@ class _EnrollmentManagerSheetState extends State<_EnrollmentManagerSheet> {
     }
   }
 
-  Future<void> _revokeSubscription(Map<String, dynamic> enrollment) async {
+  Future<void> _extendSubscription(int days) async {
+    setState(() => _isSaving = true);
+    try {
+      // Extend from current expiry or from now
+      final currentExpiry = _aiStatus['expires_at'] as String?;
+      final base = currentExpiry != null 
+          ? DateTime.parse(currentExpiry) 
+          : DateTime.now();
+      final newExpiry = base.isAfter(DateTime.now()) 
+          ? base.add(Duration(days: days)) 
+          : DateTime.now().add(Duration(days: days));
+      
+      await Supabase.instance.client
+          .from('profiles')
+          .update({
+            'is_subscribed': true,
+            'subscription_expires_at': newExpiry.toIso8601String(),
+            'subscription_plan': 'ai_premium',
+          })
+          .eq('id', widget.student['id']);
+
+      widget.onUpdate();
+      await _loadAIStatus();
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Subscription extended by $days days ✅'), backgroundColor: const Color(0xFF4CAF50)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  Future<void> _revokeAISubscription() async {
     setState(() => _isSaving = true);
     try {
       await Supabase.instance.client
-          .from('enrollments')
+          .from('profiles')
           .update({
             'is_subscribed': false,
             'subscription_expires_at': null,
-            'status': 'approved',
+            'subscription_plan': null,
           })
-          .eq('id', enrollment['id']);
+          .eq('id', widget.student['id']);
 
       widget.onUpdate();
+      await _loadAIStatus();
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Subscription revoked'), backgroundColor: Colors.orange),
@@ -820,105 +906,134 @@ class _EnrollmentManagerSheetState extends State<_EnrollmentManagerSheet> {
     }
   }
 
-  @override
-Widget build(BuildContext context) {
-  return Container(
-    constraints: BoxConstraints(
-      maxHeight: MediaQuery.of(context).size.height * 0.8,  // ✅ Max 80% of screen
-    ),
-    padding: const EdgeInsets.all(24),
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Center(
-          child: Container(
-            width: 40, height: 4,
-            decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2)),
-          ),
-        ),
-        const SizedBox(height: 20),
-        Text('${widget.student['full_name']} - Enrollments',
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 16),
-
-        if (_isSaving)
-          const Center(child: CircularProgressIndicator())
-        else if (widget.enrollments.isEmpty)
-          const Center(child: Text('No enrollments found', style: TextStyle(color: Colors.grey)))
-        else
-          // ✅ Make the list scrollable
-          Flexible(
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: widget.enrollments.length,
-              itemBuilder: (context, index) {
-                final e = widget.enrollments[index];
-                final subjectName = e['subjects']?['name'] ?? 'Unknown';
-                final teacherName = e['profiles']?['full_name'] ?? 'Unknown';
-                final isSubscribed = e['is_subscribed'] == true;
-                final expiresAt = e['subscription_expires_at'] as String?;
-
-                return Container(
-                  margin: const EdgeInsets.only(bottom: 10),
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade50,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.grey.shade200),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(subjectName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                                Text('Teacher: $teacherName', style: const TextStyle(fontSize: 12, color: Colors.grey)),
-                                const SizedBox(height: 4),
-                                if (isSubscribed && expiresAt != null)
-                                  Text('✅ Subscribed until ${_formatDate(expiresAt)}',
-                                      style: const TextStyle(fontSize: 11, color: Color(0xFF4CAF50)))
-                                else
-                                  const Text('❌ Not subscribed', style: TextStyle(fontSize: 11, color: Colors.red)),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          if (isSubscribed)
-                            _SmallActionButton(label: 'Revoke', color: Colors.red, onTap: () => _revokeSubscription(e))
-                          else ...[
-                            _SmallActionButton(label: '30 Days', color: const Color(0xFF4CAF50), onTap: () => _grantSubscription(e, 30)),
-                            const SizedBox(width: 8),
-                            _SmallActionButton(label: '90 Days', color: Colors.blue, onTap: () => _grantSubscription(e, 90)),
-                          ],
-                        ],
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ),
-        const SizedBox(height: 12),
-      ],
-    ),
-  );
-}
-
   String _formatDate(String dateStr) {
     try {
-      return '${DateTime.parse(dateStr).day}/${DateTime.parse(dateStr).month}/${DateTime.parse(dateStr).year}';
+      final date = DateTime.parse(dateStr);
+      return '${date.day}/${date.month}/${date.year}';
     } catch (_) {
       return dateStr;
     }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isActive = _aiStatus['active'] == true;
+    final type = _aiStatus['type'] as String? ?? 'none';
+    final message = _aiStatus['message'] as String? ?? '';
+    final expiresAt = _aiStatus['expires_at'] as String?;
+
+    // Determine status color
+    Color statusColor = Colors.grey;
+    IconData statusIcon = Icons.info_outline;
+    if (type == 'subscribed') { statusColor = const Color(0xFF4CAF50); statusIcon = Icons.check_circle; }
+    else if (type == 'trial_active') { statusColor = Colors.blue; statusIcon = Icons.rocket_launch; }
+    else if (type == 'expired') { statusColor = Colors.red; statusIcon = Icons.cancel; }
+    else if (type == 'trial_expired') { statusColor = Colors.orange; statusIcon = Icons.timer_off; }
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2))),
+          ),
+          const SizedBox(height: 16),
+          
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(colors: [Color(0xFFFFD700), Color(0xFFFFA000)]),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.diamond, color: Colors.white, size: 18),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text('${widget.student['full_name']} - AI Premium',
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+
+          if (_isSaving)
+            const Center(child: Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator()))
+          else ...[
+            // Status card
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: statusColor.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: statusColor.withOpacity(0.2)),
+              ),
+              child: Row(
+                children: [
+                  Icon(statusIcon, color: statusColor, size: 24),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(message, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: statusColor)),
+                      if (expiresAt != null && isActive)
+                        Text('Expires: ${_formatDate(expiresAt)}', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                    ]),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // ✅ Show appropriate actions based on status
+            if (type == 'none' || type == 'trial_expired' || type == 'expired')
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(color: const Color(0xFFFFD700).withOpacity(0.05), borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFFFFD700).withOpacity(0.1))),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('Grant Subscription', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Color(0xFFFF8F00))),
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    _SmallActionButton(label: '30 Days', color: const Color(0xFFFFD700), onTap: () => _grantAISubscription(30)),
+                    const SizedBox(width: 8),
+                    _SmallActionButton(label: '90 Days', color: Colors.blue, onTap: () => _grantAISubscription(90)),
+                  ]),
+                ]),
+              ),
+
+            if (type == 'subscribed' || type == 'trial_active')
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(color: Colors.blue.withOpacity(0.05), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.blue.withOpacity(0.1))),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('Extend Subscription', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Colors.blue)),
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    _SmallActionButton(label: '+30 Days', color: Colors.blue, onTap: () => _extendSubscription(30)),
+                    const SizedBox(width: 8),
+                    _SmallActionButton(label: '+90 Days', color: Colors.indigo, onTap: () => _extendSubscription(90)),
+                  ]),
+                ]),
+              ),
+            const SizedBox(height: 8),
+
+            // Revoke - only if active
+            if (isActive)
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(color: Colors.red.withOpacity(0.05), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.red.withOpacity(0.1))),
+                child: Row(children: [
+                  const Text('Revoke Access', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Colors.red)),
+                  const Spacer(),
+                  _SmallActionButton(label: 'Revoke', color: Colors.red, onTap: _revokeAISubscription),
+                ]),
+              ),
+          ],
+        ],
+      ),
+    );
   }
 }
 
@@ -931,17 +1046,16 @@ class _SmallActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: color.withOpacity(0.3)),
-        ),
-        child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color)),
+    return ElevatedButton(
+      onPressed: onTap,
+      style: ElevatedButton.styleFrom(
+        backgroundColor: color,
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        textStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
       ),
+      child: Text(label),
     );
   }
 }
@@ -999,3 +1113,4 @@ class _ActionChip extends StatelessWidget {
     );
   }
 }
+
