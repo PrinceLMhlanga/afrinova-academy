@@ -8,6 +8,9 @@ import 'chat_history_screen.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
 import '../../core/chat_stream_controller.dart';
 import 'chat_sidebar.dart';
+import 'package:flutter_highlighter/flutter_highlighter.dart';
+import 'package:flutter_highlighter/themes/atom-one-dark.dart';
+import 'package:flutter/services.dart';
 
 class AITutorScreen extends StatefulWidget {
   final String? subjectName;
@@ -863,6 +866,10 @@ class _MessageBubble extends StatelessWidget {
             text,
             useDollarSignsForLatex: true,
             style: const TextStyle(fontSize: 17, height: 1.7, color: Color(0xFF1E1E1E)),
+            codeBuilder: (context, name, code, closed) {
+              return _buildSyntaxHighlighter(name, code);
+            },
+            
           );
         },
       )
@@ -870,12 +877,88 @@ class _MessageBubble extends StatelessWidget {
         message.text,
         useDollarSignsForLatex: true,
         style: const TextStyle(fontSize: 17, height: 1.7, color: Color(0xFF1E1E1E)),
+        codeBuilder: (context, name, code, closed) {
+          return _buildSyntaxHighlighter(name, code);
+        },
       ),
 
         ),
       ),
     );
   }
+
+ // 1. Ensure this native Flutter services import is at the very top of your file
+
+
+// 2. Add a stateful tracker or local tracking list if you want to track dynamic states,
+// but to keep it simple and stateless within this builder helper, we can use a StatefulBuilder:
+Widget _buildSyntaxHighlighter(String? languageName, String codeSnippet) {
+  final lang = (languageName ?? 'code').toLowerCase();
+  final displayLang = lang.isNotEmpty ? lang[0].toUpperCase() + lang.substring(1) : 'Code';
+
+  return Container(
+    width: double.infinity,
+    margin: const EdgeInsets.symmetric(vertical: 12.0),
+    clipBehavior: Clip.antiAlias,
+    decoration: BoxDecoration(
+      color: const Color(0xFF282C34), // Matches Dark Atom code theme background
+      borderRadius: BorderRadius.circular(10),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withAlpha(20),
+          blurRadius: 4,
+          offset: const Offset(0, 2),
+        ),
+      ],
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // 🛠️ THE NEW UTILITY HEADER BAR
+       // Inside your _buildSyntaxHighlighter Column header row child block:
+Container(
+  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+  color: const Color(0xFF21252B), 
+  child: Row(
+    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    children: [
+      // Language Label Indicator
+      Text(
+        displayLang,
+        style: const TextStyle(
+          color: Color(0xFFA6ACCD),
+          fontSize: 13,
+          fontWeight: FontWeight.bold,
+          fontFamily: 'Courier, Courier New, monospace',
+        ),
+      ),
+      
+      // ✅ CLEAN DEPLOYMENT: Swapped out the old StatefulBuilder for your new robust widget
+      CodeCopyButton(textToCopy: codeSnippet),
+    ],
+  ),
+),
+
+        
+        // 💻 NATIVE CODE WORKSPACE PANEL
+        HighlightView(
+          codeSnippet.trim(),
+          language: lang,
+          theme: atomOneDarkTheme,
+          padding: const EdgeInsets.all(16.0),
+          textStyle: const TextStyle(
+            fontFamily: 'Courier, Courier New, monospace, RobotoMono',
+            fontSize: 14.5,
+            height: 1.5,
+            letterSpacing: 0.5,
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+
 }
 
 // ===== QUICK ACTION CHIP =====
@@ -1173,6 +1256,64 @@ class _SidebarToggleButtonState extends State<SidebarToggleButton> {
               color: const Color(0xff444444),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class CodeCopyButton extends StatefulWidget {
+  final String textToCopy;
+
+  const CodeCopyButton({super.key, required this.textToCopy});
+
+  @override
+  State<CodeCopyButton> createState() => _CodeCopyButtonState();
+}
+
+class _CodeCopyButtonState extends State<CodeCopyButton> {
+  bool _isCopied = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: () async {
+        if (_isCopied) return;
+
+        // Write raw code string text directly into native OS clipboard memory buffers
+        await Clipboard.setData(ClipboardData(text: widget.textToCopy));
+
+        if (mounted) {
+          setState(() => _isCopied = true);
+
+          // Return back to standard copy text display layer layout safely after 2 seconds
+          Future.delayed(const Duration(seconds: 2), () {
+            if (mounted) {
+              setState(() => _isCopied = false);
+            }
+          });
+        }
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4.0, vertical: 2.0),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              _isCopied ? Icons.check_circle_rounded : Icons.copy_rounded,
+              size: 15,
+              color: _isCopied ? Colors.green : const Color(0xFFA6ACCD),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              _isCopied ? 'Copied!' : 'Copy code',
+              style: TextStyle(
+                color: _isCopied ? Colors.green : const Color(0xFFA6ACCD),
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
         ),
       ),
     );
