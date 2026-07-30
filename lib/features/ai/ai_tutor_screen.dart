@@ -37,6 +37,9 @@ class _AITutorScreenState extends State<AITutorScreen>
   bool _isDarkMode = false;
   bool _showScrollToBottom = false;
 
+  bool _sidebarOpen = true;
+
+
   // Animation controllers for welcome screen
   late AnimationController _welcomeAnimationController;
   late Animation<double> _fadeAnimation;
@@ -67,9 +70,10 @@ class _AITutorScreenState extends State<AITutorScreen>
 
   @override
   void dispose() {
-    if (_sessionId != null && _messages.isEmpty) {
-      _chatService.deleteIfEmpty(_sessionId!);
-    }
+    if (_sessionId != null && _messages.where((m) => !m.isUser).length <= 1) {
+    // Only has welcome message or no AI replies = empty chat
+    _chatService.deleteIfEmpty(_sessionId!);
+  }
     _inputController.dispose();
     _focusNode.dispose();
     _scrollController.dispose();
@@ -118,13 +122,13 @@ class _AITutorScreenState extends State<AITutorScreen>
   }
 
   void _addWelcomeMessage() {
-    _messages.add(_ChatMessage(
-      text: widget.subjectName != null
-          ? "👋 Hello! I'm your AI tutor for **${widget.subjectName}**. How can I help you today?"
-          : "👋 Hello! I'm your AfriNova AI tutor. I'm here to help you learn. What would you like to explore?",
-      isUser: false,
-    ));
-  }
+  _messages.add(_ChatMessage(
+    text: widget.subjectName != null
+        ? "👋 Hello! I'm your AI tutor for **${widget.subjectName}**. How can I help you today?"
+        : "👋 Hello! I'm your AfriNova AI tutor. I'm here to help you learn. What would you like to explore?",
+    isUser: false,
+  ));
+}
 
   Future<void> _sendMessage() async {
   final text = _inputController.text.trim();
@@ -253,30 +257,84 @@ class _AITutorScreenState extends State<AITutorScreen>
   );
 }
 
-  @override
+ @override
 Widget build(BuildContext context) {
   if (_isInitializing) {
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
+        backgroundColor: Colors.white, elevation: 0,
         title: const Text('AI Tutor', style: TextStyle(color: Colors.black87, fontSize: 16, fontWeight: FontWeight.w600)),
         centerTitle: true,
       ),
-      body: const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CircularProgressIndicator(color: Color(0xFF1A237E)),
-            SizedBox(height: 16),
-            Text('Loading your AI tutor...', style: TextStyle(color: Colors.grey)),
-          ],
-        ),
-      ),
+      body: const Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        CircularProgressIndicator(color: Color(0xFF1A237E)),
+        SizedBox(height: 16),
+        Text('Loading your AI tutor...', style: TextStyle(color: Colors.grey)),
+      ])),
     );
   }
 
+  final isWideScreen = MediaQuery.of(context).size.width > 768;
+
+  // ✅ Wide screen - persistent sidebar
+ 
+
+
+if (isWideScreen) {
+  return Scaffold(
+    backgroundColor: const Color(0xFFFAFAFA),
+    body: Stack(
+      children: [
+        Row(
+          children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              width: _sidebarOpen ? 280 : 0,
+              child: _sidebarOpen
+                  ? ClipRect(
+                      child: ChatSidebarContent(
+                        currentSessionId: _sessionId,
+                        currentSubject: widget.subjectName,
+                        onSessionSelected: (sessionId, subject) {
+                          Navigator.pushReplacement(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => AITutorScreen(sessionId: sessionId, subjectName: subject),
+                            ),
+                          );
+                        },
+                        onNewChat: _startNewChat,
+                        // ✅ Pass the toggle button to the sidebar header
+                        sidebarToggle: SidebarToggleButton(
+                          icon: Icons.chevron_left,
+                          onPressed: () => setState(() => _sidebarOpen = false),
+                        ),
+                      ),
+                    )
+                  : null,
+            ),
+            if (!_sidebarOpen)
+              const SizedBox(width: 48), // Space for toggle button
+            Expanded(child: _buildChatContent()),
+          ],
+        ),
+        // ✅ When sidebar is closed, show toggle at top left of screen
+        if (!_sidebarOpen)
+          Positioned(
+            top: 8,
+            left: 8,
+            child: SidebarToggleButton(
+              icon: Icons.chevron_right,
+              onPressed: () => setState(() => _sidebarOpen = true),
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
+  // ✅ Narrow screen - drawer (your original working code)
   return Scaffold(
     backgroundColor: const Color(0xFFFAFAFA),
     appBar: AppBar(
@@ -287,9 +345,9 @@ Widget build(BuildContext context) {
         ),
       ),
       title: Text(
-        widget.subjectName != null ? '${widget.subjectName} Tutor' : 'AI Tutor',
-        style: const TextStyle(color: Colors.black87, fontSize: 16, fontWeight: FontWeight.w600),
-      ),
+  widget.subjectName != null ? '${widget.subjectName} Tutor' : 'AfriNova AI Tutor',
+  style: const TextStyle(color: Colors.black87, fontSize: 16, fontWeight: FontWeight.w600),
+),
       centerTitle: true,
       backgroundColor: Colors.white,
       elevation: 0,
@@ -301,73 +359,65 @@ Widget build(BuildContext context) {
         ),
       ],
     ),
-    drawer: Builder(
-  builder: (drawerContext) => ChatSidebar(
-    currentSessionId: _sessionId,
-    currentSubject: widget.subjectName,
-    onSessionSelected: (sessionId, subject) {
-      // Closes only the drawer using the unique drawerContext
-      Navigator.pop(drawerContext); 
-      
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (_) => AITutorScreen(
-            sessionId: sessionId,
-            subjectName: subject,
+    drawer: ChatSidebar(
+      currentSessionId: _sessionId,
+      currentSubject: widget.subjectName,
+      onSessionSelected: (sessionId, subject) {
+        Navigator.pop(context);
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => AITutorScreen(sessionId: sessionId, subjectName: subject),
           ),
-        ),
-      );
-    },
-    onNewChat: () {
-      // Closes only the drawer using the unique drawerContext
-      Navigator.pop(drawerContext); 
-      _startNewChat();
-    },
-  ),
-),
+        );
+      },
+      onNewChat: () {
+        Navigator.pop(context);
+        _startNewChat();
+      },
+    ),
+    body: _buildChatContent(),
+  );
+}
 
-
-    body: Column(
-      children: [
-        // Messages
-        Expanded(
-          child: _messages.isEmpty
-              ? _buildWelcomeScreen()
-              : Stack(
-                  children: [
-                    ListView.builder(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-                      itemCount: _messages.length,
-                      itemBuilder: (context, index) {
-                        final msg = _messages[index];
-                        return _MessageBubble(message: msg);
-                      },
-                    ),
-                    if (_showScrollToBottom)
-                      Positioned(
-                        bottom: 16,
-                        right: 16,
-                        child: GestureDetector(
-                          onTap: _scrollToBottom,
-                          child: Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF1A237E),
-                              shape: BoxShape.circle,
-                              boxShadow: [BoxShadow(color: const Color(0xFF1A237E).withOpacity(0.3), blurRadius: 12, offset: const Offset(0, 4))],
-                            ),
-                            child: const Icon(Icons.arrow_downward_rounded, color: Colors.white, size: 20),
+// ✅ Extracted chat content (used by both layouts)
+Widget _buildChatContent() {
+  return Column(
+    children: [
+      Expanded(
+        child: _messages.isEmpty
+            ? _buildWelcomeScreen()
+            : Stack(
+                children: [
+                  ListView.builder(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+                    itemCount: _messages.length,
+                    itemBuilder: (context, index) {
+                      final msg = _messages[index];
+                      return _MessageBubble(message: msg);
+                    },
+                  ),
+                  if (_showScrollToBottom)
+                    Positioned(
+                      bottom: 16, right: 16,
+                      child: GestureDetector(
+                        onTap: _scrollToBottom,
+                        child: Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1A237E), shape: BoxShape.circle,
+                            boxShadow: [BoxShadow(color: const Color(0xFF1A237E).withOpacity(0.3), blurRadius: 12, offset: const Offset(0, 4))],
                           ),
+                          child: const Icon(Icons.arrow_downward_rounded, color: Colors.white, size: 20),
                         ),
                       ),
-                  ],
-                ),
-        ),
-        _buildInputBar(),
-      ],
-    ),
+                    ),
+                ],
+              ),
+      ),
+      _buildInputBar(),
+    ],
   );
 }
 
@@ -1076,6 +1126,54 @@ class PremiumTypingIndicator extends StatelessWidget {
           SizedBox(width: 4),
           _BouncingDot(delay: 400),
         ],
+      ),
+    );
+  }
+}
+
+
+class SidebarToggleButton extends StatefulWidget {
+  final VoidCallback onPressed;
+  final IconData icon;  // ✅ Add icon parameter
+
+  const SidebarToggleButton({
+    super.key,
+    required this.onPressed,
+    required this.icon,  // ✅ Required
+  });
+
+  @override
+  State<SidebarToggleButton> createState() => _SidebarToggleButtonState();
+}
+
+class _SidebarToggleButtonState extends State<SidebarToggleButton> {
+  bool hovering = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => hovering = true),
+      onExit: (_) => setState(() => hovering = false),
+      child: GestureDetector(
+        onTap: widget.onPressed,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          width: 38,
+          height: 38,
+          decoration: BoxDecoration(
+            color: hovering
+                ? const Color(0xffececec)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Center(
+            child: Icon(
+              widget.icon,  // ✅ Use the passed icon
+              size: 22,
+              color: const Color(0xff444444),
+            ),
+          ),
+        ),
       ),
     );
   }

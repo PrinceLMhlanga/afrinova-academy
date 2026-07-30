@@ -68,6 +68,7 @@ dependencies:
   permission_handler: ^11.0.0
   gpt_markdown: ^1.1.8
   tex_markdown: ^0.1.10
+  shimmer: ^3.0.0
   
 
 flutter_launcher_icons:
