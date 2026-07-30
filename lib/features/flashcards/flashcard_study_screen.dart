@@ -115,12 +115,55 @@ class _FlashcardStudyScreenState extends State<FlashcardStudyScreen> {
                     ],
                   ),
                   child: SingleChildScrollView(
-      child: MathRenderer(
+      child: GptMarkdown(
   _showAnswer ? card['answer']! : card['question']!,
-  fontSize: 18,
-  textColor: _showAnswer ? Colors.blue.shade900 : const Color(0xFF1A237E),
-  //fontWeight: _showAnswer ? FontWeight.normal : FontWeight.w600,
+  useDollarSignsForLatex: true,
+  style: TextStyle(
+    fontSize: 18,
+    height: 1.6,
+    color: _showAnswer ? Colors.blue.shade900 : const Color(0xFF1A237E),
+    fontWeight: _showAnswer ? FontWeight.normal : FontWeight.w600,
+  ),
+  
+  // 💻 1. RESTORE CODE SYNTAX HIGHLIGHTING (Uniform across the app)
+  codeBuilder: (context, name, code, closed) {
+    return _buildSyntaxHighlighter(name, code); // Uses your existing helper function
+  },
+
+  // 📐 2. FIX LATEX EQUATION CUTOFFS ON SMALL SCREENS
+  latexBuilder: (context, texString, textStyle, isInline) {
+    // If it's an inline equation like $E = mc^2$, let it render naturally inside text lines
+    if (isInline) {
+      return GptMarkdown(
+        '\$$texString\$',
+        useDollarSignsForLatex: true,
+        style: textStyle ?? TextStyle(fontSize: 18, color: _showAnswer ? Colors.blue.shade900 : const Color(0xFF1A237E)),
+      );
+    }
+
+    // If it's a large block equation ($$...$$), wrap it in a side-scrollable horizontal window box
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 12.0),
+      padding: const EdgeInsets.symmetric(vertical: 14.0, horizontal: 12.0),
+      decoration: BoxDecoration(
+        color: _showAnswer ? Colors.blue.withOpacity(0.06) : const Color(0xFFF8F9FA),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _showAnswer ? Colors.blue.shade100 : const Color(0xFFE0E0E0)),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal, // Enables left-to-right swipe mechanics for math blocks
+        physics: const BouncingScrollPhysics(),
+        child: GptMarkdown(
+          '\$\$${texString}\$\$', 
+          useDollarSignsForLatex: true,
+          style: textStyle ?? TextStyle(fontSize: 18, color: _showAnswer ? Colors.blue.shade900 : const Color(0xFF1A237E)),
+        ),
+      ),
+    );
+  },
 ),
+
 
     ),
   

@@ -132,11 +132,18 @@ A: [answer]
 ###CARD_END
 
 Rules:
-- Mix simple recall and conceptual understanding questions
-- Keep answers concise (1-3 sentences)
-- Cover key definitions, formulas, and concepts
-- Include at least 2 calculation-based cards if applicable
-- Use LaTeX for formulas: $formula$`;
+- Mix simple recall and conceptual understanding questions.
+- Keep answers concise (1–3 sentences).
+- Cover key definitions, formulas, and concepts.
+- Include at least 2 calculation-based cards where appropriate.
+
+Formatting Rules:
+- Use Markdown for all text.
+- Use inline LaTeX ($...$) ONLY for short symbols, variables, or very short expressions (e.g. $F$, $a$, $\Delta v$, $E=mc^2$).
+- Use display LaTeX ($$...$$) for any formula, derivation, or calculation longer than a short expression.
+- If a calculation requires multiple steps, place each step on its own display equation.
+- Never place long equations or derivations inside a sentence.
+- Keep each display equation on its own line.`;
 
   const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
     method: "POST",
