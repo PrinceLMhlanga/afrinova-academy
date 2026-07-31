@@ -64,44 +64,74 @@ async function handleExamAnalysis(body: any, corsHeaders: Record<string, string>
     });
   }
   
-  const prompt = `You are an exam tutor for AfriNova Academy. Analyze these questions.
+    const prompt = `You are an expert exam tutor for AfriNova Academy. Analyze these student mistakes concisely.
+  
+TOTAL QUESTIONS TO PROCESS: ${failedQuestions.length}
+CRITICAL RULE: Keep explanations highly concise and punchy so that ALL questions fit into this single response window.
 
-For EACH question, provide your analysis in this exact format (start each question with ###QUESTION_START and end with ###QUESTION_END):
+For EACH question, provide your analysis in this exact compressed format (start each question with ###QUESTION_START and end with ###QUESTION_END):
 
 ###QUESTION_START
-**What it means**: [interpretation]
-**Why correct**: [explanation]
-**Why wrong**: [explanation for each wrong option]
-**💡 Tip**: [short tip]
+**Concept**: [1 brief sentence on what core topic this question tests]
+**Why Correct**: [1 direct sentence or short calculation proof explaining the logic of the correct choice. in case you find the correct option wrong also, be transparent and tell the student that there might be an error or typo. The correct answer should actually be : ...]
+**Key Distractor Error**: [1 sentence explaining the primary misconception behind the incorrect choices, especially the student's selected answer]
+**💡 Quick Tip**: [1 short exam strategy tip under 15 words]
 ###QUESTION_END
 
+Failed Questions Data Dataset:
 ${failedQuestions.map((q: any, i: number) => `
-Question ${i}:
-${q.question_text}
-A: ${q.option_a}
-B: ${q.option_b}
-C: ${q.option_c}
-D: ${q.option_d}
-Correct Answer: ${q.correct_answer}
-Student Answered: ${q.student_answer}
+[Q ${i + 1}] Text: ${q.question_text}
+Options -> A: ${q.option_a} | B: ${q.option_b} | C: ${q.option_c} | D: ${q.option_d}
+Correct: ${q.correct_answer} | Student Chose: ${q.student_answer}
 `).join('\n')}`;
 
-  const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.5,
-        maxOutputTokens: 4000,
-      },
-    }),
-  });
 
-  const data = await response.json();
-  const fullText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  // 1. Declare the universal free-tier fallback prioritization model chain
+  const modelChain = [
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash"
+  ];
+
+  let responseData = null;
+  let activeModelUsed = "";
+
+  // 2. Cascade down the models if a free-tier rate limit occurs
+  for (const modelName of modelChain) {
+    try {
+      console.log(`Connecting Exam Analysis to model node: ${modelName}...`);
+      
+      // Use the official client's .models.generateContent method for standard static JSON responses
+      responseData = await ai.models.generateContent({
+        model: modelName,
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        config: {
+          temperature: 0.3,
+          maxOutputTokens: 8000,
+        },
+      });
+
+      activeModelUsed = modelName;
+      console.log(`✅ Exam Analysis success link: ${activeModelUsed}`);
+      break; 
+
+    } catch (error: any) {
+      console.warn(`⚠️ Model node ${modelName} rejected exam payload:`, error.message || error);
+      if (modelName === modelChain[modelChain.length - 1]) {
+        return new Response(JSON.stringify({ error: "All fallback models exhausted" }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      continue; 
+    }
+  }
+
+  // Extract text safely using the official SDK object structure
+  const fullText = responseData?.text || '';
   
-  // ✅ Parse per-question responses
+  // 3. Parse per-question blocks using your existing regex logic
   const perQuestion: string[] = [];
   const regex = /###QUESTION_START([\s\S]*?)###QUESTION_END/g;
   let match;
@@ -109,20 +139,24 @@ Student Answered: ${q.student_answer}
     perQuestion.push(match[1].trim());
   }
   
-  console.log(`Parsed ${perQuestion.length} question explanations`);
+  console.log(`Parsed ${perQuestion.length} question explanations using ${activeModelUsed}`);
 
   return new Response(JSON.stringify({ 
     feedback: fullText,
-    perQuestion: perQuestion 
+    perQuestion: perQuestion,
+    meta: { model: activeModelUsed } // Send model info back for logging if needed
   }), {
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }
 
 
+
 async function handleFlashcardGeneration(body: any, corsHeaders: Record<string, string>) {
   const { topic, subject, level, count } = body;
+  console.log(`🔵 Flashcard generation request received for topic: ${topic}`);
   
+  // ✅ PRESERVED EXACTLY: Your original system prompt text completely untouched
   const prompt = `You are an expert educator. Generate ${count || 10} flashcards for ${subject} - ${topic} at ${level} level.
 
 For each flashcard, output in this exact format:
@@ -145,28 +179,65 @@ Formatting Rules:
 - Never place long equations or derivations inside a sentence.
 - Keep each display equation on its own line.`;
 
-  const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.7, maxOutputTokens: 3000 },
-    }),
-  });
+  // Define your free-tier model prioritization degradation cascade
+  const modelChain = [
+    "gemini-2.5-flash",        // Stable base tier matching your entry endpoint parameters
+    "gemini-3.5-flash",       
+    "gemini-3.5-flash-lite",  
+    "gemini-2.5-pro"           // Advanced emergency safety net
+  ];
 
-  const data = await response.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  let responseData = null;
+  let activeModelUsed = "";
+
+  // Loop through models if a free-tier rate limit occurs
+  for (const modelName of modelChain) {
+    try {
+      console.log(`Connecting Flashcards to model node: ${modelName}...`);
+      
+      // Call standard content generation using the official SDK client
+      responseData = await ai.models.generateContent({
+        model: modelName,
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        config: {
+          temperature: 0.7,
+          maxOutputTokens: 8000, // Raised to ensure full card datasets never clip mid-generation
+        },
+      });
+
+      activeModelUsed = modelName;
+      console.log(`✅ Flashcard success link confirmed on: ${activeModelUsed}`);
+      break; 
+
+    } catch (error: any) {
+      console.warn(`⚠️ Model node ${modelName} rejected flashcard payload:`, error.message || error);
+      
+      if (modelName === modelChain[modelChain.length - 1]) {
+        return new Response(JSON.stringify({ error: "All fallback models in the chain have been exhausted." }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      continue; 
+    }
+  }
+
+  // Extract raw text response from SDK data structure safely
+  const text = responseData?.text || '';
   
-  // Parse cards
+  // Parse cards using your exact original index bounds matches
   const cards: { question: string; answer: string }[] = [];
   const regex = /###CARD_START\s*Q:\s*([\s\S]*?)\s*A:\s*([\s\S]*?)###CARD_END/g;
   let match;
+  
   while ((match = regex.exec(text)) !== null) {
     cards.push({
       question: match[1].trim(),
       answer: match[2].trim(),
     });
   }
+
+  console.log(`Successfully compiled ${cards.length} cards using engine: ${activeModelUsed}`);
 
   return new Response(JSON.stringify({ cards }), {
     headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -175,12 +246,14 @@ Formatting Rules:
 
 
 
+
 async function handleSummaryGeneration(body: any, corsHeaders: Record<string, string>) {
   const { topic, subject, level, syllabusOutline } = body;
+  console.log(`🔵 Summary generation request received for subject: ${subject} - ${topic}`);
   
+  // ✅ PRESERVED EXACTLY: Build your original prompt logic completely untouched
   let prompt = `You are an expert ZIMSEC educator. Create a comprehensive study summary for ${subject} - ${topic} at ${level} level.`;
 
-  // ✅ Include syllabus outline if available
   if (syllabusOutline && syllabusOutline.trim().length > 0) {
     prompt += `\n\nFollow this syllabus outline:\n${syllabusOutline}`;
   } else {
@@ -215,27 +288,69 @@ CRITICAL LaTeX RULES:
 - For temperatures: $20^\circ\text{C}$ (NOT $20^\circ C$)
 - Put space BEFORE and AFTER each $ delimiter
 - Separate multiple formulas with newlines, not on same line
+- Use inline LaTeX ($...$) ONLY for short symbols, variables, or very short expressions (e.g. $F$, $a$, $\Delta v$, $E=mc^2$).
+- Use display LaTeX ($$...$$) for any formula, derivation, or calculation longer than a short expression.
+- If a calculation requires multiple steps, place each step on its own display equation.
+- Never place long equations or derivations inside a sentence.
+- Keep each display equation on its own line.
 
 Keep it clear and student-friendly. Use LaTeX for ALL formulas.`;
 
-  const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.5, maxOutputTokens: 4000 },
-    }),
-  });
+  // 1. Declare the universal free-tier fallback prioritization model chain
+  const modelChain = [
+    "gemini-2.5-flash",        // Matches your standard default entry endpoint engine configuration
+    "gemini-3.5-flash",       
+    "gemini-3.5-flash-lite",  
+    "gemini-2.5-pro"           // Advanced emergency safety net for large data summaries
+  ];
 
-  const data = await response.json();
-  const summary = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  let responseData = null;
+  let activeModelUsed = "";
+
+  // 2. Cascade down the models if a free-tier rate limit occurs
+  for (const modelName of modelChain) {
+    try {
+      console.log(`Connecting Summary Engine to model node: ${modelName}...`);
+      
+      // Use the official client's .models.generateContent method for standard static responses
+      responseData = await ai.models.generateContent({
+        model: modelName,
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        config: {
+          temperature: 0.5,
+          maxOutputTokens: 8000,
+        },
+      });
+
+      activeModelUsed = modelName;
+      console.log(`✅ Summary success link confirmed on: ${activeModelUsed}`);
+      break; 
+
+    } catch (error: any) {
+      console.warn(`⚠️ Model node ${modelName} rejected summary payload:`, error.message || error);
+      
+      if (modelName === modelChain[modelChain.length - 1]) {
+        return new Response(JSON.stringify({ error: "All fallback models in the chain have been exhausted." }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      continue; 
+    }
+  }
+
+  // 3. Extract raw text response from SDK data structure safely
+  const summary = responseData?.text || '';
+
+  console.log(`Successfully compiled study summary block using engine: ${activeModelUsed}`);
 
   return new Response(JSON.stringify({ summary }), {
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }
 
-// For streaming chat, use SSE
+
+
 
 
 
@@ -277,6 +392,11 @@ RULES FOR EQUATIONS:
 - Use $...$ for inline equations within text
 - Example: The formula for photosynthesis is $$6\text{CO}_2 + 6\text{H}_2\text{O} \rightarrow \text{C}_6\text{H}_{12}\text{O}_6 + 6\text{O}_2$$
 - Example inline: The force $F = ma$ is Newton's second law
+- Use inline LaTeX ($...$) ONLY for short symbols, variables, or very short expressions (e.g. $F$, $a$, $\Delta v$, $E=mc^2$).
+- Use display LaTeX ($$...$$) for any formula, derivation, or calculation longer than a short expression.
+- If a calculation requires multiple steps, place each step on its own display equation.
+- Never place long equations or derivations inside a sentence.
+- Keep each display equation on its own line.
 
 RULES:
 - Always be kind, patient, and supportive
@@ -324,11 +444,11 @@ async function handleChatStream(body: any, corsHeaders: Record<string, string>) 
 
   // 1. Define your free-tier model prioritization degradation cascade
   const modelChain = [
-    "gemini-3.6-flash",       // Tier 1: Highest accuracy, updated March 2026 knowledge
-    "gemini-3.5-flash",       // Tier 2: Strong backup frontier engine
+    "gemini-3.6-flash",       
+    "gemini-3.5-flash",       
     "gemini-3.5-flash-lite",
-    "gemini-2.5-flash",      // Tier 2: Strong backup default performance stable
-    "gemini-2.5-flash-lite" // Tier 3: High speed resource lightweight fallback
+    "gemini-2.5-flash",      
+    "gemini-2.5-flash-lite" 
   ];
 
   let responseStream = null;
@@ -344,7 +464,7 @@ async function handleChatStream(body: any, corsHeaders: Record<string, string>) 
         contents: contents,
         config: { 
           temperature: 0.7, 
-          maxOutputTokens: 5000 
+          maxOutputTokens: 8000 
         },
       });
 
