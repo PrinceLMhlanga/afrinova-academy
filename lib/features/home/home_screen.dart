@@ -23,6 +23,8 @@ import '../generated_exams/exam_history_screen.dart';
 import '../summaries/my_summaries_screen.dart';
 import '../flashcards/my_flashcards_screen.dart';
 import '../../widgets/ai_feature_guard.dart';
+import '../study_planner/availability_setup_screen.dart';
+import '../study_planner/study_plan_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -81,6 +83,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       if (mounted) setState(() => _isLoading = false);
     }
   }
+
+  
 
   Future<void> _logout() async {
     await _authService.signOut();
@@ -251,9 +255,25 @@ String _getFormattedDate() {
     }
   }
 
-  int _getCoreFeaturesCount() => 6; // My Subjects, MCQ Exams, Exam Papers, Progress, Resources, Live Lessons
+  Future<bool> _checkAvailability() async {
+  final userId = AuthService().currentUserId;
+  if (userId == null) return false;
+
+  try {
+    final data = await Supabase.instance.client
+        .from('student_availability')
+        .select('id')
+        .eq('student_id', userId)
+        .maybeSingle();
+    return data != null;
+  } catch (e) {
+    return false;
+  }
+}
+
+  int _getCoreFeaturesCount() => 7; // My Subjects, MCQ Exams, Exam Papers, Progress, Resources, Live Lessons
   int _getPremiumFeaturesCount() {
-  return 3; // AI Tutor, Generate Exams, Premium Content
+  return 5; // AI Tutor, Generate Exams, Premium Content
 }
 
   @override
@@ -948,6 +968,32 @@ const SizedBox(height: 30),
                               spacing: spacing,
                               runSpacing: spacing,
                               children: [
+                                _AnimatedQuickActionCard(
+  icon: Icons.calendar_month_rounded,
+  label: 'Study Plan',
+  color: Colors.green,
+  index: 6,
+  width: cardWidth,
+  isPremium: true,
+  onTap: () async {
+    /*final hasAvailability = await _checkAvailability();
+    
+    if (!mounted) return;
+    
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AIFeatureGuard(
+          featureName: 'Study Plan',
+          child: hasAvailability
+              ? const StudyPlanScreen()
+              : const AvailabilitySetupScreen(),
+        ),
+      ),
+    );
+ */ },
+),
+
                                 // AI Tutor - Moved to Premium
                                 _AnimatedQuickActionCard(
                                   icon: Icons.auto_awesome_rounded,

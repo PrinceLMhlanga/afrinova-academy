@@ -25,6 +25,37 @@ class SummaryViewerScreen extends StatelessWidget {
         child: GptMarkdown(
           content,
           useDollarSignsForLatex: true,
+          latexBuilder: (context, texString, textStyle, isInline) {
+  // ✅ FIX: Instead of returning null, return a simple inline GptMarkdown widget
+  if (isInline) {
+    return GptMarkdown(
+      '\$$texString\$',
+      useDollarSignsForLatex: true,
+      style: textStyle ?? const TextStyle(fontSize: 17, color: Color(0xFF1E1E1E)),
+    );
+  }
+
+  // If it's a big block equation ($$ ... $$), wrap it in a side-scrollable canvas box
+  return Container(
+    width: double.infinity,
+    margin: const EdgeInsets.symmetric(vertical: 12.0),
+    padding: const EdgeInsets.symmetric(vertical: 14.0, horizontal: 12.0),
+    decoration: BoxDecoration(
+      color: const Color(0xFFF8F9FA), 
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(color: const Color(0xFFE0E0E0)),
+    ),
+    child: SingleChildScrollView(
+      scrollDirection: Axis.horizontal, // Enables horizontal scrolling for mobile devices
+      physics: const BouncingScrollPhysics(),
+      child: GptMarkdown(
+        '\$\$${texString}\$\$', 
+        useDollarSignsForLatex: true,
+        style: textStyle ?? const TextStyle(fontSize: 17, color: Color(0xFF1E1E1E)),
+      ),
+    ),
+  );
+},
           style: const TextStyle(
             fontSize: 15,
             height: 1.7,

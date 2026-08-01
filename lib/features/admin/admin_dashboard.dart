@@ -8,6 +8,7 @@ import 'manage_users_screen.dart';
 import 'platform_settings_screen.dart';
 import 'teacher_management_screen.dart';
 import 'approve_teachers_screen.dart';
+import 'syllabus_management_screen.dart';
 
 class AdminDashboard extends StatelessWidget {
   final String userName;
@@ -79,6 +80,16 @@ class AdminDashboard extends StatelessWidget {
             MaterialPageRoute(builder: (_) => const ManagePlatformSubjectsScreen()),
           ),
         ),
+        AdminActionData(
+  icon: Icons.menu_book_rounded,
+  title: 'Syllabus Management',
+  subtitle: 'Add ZIMSEC syllabus outlines for each topic',
+  color: const Color(0xFF00897B),
+  onTap: () => Navigator.push(
+    context,
+    MaterialPageRoute(builder: (_) => const SyllabusManagementScreen()),
+  ),
+),
         AdminActionData(
           icon: Icons.manage_accounts,
           title: 'Teacher Subjects',

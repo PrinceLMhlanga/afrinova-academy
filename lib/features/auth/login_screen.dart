@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import '../../core/auth_service.dart';
 import '../home/home_screen.dart';
 import 'pending_approval_screen.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'teacher_application_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -18,68 +20,100 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
 
   Future<void> _login() async {
-    if (!_formKey.currentState!.validate()) return;
+  if (!_formKey.currentState!.validate()) return;
 
-    setState(() => _isLoading = true);
+  setState(() => _isLoading = true);
 
-    try {
-      await _authService.signIn(
-        email: _emailController.text.trim(),
-        password: _passwordController.text.trim(),
-      );
+  try {
+    await _authService.signIn(
+      email: _emailController.text.trim(),
+      password: _passwordController.text.trim(),
+    );
 
-      // ✅ Check if user is approved
-      final profile = await _authService.getProfile();
-      
-      if (mounted) {
-        if (profile != null && profile['role'] == 'teacher') {
-          final approvalStatus = profile['approval_status'] as String?;
-          
-          if (approvalStatus == 'pending') {
-            // Show pending approval screen
-            Navigator.pushAndRemoveUntil(
-              context,
-              MaterialPageRoute(builder: (_) => const PendingApprovalScreen()),
-              (route) => false,
-            );
-          } else if (approvalStatus == 'rejected') {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Your application was rejected. Please contact support.'),
-                backgroundColor: Colors.red,
+    final profile = await _authService.getProfile();
+    
+    if (mounted) {
+      if (profile != null && profile['role'] == 'teacher') {
+        final approvalStatus = profile['approval_status'] as String?;
+        
+        // ✅ First check if application exists
+        final hasApplication = await _checkTeacherApplication();
+        
+        if (!hasApplication) {
+          // No application yet - redirect to application screen
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(
+              builder: (_) => TeacherApplicationScreen(
+                userId: profile['id'] as String,
+                userEmail: profile['email'] as String,
+                userName: profile['full_name'] as String? ?? 'Teacher',
               ),
-            );
-            await _authService.signOut();
-          } else {
-            // Approved - go to home
-            Navigator.pushAndRemoveUntil(
-              context,
-              MaterialPageRoute(builder: (_) => HomeScreen()),
-              (route) => false,
-            );
-          }
+            ),
+            (route) => false,
+          );
+        } else if (approvalStatus == 'pending') {
+          // Has application but pending approval
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (_) => const PendingApprovalScreen()),
+            (route) => false,
+          );
+        } else if (approvalStatus == 'rejected') {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Your application was rejected. Please contact support.'),
+              backgroundColor: Colors.red,
+            ),
+          );
+          await _authService.signOut();
         } else {
-          // Student or admin - go straight to home
+          // Approved - go to home
           Navigator.pushAndRemoveUntil(
             context,
             MaterialPageRoute(builder: (_) => HomeScreen()),
             (route) => false,
           );
         }
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Login failed: ${e.toString()}'),
-            backgroundColor: Colors.red,
-          ),
+      } else {
+        // Student or admin - go straight to home
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (_) => HomeScreen()),
+          (route) => false,
         );
       }
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
     }
+  } catch (e) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Login failed: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  } finally {
+    if (mounted) setState(() => _isLoading = false);
   }
+}
+
+Future<bool> _checkTeacherApplication() async {
+  try {
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    if (userId == null) return false;
+
+    final response = await Supabase.instance.client
+        .from('teacher_applications')
+        .select('id')
+        .eq('user_id', userId)
+        .maybeSingle();
+
+    return response != null;
+  } catch (e) {
+    return false;
+  }
+}
 
   @override
   void dispose() {

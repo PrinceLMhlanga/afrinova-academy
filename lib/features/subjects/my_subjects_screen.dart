@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/auth_service.dart';
 import '../payment/payment_screen.dart';
-import 'subjects_screen.dart';
+import 'teachers_by_subject_screen.dart';
 import 'teacher_content_screen.dart';
 
 class MySubjectsScreen extends StatefulWidget {
@@ -17,6 +17,8 @@ class _MySubjectsScreenState extends State<MySubjectsScreen> {
   List<Map<String, dynamic>> _mySubjects = [];
   bool _isLoading = true;
 
+  List<Map<String, dynamic>> _selfStudySubjects = [];
+
   @override
   void initState() {
     super.initState();
@@ -24,67 +26,169 @@ class _MySubjectsScreenState extends State<MySubjectsScreen> {
   }
 
   Future<void> _loadMySubjects() async {
-    try {
-      final userId = _authService.currentUserId;
-      if (userId == null) return;
+  try {
+    final userId = _authService.currentUserId;
+    if (userId == null) return;
 
-      // Get enrollments with full trial + subscription info
-      final response = await Supabase.instance.client
-    .from('enrollments')
-    .select('id, subject_id, level_id, teacher_id, status, trial_started_at, trial_ends_at, is_subscribed, subscription_expires_at, subjects(id, name, description, color_hex, icon_name)')
-    .eq('student_id', userId)
-    .inFilter('status', ['paid', 'approved']);
+    // Get enrollments with full trial + subscription info
+    final response = await Supabase.instance.client
+        .from('enrollments')
+        .select('id, subject_id, level_id, teacher_id, status, trial_started_at, trial_ends_at, is_subscribed, subscription_expires_at, subjects(id, name, description, color_hex, icon_name)')
+        .eq('student_id', userId)
+        .inFilter('status', ['paid', 'approved']);
 
+    for (final enrollment in response) {
+      await Supabase.instance.client
+          .from('student_subjects')
+          .upsert({
+            'student_id': userId,
+            'subject_id': enrollment['subject_id'],
+            'source': 'enrollment',
+            'enrollment_id': enrollment['id'],
+          }, onConflict: 'student_id, subject_id');
+    }   
 
-      // Get teacher profiles
-      final teacherIds = response.map((e) => e['teacher_id'] as String).toSet().toList();
-      Map<String, Map<String, dynamic>> teacherProfiles = {};
-      if (teacherIds.isNotEmpty) {
-        final profilesResponse = await Supabase.instance.client
-            .from('profiles')
-            .select('id, full_name, display_name, avatar_url')
-            .inFilter('id', teacherIds);
-        for (final p in profilesResponse) {
-          teacherProfiles[p['id'] as String] = p;
-        }
+    // Get teacher profiles
+    final teacherIds = response.map((e) => e['teacher_id'] as String).toSet().toList();
+    Map<String, Map<String, dynamic>> teacherProfiles = {};
+    if (teacherIds.isNotEmpty) {
+      final profilesResponse = await Supabase.instance.client
+          .from('profiles')
+          .select('id, full_name, display_name, avatar_url')
+          .inFilter('id', teacherIds);
+      for (final p in profilesResponse) {
+        teacherProfiles[p['id'] as String] = p;
       }
-
-      // Group by subject
-      final subjectMap = <String, Map<String, dynamic>>{};
-      for (final enrollment in response) {
-        final subject = enrollment['subjects'] as Map<String, dynamic>;
-        final subjectId = enrollment['subject_id'] as String;
-        final teacherId = enrollment['teacher_id'] as String;
-
-        if (!subjectMap.containsKey(subjectId)) {
-          subjectMap[subjectId] = {
-            'subject': subject,
-            'teachers': <Map<String, dynamic>>[],
-          };
-        }
-        (subjectMap[subjectId]!['teachers'] as List).add({
-          'teacher_id': teacherId,
-          'profile': teacherProfiles[teacherId] ?? {'display_name': 'Teacher'},
-          'enrollment_id': enrollment['id'],
-          'status': enrollment['status'],
-          'is_subscribed': enrollment['is_subscribed'] ?? false,
-          'subscription_expires_at': enrollment['subscription_expires_at'],
-          'trial_ends_at': enrollment['trial_ends_at'],
-          'level_id': enrollment['level_id'],       // ✅ Add
-          'subject_id': enrollment['subject_id'],   // ✅ Add
-        });
-      }
-
-      if (mounted) {
-        setState(() {
-          _mySubjects = subjectMap.values.toList();
-          _isLoading = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) setState(() => _isLoading = false);
     }
+
+    // Group by subject
+    final subjectMap = <String, Map<String, dynamic>>{};
+    for (final enrollment in response) {
+      final subject = enrollment['subjects'] as Map<String, dynamic>;
+      final subjectId = enrollment['subject_id'] as String;
+      final teacherId = enrollment['teacher_id'] as String;
+
+      if (!subjectMap.containsKey(subjectId)) {
+        subjectMap[subjectId] = {
+          'subject': subject,
+          'teachers': <Map<String, dynamic>>[],
+        };
+      }
+      (subjectMap[subjectId]!['teachers'] as List).add({
+        'teacher_id': teacherId,
+        'profile': teacherProfiles[teacherId] ?? {'display_name': 'Teacher'},
+        'enrollment_id': enrollment['id'],
+        'status': enrollment['status'],
+        'is_subscribed': enrollment['is_subscribed'] ?? false,
+        'subscription_expires_at': enrollment['subscription_expires_at'],
+        'trial_ends_at': enrollment['trial_ends_at'],
+        'level_id': enrollment['level_id'],
+        'subject_id': enrollment['subject_id'],
+      });
+    }
+
+    final selfSubjects = await Supabase.instance.client
+        .from('student_subjects')
+        .select('id, subject_id, subjects(id, name, description, color_hex, icon_name)')
+        .eq('student_id', userId)
+        .eq('source', 'manual');
+
+    if (mounted) {
+      setState(() {
+        _mySubjects = subjectMap.values.toList();
+        _selfStudySubjects = List<Map<String, dynamic>>.from(selfSubjects);
+        _isLoading = false;
+      });
+    }
+  } catch (e) {
+    debugPrint('Error loading subjects: $e');
+    if (mounted) setState(() => _isLoading = false);
   }
+}
+
+Future<void> _addSelfStudySubject() async {
+  final userId = _authService.currentUserId;
+  if (userId == null) return;
+
+  // Show dialog to select subject
+  final allSubjects = await Supabase.instance.client
+      .from('subjects')
+      .select()
+      .eq('is_active', true)
+      .order('name');
+
+  if (!mounted) return;
+
+  showDialog(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (context, setDialogState) {
+        final selectedIds = _selfStudySubjects
+            .map((s) => s['subject_id'] as String)
+            .toSet();
+        
+        return AlertDialog(
+          title: const Text('Add Subjects You Study'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: allSubjects.length,
+              itemBuilder: (context, index) {
+                final subject = allSubjects[index];
+                final subjectId = subject['id'] as String;
+                final isAlreadyEnrolled = _mySubjects.any(
+                  (s) => (s['subject'] as Map)['id'] == subjectId
+                );
+                final isSelfStudy = selectedIds.contains(subjectId);
+
+                return CheckboxListTile(
+                  value: isSelfStudy,
+                  enabled: !isAlreadyEnrolled,
+                  onChanged: isAlreadyEnrolled ? null : (v) async {
+                    if (v == true) {
+                      await Supabase.instance.client
+                          .from('student_subjects')
+                          .insert({
+                            'student_id': userId,
+                            'subject_id': subjectId,
+                            'source': 'manual',
+                          });
+                    } else {
+                      await Supabase.instance.client
+                          .from('student_subjects')
+                          .delete()
+                          .eq('student_id', userId)
+                          .eq('subject_id', subjectId);
+                    }
+                    _loadMySubjects();
+                    Navigator.pop(ctx);
+                  },
+                  title: Text(
+                    subject['name'] ?? '',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: isAlreadyEnrolled ? Colors.grey : null,
+                    ),
+                  ),
+                  subtitle: isAlreadyEnrolled
+                      ? const Text('Already enrolled with a teacher', style: TextStyle(fontSize: 11))
+                      : null,
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Done'),
+            ),
+          ],
+        );
+      },
+    ),
+  );
+}
 
   // ✅ Full access check — trial + subscription
   bool _canAccess(Map<String, dynamic> teacher) {
@@ -163,23 +267,17 @@ class _MySubjectsScreenState extends State<MySubjectsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('My Subjects'),
-        backgroundColor: const Color(0xFF1A237E),
-        foregroundColor: Colors.white,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.add),
-            tooltip: 'Browse Subjects',
-            onPressed: () async {
-              await Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const SubjectsScreen()),
-              );
-              _loadMySubjects();
-            },
-          ),
-        ],
-      ),
+  title: const Text('My Subjects'),
+  backgroundColor: const Color(0xFF1A237E),
+  foregroundColor: Colors.white,
+  actions: [
+    IconButton(
+      icon: const Icon(Icons.add),
+      tooltip: 'Add Subject',
+      onPressed: _addSelfStudySubject, // ✅ Now opens subject selector
+    ),
+  ],
+),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: Color(0xFF1A237E)))
           : _mySubjects.isEmpty
@@ -189,9 +287,13 @@ class _MySubjectsScreenState extends State<MySubjectsScreen> {
                   color: const Color(0xFFFF9800),
                   child: ListView.builder(
                     padding: const EdgeInsets.all(20),
-                    itemCount: _mySubjects.length,
+                    itemCount: _mySubjects.length + (_selfStudySubjects.isNotEmpty ? 1 : 0), // +1 for self-study card
                     itemBuilder: (context, index) {
-                      final data = _mySubjects[index];
+                      if (_selfStudySubjects.isNotEmpty && index == 0) {
+                  return _buildSelfStudyCard();
+                }
+                      final subjectIndex = _selfStudySubjects.isNotEmpty ? index - 1 : index;
+                final data = _mySubjects[subjectIndex];
                       final subject = data['subject'] as Map<String, dynamic>;
                       final teachers = data['teachers'] as List<Map<String, dynamic>>;
                       final color = _getSubjectColor(subject['color_hex'] as String?);
@@ -334,7 +436,9 @@ class _MySubjectsScreenState extends State<MySubjectsScreen> {
                                         }
                                       : null,
                                 ),
+                                
                               );
+                              
                             }),
                           ],
                         ),
@@ -342,49 +446,173 @@ class _MySubjectsScreenState extends State<MySubjectsScreen> {
                     },
                   ),
                 ),
+                
     );
   }
 
-  Widget _buildEmptyState() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(40),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+ Widget _buildSelfStudyCard() {
+  return Container(
+    margin: const EdgeInsets.only(bottom: 16),
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: Colors.teal.withOpacity(0.05),
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: Colors.teal.withOpacity(0.2)),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
           children: [
             Container(
-              width: 120, height: 120,
+              padding: const EdgeInsets.all(6),
               decoration: BoxDecoration(
-                color: const Color(0xFF1A237E).withOpacity(0.05),
-                shape: BoxShape.circle,
+                color: Colors.teal.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
               ),
-              child: const Icon(Icons.school, size: 56, color: Color(0xFF1A237E)),
+              child: const Icon(Icons.self_improvement, color: Colors.teal, size: 18),
             ),
-            const SizedBox(height: 24),
-            const Text('No subjects yet', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1A237E))),
-            const SizedBox(height: 8),
-            const Text('Browse subjects and find teachers\nto start your learning journey',
-                textAlign: TextAlign.center, style: TextStyle(fontSize: 14, color: Colors.grey)),
-            const SizedBox(height: 32),
-            SizedBox(
-              width: double.infinity, height: 52,
-              child: ElevatedButton.icon(
-                onPressed: () async {
-                  await Navigator.push(context, MaterialPageRoute(builder: (_) => const SubjectsScreen()));
-                  _loadMySubjects();
-                },
-                icon: const Icon(Icons.explore),
-                label: const Text('Browse Subjects & Teachers'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF1A237E),
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                ),
-              ),
+            const SizedBox(width: 10),
+            const Text('My Subjects',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.teal)),
+            const Spacer(),
+            TextButton.icon(
+              onPressed: _addSelfStudySubject,
+              icon: const Icon(Icons.add, size: 16),
+              label: const Text('Add', style: TextStyle(fontSize: 12)),
             ),
           ],
         ),
+        const SizedBox(height: 12),
+        // ✅ Enhanced subject cards
+        ..._selfStudySubjects.map((s) {
+          final subject = s['subjects'] as Map<String, dynamic>?;
+          final subjectId = s['subject_id'] as String;
+          final subjectName = subject?['name'] ?? 'Subject';
+          final color = _getSubjectColor(subject?['color_hex'] as String?);
+          final icon = _getSubjectIcon(subject?['icon_name'] as String?);
+
+          return Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey.shade200),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 40, height: 40,
+                  decoration: BoxDecoration(
+                    color: color.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(icon, color: color, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(subjectName,
+                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                      Text('Self-study • No teacher yet',
+                          style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+                    ],
+                  ),
+                ),
+                // Browse Teachers button
+                // Browse Teachers button
+TextButton.icon(
+  onPressed: () {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TeachersBySubjectScreen(
+          subjectId: subjectId,
+          subjectName: subjectName,
+          subjectColor: color,
+        ),
       ),
-    );
-  }
+    ).then((_) => _loadMySubjects()); // Reload after enrollment
+  },
+  icon: const Icon(Icons.search, size: 16),
+  label: const Text('Find Teacher', style: TextStyle(fontSize: 12)),
+  style: TextButton.styleFrom(
+    foregroundColor: color,
+    padding: const EdgeInsets.symmetric(horizontal: 8),
+  ),
+),
+                // Remove button
+                IconButton(
+                  icon: const Icon(Icons.close, size: 16, color: Colors.red),
+                  onPressed: () async {
+                    await Supabase.instance.client
+                        .from('student_subjects')
+                        .delete()
+                        .eq('id', s['id']);
+                    _loadMySubjects();
+                  },
+                ),
+              ],
+            ),
+          );
+        }),
+        if (_selfStudySubjects.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Center(
+              child: TextButton.icon(
+                onPressed: _addSelfStudySubject,
+                icon: const Icon(Icons.add, size: 16),
+                label: const Text('Add subjects you study',
+                    style: TextStyle(fontSize: 12, color: Colors.teal)),
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
+ Widget _buildEmptyState() {
+  return Center(
+    child: Padding(
+      padding: const EdgeInsets.all(40),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 120, height: 120,
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A237E).withOpacity(0.05),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.school, size: 56, color: Color(0xFF1A237E)),
+          ),
+          const SizedBox(height: 24),
+          const Text('No subjects yet', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1A237E))),
+          const SizedBox(height: 8),
+          const Text('Add the subjects you study to get started\nwith personalized learning',
+              textAlign: TextAlign.center, style: TextStyle(fontSize: 14, color: Colors.grey)),
+          const SizedBox(height: 32),
+          SizedBox(
+            width: double.infinity, height: 52,
+            child: ElevatedButton.icon(
+              onPressed: _addSelfStudySubject, // ✅ Directly add subjects
+              icon: const Icon(Icons.add),
+              label: const Text('Add Your Subjects'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1A237E),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
 }

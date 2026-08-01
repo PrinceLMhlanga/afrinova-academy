@@ -1,4 +1,9 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const supabaseUrl = Deno.env.get("PROJECT_URL")!;
+const supabaseKey = Deno.env.get("SERVICE_ROLE_KEY")!;
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY")!;
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
@@ -40,6 +45,15 @@ Deno.serve(async (req) => {
     if (action === "generate_summary") {
       return await handleSummaryGeneration(body, corsHeaders);
     }
+
+    if (action === "generate_study_plan") {
+  return await handleStudyPlanGeneration(body, corsHeaders);
+}
+
+if (action === "debug_study_plan") {
+  return await debugStudyPlan(body, corsHeaders);
+}
+
 
     return new Response(JSON.stringify({ error: "Invalid action" }), {
       status: 400,
@@ -177,7 +191,14 @@ Formatting Rules:
 - Use display LaTeX ($$...$$) for any formula, derivation, or calculation longer than a short expression.
 - If a calculation requires multiple steps, place each step on its own display equation.
 - Never place long equations or derivations inside a sentence.
-- Keep each display equation on its own line.`;
+- Keep each display equation on its own line.
+- For units, NEVER use macros like \\mu or \\text{\\mu m}. Write them out using standard characters like um, mm, or raw symbols like µm.
+- NEVER use commas inside large numbers for formulas or calculations. Output 30000 instead of 30,000.
+- Attach multipliers directly to numbers without any spaces. Write $10000\\times$ instead of $10000 \\times$.
+- Ensure there are no nested text blocks inside display LaTeX. Write \\text{Magnification} instead of nesting formatting arguments awkwardly.
+- Ensure all calculation text strings follow clean spacing constraints so layout engines don't break lines mid-formula.
+
+`;
 
   // Define your free-tier model prioritization degradation cascade
   const modelChain = [
@@ -248,6 +269,7 @@ Formatting Rules:
 
 
 async function handleSummaryGeneration(body: any, corsHeaders: Record<string, string>) {
+  
   const { topic, subject, level, syllabusOutline } = body;
   console.log(`🔵 Summary generation request received for subject: ${subject} - ${topic}`);
   
@@ -282,10 +304,10 @@ Structure your response with:
 - 5 key points to remember
 
 CRITICAL LaTeX RULES:
-- ALWAYS wrap text/units inside \text{} within math mode
+- ALWAYS wrap text/units inside \\text{} within math mode
 - Example WRONG: $4200 J kg^{-1} K^{-1}$
-- Example RIGHT: $4200\text{ J kg}^{-1}\text{K}^{-1}$
-- For temperatures: $20^\circ\text{C}$ (NOT $20^\circ C$)
+- Example RIGHT: $4200\\text{ J kg}^{-1}\\text{K}^{-1}$
+- For temperatures: $20^\\circ\\text{C}$ (NOT $20^\\circ C$)
 - Put space BEFORE and AFTER each $ delimiter
 - Separate multiple formulas with newlines, not on same line
 - Use inline LaTeX ($...$) ONLY for short symbols, variables, or very short expressions (e.g. $F$, $a$, $\Delta v$, $E=mc^2$).
@@ -389,11 +411,11 @@ RESPONSE STRUCTURE:
 RULES FOR EQUATIONS:
 - Use LaTeX format for ALL mathematical equations and formulas
 - Use $$...$$ for block equations on their own line
-- Use $...$ for inline equations within text
-- Example: The formula for photosynthesis is $$6\text{CO}_2 + 6\text{H}_2\text{O} \rightarrow \text{C}_6\text{H}_{12}\text{O}_6 + 6\text{O}_2$$
+- Never use $$...$$ inside a table
+- Use $...$ for inline equations in tables or within text
+- Example: The formula for photosynthesis is $$6\\text{CO}_2 + 6\\text{H}_2\\text{O} \\rightarrow \\text{C}_6\\text{H}_{12}\\text{O}_6 + 6\\text{O}_2$$
 - Example inline: The force $F = ma$ is Newton's second law
-- Use inline LaTeX ($...$) ONLY for short symbols, variables, or very short expressions (e.g. $F$, $a$, $\Delta v$, $E=mc^2$).
-- Use display LaTeX ($$...$$) for any formula, derivation, or calculation longer than a short expression.
+- Use display LaTeX ($$...$$) for any formula, derivation, or calculation longer than a short expression if it's not inside a table.
 - If a calculation requires multiple steps, place each step on its own display equation.
 - Never place long equations or derivations inside a sentence.
 - Keep each display equation on its own line.
@@ -519,5 +541,374 @@ async function handleChatStream(body: any, corsHeaders: Record<string, string>) 
       "Connection": "keep-alive",
       "X-Accel-Buffering": "no"
     },
+  });
+}
+
+
+
+async function handleStudyPlanGeneration(body: any, corsHeaders: Record<string, string>) {
+  const { studentId } = body;
+  console.log('🔵 Starting study plan for:', studentId);
+  
+  // 1. Fetch student's subjects
+  const { data: studentSubjects, error: subjectsError } = await supabase
+    .from('student_subjects')
+    .select('subject_id, subjects(id, name)')
+    .eq('student_id', studentId);
+  
+  if (subjectsError || !studentSubjects?.length) {
+    return new Response(JSON.stringify({ error: 'No subjects found' }), {
+      status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  // 2. Fetch ALL syllabus topics for these subjects
+  const subjectIds = studentSubjects.map(s => s.subject_id);
+  const { data: syllabusTopics } = await supabase
+    .from('topics')
+    .select('id, name, subject_id, syllabus_outline, subjects(name)')
+    .inFilter('subject_id', subjectIds)
+    .order('display_order');
+
+  // 3. Fetch MCQ exam performance (by topic)
+  const { data: mcqPerformance } = await supabase
+    .from('exam_attempts')
+    .select('score, percentage, exams(teacher_topic_id, subject_id)')
+    .eq('student_id', studentId);
+
+  // 4. Fetch practice exam performance
+  const { data: practicePerformance } = await supabase
+    .from('practice_exam_history')
+    .select('is_correct, topic_id, subject_id')
+    .eq('student_id', studentId);
+
+  // 5. Fetch paper exam answers
+  const { data: paperAnswers } = await supabase
+    .from('exam_answers')
+    .select('marks_awarded, exam_questions(marks, teacher_topic_id)')
+    .eq('student_id', studentId);
+
+  // 6. Fetch flashcard mastery
+  const { data: flashcardMastery } = await supabase
+    .from('ai_flashcards')
+    .select('times_reviewed, times_correct, topic_id, subject_id')
+    .eq('student_id', studentId);
+
+  // 7. Fetch availability
+  const { data: availability } = await supabase
+    .from('student_availability')
+    .select('*')
+    .eq('student_id', studentId)
+    .maybeSingle();
+
+  // 8. Aggregate performance by topic
+  const topicMap: Record<string, any> = {};
+  
+  // Initialize all syllabus topics with no data
+  for (const topic of syllabusTopics || []) {
+    topicMap[topic.id] = {
+      topic_name: topic.name,
+      subject_name: topic.subjects?.name || 'Unknown',
+      syllabus_outline: topic.syllabus_outline || null,
+      mcq_scores: [],
+      practice_correct: 0,
+      practice_total: 0,
+      paper_marks: 0,
+      paper_max: 0,
+      flashcard_reviewed: 0,
+      flashcard_correct: 0,
+    };
+  }
+
+  // Add MCQ data
+  for (const attempt of mcqPerformance || []) {
+    const topicId = attempt.exams?.teacher_topic_id;
+    if (!topicId || !topicMap[topicId]) continue;
+    topicMap[topicId].mcq_scores.push(attempt.percentage || 0);
+  }
+
+  // Add practice data
+  for (const p of practicePerformance || []) {
+    const topicId = p.topic_id;
+    if (!topicId || !topicMap[topicId]) continue;
+    topicMap[topicId].practice_total++;
+    if (p.is_correct) topicMap[topicId].practice_correct++;
+  }
+
+  // Add paper exam data
+  for (const p of paperAnswers || []) {
+    const topicId = p.exam_questions?.teacher_topic_id;
+    if (!topicId || !topicMap[topicId]) continue;
+    topicMap[topicId].paper_marks += p.marks_awarded || 0;
+    topicMap[topicId].paper_max += p.exam_questions?.marks || 0;
+  }
+
+  // Add flashcard data
+  for (const f of flashcardMastery || []) {
+    const topicId = f.topic_id;
+    if (!topicId || !topicMap[topicId]) continue;
+    topicMap[topicId].flashcard_reviewed += f.times_reviewed || 0;
+    topicMap[topicId].flashcard_correct += f.times_correct || 0;
+  }
+
+  // Build topic list with scores
+  const topicList = Object.entries(topicMap).map(([id, data]) => {
+    const mcqAvg = data.mcq_scores.length 
+      ? Math.round(data.mcq_scores.reduce((a: number, b: number) => a + b, 0) / data.mcq_scores.length) 
+      : null;
+    const practicePct = data.practice_total 
+      ? Math.round((data.practice_correct / data.practice_total) * 100) 
+      : null;
+    const paperPct = data.paper_max 
+      ? Math.round((data.paper_marks / data.paper_max) * 100) 
+      : null;
+    const flashcardPct = data.flashcard_reviewed 
+      ? Math.round((data.flashcard_correct / data.flashcard_reviewed) * 100) 
+      : null;
+    
+    // Calculate overall only from available data
+    const scores = [mcqAvg, practicePct, paperPct, flashcardPct].filter(s => s !== null) as number[];
+    const overall = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null;
+
+    return {
+      topic: data.topic_name,
+      subject: data.subject_name,
+      has_data: scores.length > 0,
+      scores: {
+        mcq: mcqAvg,
+        practice: practicePct,
+        paper: paperPct,
+        flashcards: flashcardPct,
+        overall: overall,
+      },
+      syllabus: data.syllabus_outline ? data.syllabus_outline.substring(0, 100) : null,
+      questions_done: data.practice_total + data.mcq_scores.length + data.flashcard_reviewed,
+    };
+  });
+
+  // Separate topics with data vs no data
+  const topicsWithData = topicList.filter(t => t.has_data);
+  const topicsNoData = topicList.filter(t => !t.has_data);
+
+  console.log('📊 Topics with data:', topicsWithData.length);
+  console.log('📚 Topics without data:', topicsNoData.length);
+
+  // Build prompt
+  const prompt = `You are a ZIMSEC study coach. Create a weekly study plan.
+
+STUDENT DATA:
+- Subjects: ${studentSubjects.map(s => s.subjects.name).join(', ')}
+- Availability: ${availability ? 'Set (see hours below)' : 'Not set - assume 2 hours/day'}
+${availability ? `- Hours: ${JSON.stringify(availability)}` : ''}
+
+TOPICS WITH PERFORMANCE DATA:
+${JSON.stringify(topicsWithData)}
+
+TOPICS NOT YET STUDIED (no data - use syllabus to plan):
+${JSON.stringify(topicsNoData.map(t => ({ topic: t.topic, subject: t.subject, syllabus: t.syllabus })))}
+
+RULES:
+1. For topics WITH data: Use scores to determine priority. Lower scores = more time.
+2. For topics WITHOUT data: These need to be learned from scratch. Include them in the plan using the syllabus outline as a guide.
+3. Mix session types: learn (new topics), practice (weak topics), review (flashcards), test (mixed).
+4. Create a realistic 7-day plan that covers all subjects.
+
+Return ONLY JSON:
+{
+  "strengths": [{"topic":"","subject":"","score":0}],
+  "weaknesses": [{"topic":"","subject":"","score":0,"priority":"high"}],
+  "insights": "Analysis and tips",
+  "weekly_plan": {
+    "monday": [{"time":"","type":"learn|practice|review|test","subject":"","topic":"","duration_minutes":45,"activity":""}],
+    "tuesday": [],
+    "wednesday": [],
+    "thursday": [],
+    "friday": [],
+    "saturday": [],
+    "sunday": []
+  }
+}`;
+
+  // Call Gemini
+  const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.5, maxOutputTokens: 4000 },
+    }),
+  });
+
+  const data = await response.json();
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  
+  let jsonStr = text;
+  const jsonMatch = text.match(/```json\s*([\s\S]*?)\s*```/);
+  if (jsonMatch) jsonStr = jsonMatch[1];
+  
+  let plan;
+  try {
+    plan = JSON.parse(jsonStr);
+  } catch {
+    plan = { error: 'Failed to parse', raw: text };
+  }
+
+  // Save to database
+  if (plan && !plan.error) {
+    const weekStart = new Date().toISOString().split('T')[0];
+    await supabase.from('study_plans').upsert({
+      student_id: studentId,
+      week_start_date: weekStart,
+      is_active: true,
+      ai_analysis: plan,
+      created_at: new Date().toISOString(),
+    }, { onConflict: 'student_id, week_start_date' });
+    
+    // Save topic performance
+    for (const t of topicsWithData) {
+      await supabase.from('student_topic_performance').upsert({
+        student_id: studentId,
+        topic_id: Object.keys(topicMap).find(id => topicMap[id].topic_name === t.topic),
+        mcq_score_avg: t.scores.mcq,
+        practice_score_avg: t.scores.practice,
+        overall_score: t.scores.overall,
+        last_updated: new Date().toISOString(),
+      });
+    }
+  }
+
+  return new Response(JSON.stringify(plan), {
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+
+
+// Helper: Aggregate topic performance
+function aggregateTopicPerformance(
+  subjects: any[],
+  mcq: any[],
+  practice: any[],
+  flashcards: any[],
+  papers: any[]
+) {
+  const topicMap: Record<string, any> = {};
+
+  // Process MCQ exams
+  for (const attempt of mcq || []) {
+    const topicId = attempt.exams?.teacher_topic_id;
+    if (!topicId) continue;
+    if (!topicMap[topicId]) topicMap[topicId] = { mcq_scores: [], mcq_total: 0 };
+    topicMap[topicId].mcq_scores.push(attempt.percentage || 0);
+    topicMap[topicId].mcq_total++;
+  }
+
+  // Process practice exams
+  for (const p of practice || []) {
+    const topicId = p.topic_id || p.question?.topic_id;
+    if (!topicId) continue;
+    if (!topicMap[topicId]) topicMap[topicId] = { practice_correct: 0, practice_total: 0 };
+    topicMap[topicId].practice_total++;
+    if (p.is_correct) topicMap[topicId].practice_correct++;
+  }
+
+  // Process flashcards
+  for (const f of flashcards || []) {
+    const topicId = f.topic_id;
+    if (!topicId) continue;
+    if (!topicMap[topicId]) topicMap[topicId] = { flashcard_reviewed: 0, flashcard_correct: 0 };
+    topicMap[topicId].flashcard_reviewed += f.times_reviewed || 0;
+    topicMap[topicId].flashcard_correct += f.times_correct || 0;
+  }
+
+  // Calculate scores
+  const result: any[] = [];
+  for (const [topicId, data] of Object.entries(topicMap)) {
+    const mcqAvg = data.mcq_scores?.length ? data.mcq_scores.reduce((a: number, b: number) => a + b, 0) / data.mcq_scores.length : 0;
+    const practicePct = data.practice_total ? (data.practice_correct / data.practice_total) * 100 : 0;
+    const flashcardPct = data.flashcard_reviewed ? (data.flashcard_correct / data.flashcard_reviewed) * 100 : 0;
+    
+    const overall = (mcqAvg * 0.4 + practicePct * 0.4 + flashcardPct * 0.2);
+    
+    result.push({
+      topic_id: topicId,
+      mcq_score: Math.round(mcqAvg),
+      practice_score: Math.round(practicePct),
+      flashcard_mastery: Math.round(flashcardPct),
+      overall_score: Math.round(overall),
+      total_questions: (data.mcq_total || 0) + (data.practice_total || 0) + (data.flashcard_reviewed || 0),
+    });
+  }
+
+  return result.sort((a, b) => a.overall_score - b.overall_score);
+}
+
+function getWeekStartDate(): string {
+  const now = new Date();
+  const day = now.getDay();
+  const diff = now.getDate() - day + (day === 0 ? -6 : 1); // Monday
+  const monday = new Date(now.setDate(diff));
+  return monday.toISOString().split('T')[0];
+}
+
+
+async function debugStudyPlan(body: any, corsHeaders: Record<string, string>) {
+  const { studentId } = body;
+  
+  // Fetch all the same data but return it instead of sending to Gemini
+  const { data: subjects } = await supabase
+    .from('student_subjects')
+    .select('subject_id, subjects(name)')
+    .eq('student_id', studentId);
+    
+  const { data: mcqPerformance } = await supabase
+    .from('exam_attempts')
+    .select('score, total_marks, percentage, exams!inner(teacher_topic_id, subject_id)')
+    .eq('student_id', studentId);
+    
+  const { data: practicePerformance } = await supabase
+    .from('practice_exam_history')
+    .select('is_correct, difficulty, topic_id, subject_id')
+    .eq('student_id', studentId);
+    
+  const { data: availability } = await supabase
+    .from('student_availability')
+    .select('*')
+    .eq('student_id', studentId)
+    .maybeSingle();
+
+  // Aggregate
+  const topicMap: Record<string, any> = {};
+  for (const a of mcqPerformance || []) {
+    const topicId = a.exams?.teacher_topic_id;
+    if (!topicId) continue;
+    if (!topicMap[topicId]) topicMap[topicId] = { mcq_scores: [], practice_correct: 0, practice_total: 0 };
+    topicMap[topicId].mcq_scores.push(a.percentage || 0);
+  }
+  for (const p of practicePerformance || []) {
+    const topicId = p.topic_id;
+    if (!topicId) continue;
+    if (!topicMap[topicId]) topicMap[topicId] = { mcq_scores: [], practice_correct: 0, practice_total: 0 };
+    topicMap[topicId].practice_total++;
+    if (p.is_correct) topicMap[topicId].practice_correct++;
+  }
+
+  const topicPerformance = Object.entries(topicMap).map(([id, data]) => ({
+    topic_id: id,
+    mcq_avg: data.mcq_scores.length ? Math.round(data.mcq_scores.reduce((a: number, b: number) => a + b, 0) / data.mcq_scores.length) : 0,
+    practice_pct: data.practice_total ? Math.round((data.practice_correct / data.practice_total) * 100) : 0,
+  }));
+
+  // Return the debug data
+  return new Response(JSON.stringify({
+    subjects: subjects?.map(s => s.subjects.name),
+    subjectsCount: subjects?.length,
+    mcqCount: mcqPerformance?.length,
+    practiceCount: practicePerformance?.length,
+    availability: availability ? 'Set' : 'Not set',
+    topicPerformance: topicPerformance,
+    prompt_preview: `Student subjects: ${subjects?.map(s => s.subjects.name).join(', ')}. Performance: ${JSON.stringify(topicPerformance)}. Availability: ${availability ? 'Set' : 'Not set'}.`,
+  }), {
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }
