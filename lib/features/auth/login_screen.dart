@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../core/auth_service.dart';
+import '../../core/notification_service.dart';
 import '../home/home_screen.dart';
 import 'pending_approval_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -20,25 +21,29 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
 
   Future<void> _login() async {
-  if (!_formKey.currentState!.validate()) return;
+    if (!_formKey.currentState!.validate()) return;
 
-  setState(() => _isLoading = true);
+    setState(() => _isLoading = true);
 
-  try {
-    await _authService.signIn(
-      email: _emailController.text.trim(),
-      password: _passwordController.text.trim(),
-    );
+    try {
+      await _authService.signIn(
+        email: _emailController.text.trim(),
+        password: _passwordController.text.trim(),
+      );
 
-    final profile = await _authService.getProfile();
-    
-    if (mounted) {
+      if (!mounted) return;
+      await NotificationService.instance.registerDeviceToken();
+
+      if (!mounted) return;
+      final profile = await _authService.getProfile();
+      if (!mounted) return;
+
       if (profile != null && profile['role'] == 'teacher') {
         final approvalStatus = profile['approval_status'] as String?;
-        
+
         // ✅ First check if application exists
         final hasApplication = await _checkTeacherApplication();
-        
+
         if (!hasApplication) {
           // No application yet - redirect to application screen
           Navigator.pushAndRemoveUntil(
@@ -83,20 +88,19 @@ class _LoginScreenState extends State<LoginScreen> {
           (route) => false,
         );
       }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Login failed: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
-  } catch (e) {
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Login failed: ${e.toString()}'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
-  } finally {
-    if (mounted) setState(() => _isLoading = false);
   }
-}
 
 Future<bool> _checkTeacherApplication() async {
   try {

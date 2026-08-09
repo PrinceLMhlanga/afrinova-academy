@@ -35,6 +35,8 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   supabase_flutter: ^2.5.0
+  firebase_core: ^2.12.0
+  firebase_messaging: ^14.5.0
   video_player: ^2.9.1          # ← Add this
   chewie: ^1.8.1                # ← Add this (nice video player UI)
   video_player_win: ^3.0.0

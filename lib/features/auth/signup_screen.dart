@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../core/auth_service.dart';
+import '../../core/notification_service.dart';
 import 'teacher_application_screen.dart';
 import '../home/home_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -23,16 +24,15 @@ class _SignupScreenState extends State<SignupScreen> {
   bool _isLoading = false;
 
   // ✅ ADD: Level selection for students
-List<Map<String, dynamic>> _levels = [];
-String? _selectedLevelId;
-String? _selectedLevelName;
-bool _isLoadingLevels = true;
+  List<Map<String, dynamic>> _levels = [];
+  String? _selectedLevelId;
+  bool _isLoadingLevels = true;
 
-@override
-void initState() {
-  super.initState();
-  _loadLevels();
-}
+  @override
+  void initState() {
+    super.initState();
+    _loadLevels();
+  }
 
 Future<void> _loadLevels() async {
   try {
@@ -79,6 +79,8 @@ Future<void> _loadLevels() async {
             .update({'level_id': _selectedLevelId})
             .eq('id', response.user!.id);
       }
+
+      await NotificationService.instance.registerDeviceToken();
 
       if (mounted) {
         if (_selectedRole == 'teacher') {
@@ -268,7 +270,6 @@ if (_selectedRole == 'student') ...[
     onChanged: (v) {
       setState(() {
         _selectedLevelId = v;
-        _selectedLevelName = _levels.firstWhere((l) => l['id'] == v)['name'] as String?;
       });
     },
     validator: (v) => _selectedRole == 'student' && v == null ? 'Select your class' : null,
