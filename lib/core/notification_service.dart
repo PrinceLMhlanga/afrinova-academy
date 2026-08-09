@@ -65,7 +65,7 @@ class NotificationService {
       'token': token,
       'platform': kIsWeb ? 'web' : 'mobile',
       'is_web': kIsWeb,
-    }, onConflict: 'token');
+    }, onConflict: 'user_id,token');
 
     messaging.onTokenRefresh.listen((newToken) async {
       if (newToken.isEmpty) return;
@@ -77,7 +77,7 @@ class NotificationService {
         'token': newToken,
         'platform': kIsWeb ? 'web' : 'mobile',
         'is_web': kIsWeb,
-      }, onConflict: 'token');
+      }, onConflict: 'user_id,token');
     });
   }
 }
