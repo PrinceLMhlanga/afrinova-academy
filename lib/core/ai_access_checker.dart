@@ -4,41 +4,44 @@ import 'package:flutter/foundation.dart';
 class AIAccessChecker {
   /// Check if user has access to ANY AI feature
   static Future<bool> canAccessAIFeatures() async {
-    final userId = Supabase.instance.client.auth.currentUser?.id;
-    if (userId == null) return false;
+  final userId = Supabase.instance.client.auth.currentUser?.id;
+  if (userId == null) return false;
 
-    try {
-      final profile = await Supabase.instance.client
-          .from('profiles')
-          .select('is_subscribed, subscription_expires_at, trial_started_at, trial_ends_at')
-          .eq('id', userId)
-          .single();
+  try {
+    // ✅ Get server time from Supabase
+    final serverTimeResponse = await Supabase.instance.client
+        .rpc('get_server_time');
+    
+    final serverTime = DateTime.parse(serverTimeResponse as String);
+    
+    final profile = await Supabase.instance.client
+        .from('profiles')
+        .select('is_subscribed, subscription_expires_at, trial_ends_at')
+        .eq('id', userId)
+        .single();
 
-      final now = DateTime.now();
-
-      // ✅ Check active subscription
-      if (profile['is_subscribed'] == true) {
-        final expiresAt = profile['subscription_expires_at'] as String?;
-        if (expiresAt != null) {
-          final expiry = DateTime.parse(expiresAt);
-          if (expiry.isAfter(now)) return true; // Still subscribed
-        }
+    // Check subscription against SERVER time
+    if (profile['is_subscribed'] == true) {
+      final expiresAt = profile['subscription_expires_at'] as String?;
+      if (expiresAt != null) {
+        final expiry = DateTime.parse(expiresAt);
+        if (expiry.isAfter(serverTime)) return true; // ✅ Server time
       }
-
-      // ✅ Check active trial
-      final trialEndsAt = profile['trial_ends_at'] as String?;
-      if (trialEndsAt != null) {
-        final trialEnd = DateTime.parse(trialEndsAt);
-        if (trialEnd.isAfter(now)) return true; // Trial still active
-      }
-
-      // ❌ No access - subscription expired AND trial expired
-      return false;
-    } catch (e) {
-      debugPrint('AI Access check error: $e');
-      return false;
     }
+
+    // Check trial against SERVER time
+    final trialEndsAt = profile['trial_ends_at'] as String?;
+    if (trialEndsAt != null) {
+      final trialEnd = DateTime.parse(trialEndsAt);
+      if (trialEnd.isAfter(serverTime)) return true; // ✅ Server time
+    }
+
+    return false;
+  } catch (e) {
+    debugPrint('AI Access check error: $e');
+    return false;
   }
+}
 
   /// Start trial if not already started
   static Future<void> startTrial() async {
