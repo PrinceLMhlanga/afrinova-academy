@@ -1073,7 +1073,7 @@ final crossAxisCount = isVerySmallScreen ? 2 : (isSmallScreen ? 3 : 4);
       case 'Live Teaching':
         return 'Go live and schedule lessons';
       case 'One-on-One Tutoring':
-        return 'Beta';
+        return 'Hold interactive chat sessions with your students';
       case 'Class Management':
         return 'Manage students, classes, and requests';
       case 'Finances':
