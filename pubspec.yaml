@@ -37,6 +37,8 @@ dependencies:
   supabase_flutter: ^2.5.0
   firebase_core: ^4.13.0
   firebase_messaging: ^16.5.0
+  shared_preferences: ^2.2.0
+  flutter_local_notifications: ^17.0.0
   video_player: ^2.9.1          # ← Add this
   chewie: ^1.8.1                # ← Add this (nice video player UI)
   video_player_win: ^3.0.0
