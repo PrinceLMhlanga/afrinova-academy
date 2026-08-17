@@ -6,7 +6,6 @@ const SERVICE_ROLE_KEY = Deno.env.get("SERVICE_ROLE_KEY")!;
 const SENDGRID_API_KEY = Deno.env.get("SENDGRID_API_KEY");
 const FCM_SERVICE_ACCOUNT = Deno.env.get("FCM_SERVICE_ACCOUNT");
 const FCM_PROJECT_ID = Deno.env.get("FCM_PROJECT_ID");
-const FCM_SERVER_KEY = Deno.env.get("FCM_SERVER_KEY");
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -97,42 +96,58 @@ const getGoogleAccessToken = async () => {
   return cachedAccessToken;
 };
 
-const sendFcmMessage = async (token: string, title: string, body: string, data: unknown) => {
-  if (FCM_SERVICE_ACCOUNT && FCM_PROJECT_ID) {
-    const accessToken = await getGoogleAccessToken();
-    const response = await fetch(`https://fcm.googleapis.com/v1/projects/${FCM_PROJECT_ID}/messages:send`, {
+const sendFcmMessage = async (token: string, title: string, body: string, data: any) => {
+  if (!FCM_SERVICE_ACCOUNT || !FCM_PROJECT_ID) {
+    throw new Error('Missing FCM credentials');
+  }
+
+  const accessToken = await getGoogleAccessToken();
+  
+  // Clean data for FCM (only string values allowed)
+  const cleanData: Record<string, string> = {};
+  if (data && typeof data === 'object') {
+    for (const [key, value] of Object.entries(data)) {
+      if (typeof value === 'string') {
+        cleanData[key] = value;
+      } else if (value !== null && value !== undefined) {
+        cleanData[key] = JSON.stringify(value);
+      }
+    }
+  }
+  
+  const message = {
+    token,
+    notification: { title, body },
+    data: cleanData,
+    webpush: {
+      notification: {
+        icon: '/icons/Icon-192.png',
+        badge: '/icons/Icon-96.png',
+        requireInteraction: true,
+      },
+      fcmOptions: {
+        link: cleanData.type === 'live_lesson' 
+          ? `/lesson/${cleanData.lesson_id || ''}` 
+          : cleanData.type === 'chat_message' 
+            ? `/chat/${cleanData.session_id || ''}` 
+            : '/'
+      }
+    }
+  };
+
+  const response = await fetch(
+    `https://fcm.googleapis.com/v1/projects/${FCM_PROJECT_ID}/messages:send`,
+    {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${accessToken}`,
       },
-      body: JSON.stringify({
-        message: {
-          token,
-          notification: { title, body },
-          data: typeof data === 'object' && data !== null ? data : {},
-        },
-      }),
-    });
-    return response;
-  }
-
-  if (!FCM_SERVER_KEY) {
-    throw new Error('No push credentials configured');
-  }
-
-  return await fetch('https://fcm.googleapis.com/fcm/send', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `key=${FCM_SERVER_KEY}`,
-    },
-    body: JSON.stringify({
-      to: token,
-      notification: { title, body },
-      data: typeof data === 'object' && data !== null ? data : {},
-    }),
-  });
+      body: JSON.stringify({ message }),
+    }
+  );
+  
+  return response;
 };
 
 serve(async (req) => {
@@ -161,6 +176,7 @@ serve(async (req) => {
     const channels: string[] = notification.channels || ['in_app'];
     const results: any = { notificationId };
 
+    // Send email if configured
     if (channels.includes('email') && SENDGRID_API_KEY && user?.email) {
       try {
         const sgResp = await fetch('https://api.sendgrid.com/v3/mail/send', {
@@ -182,37 +198,52 @@ serve(async (req) => {
       }
     }
 
-    if (channels.includes('push')) {
+    // Send push notification
+    if (channels.includes('push') && user?.id) {
       const { data: devices, error: devicesError } = await supabase
         .from('user_devices')
         .select('token')
-        .eq('user_id', user?.id);
+        .eq('user_id', user.id)
+        .not('token', 'is', null);
 
       if (devicesError) throw devicesError;
 
-      const tokens = Array.isArray(devices) ? devices.map((d: any) => d.token).filter(Boolean) : [];
-      if (tokens.length === 0 && user?.fcm_tokens) {
-        tokens.push(...(Array.isArray(user.fcm_tokens) ? user.fcm_tokens : [user.fcm_tokens]));
-      }
-
+      const tokens = Array.isArray(devices) 
+        ? devices.map((d: any) => d.token).filter(Boolean) 
+        : [];
+      
       if (tokens.length > 0) {
         const pushResults: any[] = [];
         for (const token of tokens) {
           try {
-            const resp = await sendFcmMessage(notification.title, notification.body || '', notification.data || {}, token);
-            pushResults.push({ token, status: resp.status });
+            // FIXED: Correct argument order
+            const resp = await sendFcmMessage(
+              token,
+              notification.title,
+              notification.body || '',
+              {
+                ...notification.data,
+                type: notification.type,
+                notification_id: notification.id
+              }
+            );
+            pushResults.push({ status: resp.status });
           } catch (e) {
-            pushResults.push({ token, error: getErrorMessage(e) });
+            pushResults.push({ error: getErrorMessage(e) });
           }
         }
-        results.push = pushResults;
+        results.push = { sent: pushResults.length, results: pushResults };
       } else {
-        results.push = { error: 'No device tokens found' };
+        results.push = { error: 'No device tokens found for user' };
       }
     }
 
+    // Mark as delivered
     try {
-      await supabase.from('notifications').update({ delivered_at: new Date().toISOString() }).eq('id', notificationId);
+      await supabase
+        .from('notifications')
+        .update({ delivered_at: new Date().toISOString() })
+        .eq('id', notificationId);
     } catch (_) {}
 
     return new Response(JSON.stringify({ success: true, results }), { headers: corsHeaders });
