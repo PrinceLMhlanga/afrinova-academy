@@ -132,7 +132,7 @@ class NotificationService {
   }
 
   Future<void> _registerTokenWithBackend(String userId, String token) async {
-    try {
+        try {
       await Supabase.instance.client.from('user_devices').upsert({
         'device_id': _deviceId,
         'user_id': userId,

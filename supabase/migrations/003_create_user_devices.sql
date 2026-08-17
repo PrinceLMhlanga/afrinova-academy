@@ -22,6 +22,30 @@ ALTER TABLE public.user_devices
 ALTER TABLE public.user_devices
   ADD COLUMN IF NOT EXISTS is_web boolean NOT NULL DEFAULT false;
 
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'user_devices_token_key'
+      AND conrelid = 'public.user_devices'::regclass
+  ) THEN
+    ALTER TABLE public.user_devices
+      ADD CONSTRAINT user_devices_token_key UNIQUE (token);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'user_devices_device_id_key'
+      AND conrelid = 'public.user_devices'::regclass
+  ) THEN
+    ALTER TABLE public.user_devices
+      ADD CONSTRAINT user_devices_device_id_key UNIQUE (device_id);
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_devices_token ON public.user_devices (token);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_devices_device_id ON public.user_devices (device_id) WHERE device_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_devices_user_token ON public.user_devices (user_id, token);
 
