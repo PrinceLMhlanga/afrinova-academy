@@ -73,19 +73,19 @@ const getGoogleAccessToken = async () => {
   const assertion = await signJwt(
     {
       iss: key.client_email,
-      scope: 'https://googleapis.com',
-      aud: 'https://googleapis.com',
+      scope: 'https://www.googleapis.com/auth/firebase.messaging',
+      aud: 'https://oauth2.googleapis.com/token',
       iat: now,
       exp: now + 3600,
     },
     key.private_key,
   );
 
-  const response = await fetch('https://googleapis.com', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${encodeURIComponent(assertion)}`,
-  });
+  const response = await fetch('https://oauth2.googleapis.com/token', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${encodeURIComponent(assertion)}`,
+});
 
   const data = await response.json();
   if (!response.ok) {
@@ -112,7 +112,9 @@ const sendFcmMessage = async (token: string, title: string, body: string, data: 
 
   if (FCM_SERVICE_ACCOUNT && FCM_PROJECT_ID) {
     const accessToken = await getGoogleAccessToken();
-    const response = await fetch(`https://googleapis.com{FCM_PROJECT_ID}/messages:send`, {
+    const response = await fetch(
+  `https://fcm.googleapis.com/v1/projects/${FCM_PROJECT_ID}/messages:send`,
+  {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -147,7 +149,7 @@ const sendFcmMessage = async (token: string, title: string, body: string, data: 
     throw new Error('No push credentials configured');
   }
 
-  return await fetch('https://googleapis.com', {
+  return await fetch('https://fcm.googleapis.com/fcm/send', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -189,7 +191,7 @@ serve(async (req) => {
 
     if (channels.includes('email') && SENDGRID_API_KEY && user?.email) {
       try {
-        const sgResp = await fetch('https://sendgrid.com', {
+        const sgResp = await fetch('https://api.sendgrid.com/v3/mail/send', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
