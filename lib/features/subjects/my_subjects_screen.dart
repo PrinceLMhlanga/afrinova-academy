@@ -87,7 +87,7 @@ class _MySubjectsScreenState extends State<MySubjectsScreen> {
       });
     }
 
-    final selfSubjects = await Supabase.instance.client
+     final selfSubjects = await Supabase.instance.client
         .from('student_subjects')
         .select('id, subject_id, subjects(id, name, description, color_hex, icon_name)')
         .eq('student_id', userId)
@@ -146,24 +146,36 @@ Future<void> _addSelfStudySubject() async {
                   value: isSelfStudy,
                   enabled: !isAlreadyEnrolled,
                   onChanged: isAlreadyEnrolled ? null : (v) async {
-                    if (v == true) {
-                      await Supabase.instance.client
-                          .from('student_subjects')
-                          .insert({
-                            'student_id': userId,
-                            'subject_id': subjectId,
-                            'source': 'manual',
-                          });
-                    } else {
-                      await Supabase.instance.client
-                          .from('student_subjects')
-                          .delete()
-                          .eq('student_id', userId)
-                          .eq('subject_id', subjectId);
-                    }
-                    _loadMySubjects();
-                    Navigator.pop(ctx);
-                  },
+  if (v == true) {
+    // Add subject
+    await Supabase.instance.client
+        .from('student_subjects')
+        .insert({
+          'student_id': userId,
+          'subject_id': subjectId,
+          'source': 'manual',
+        });
+    
+    // DON'T close the dialog immediately - let them select multiple
+    // Or reload data in background
+    _loadMySubjects();
+  } else {
+    // Remove subject
+    await Supabase.instance.client
+        .from('student_subjects')
+        .delete()
+        .eq('student_id', userId)
+        .eq('subject_id', subjectId);
+    
+    _loadMySubjects();
+  }
+  
+  // Remove this line - don't close dialog on each selection
+  // Navigator.pop(ctx);
+  
+  // Instead, update the dialog state
+  setDialogState(() {});
+},
                   title: Text(
                     subject['name'] ?? '',
                     style: TextStyle(
@@ -263,192 +275,198 @@ Future<void> _addSelfStudySubject() async {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-  title: const Text('My Subjects'),
-  backgroundColor: const Color(0xFF1A237E),
-  foregroundColor: Colors.white,
-  actions: [
-    IconButton(
-      icon: const Icon(Icons.add),
-      tooltip: 'Add Subject',
-      onPressed: _addSelfStudySubject, // ✅ Now opens subject selector
+ @override
+Widget build(BuildContext context) {
+  return Scaffold(
+    appBar: AppBar(
+      title: const Text('My Subjects'),
+      backgroundColor: const Color(0xFF1A237E),
+      foregroundColor: Colors.white,
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.add),
+          tooltip: 'Add Subject',
+          onPressed: _addSelfStudySubject,
+        ),
+      ],
     ),
-  ],
-),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFF1A237E)))
-          : _mySubjects.isEmpty
-              ? _buildEmptyState()
-              : RefreshIndicator(
-                  onRefresh: _loadMySubjects,
-                  color: const Color(0xFFFF9800),
-                  child: ListView.builder(
-                    padding: const EdgeInsets.all(20),
-                    itemCount: _mySubjects.length + (_selfStudySubjects.isNotEmpty ? 1 : 0), // +1 for self-study card
-                    itemBuilder: (context, index) {
-                      if (_selfStudySubjects.isNotEmpty && index == 0) {
-                  return _buildSelfStudyCard();
-                }
-                      final subjectIndex = _selfStudySubjects.isNotEmpty ? index - 1 : index;
-                final data = _mySubjects[subjectIndex];
-                      final subject = data['subject'] as Map<String, dynamic>;
-                      final teachers = data['teachers'] as List<Map<String, dynamic>>;
-                      final color = _getSubjectColor(subject['color_hex'] as String?);
-                      final icon = _getSubjectIcon(subject['icon_name'] as String?);
+    body: _isLoading
+        ? const Center(child: CircularProgressIndicator(color: Color(0xFF1A237E)))
+        : (_mySubjects.isEmpty && _selfStudySubjects.isEmpty)
+            ? _buildEmptyState()
+            : RefreshIndicator(
+                onRefresh: _loadMySubjects,
+                color: const Color(0xFFFF9800),
+                child: ListView.builder(
+                  padding: const EdgeInsets.all(20),
+                  // FIX: Always include self-study card if there are self-study subjects
+                  itemCount: _mySubjects.length + (_selfStudySubjects.isNotEmpty ? 1 : 0),
+                  itemBuilder: (context, index) {
+                    // FIX: Show self-study card first if exists
+                    if (_selfStudySubjects.isNotEmpty && index == 0) {
+                      return _buildSelfStudyCard();
+                    }
+                    
+                    // FIX: Adjust index calculation
+                    final subjectIndex = _selfStudySubjects.isNotEmpty ? index - 1 : index;
+                    
+                    // FIX: Safety check
+                    if (subjectIndex < 0 || subjectIndex >= _mySubjects.length) {
+                      return const SizedBox.shrink();
+                    }
+                    
+                    final data = _mySubjects[subjectIndex];
+                    final subject = data['subject'] as Map<String, dynamic>;
+                    final teachers = data['teachers'] as List<Map<String, dynamic>>;
+                    final color = _getSubjectColor(subject['color_hex'] as String?);
+                    final icon = _getSubjectIcon(subject['icon_name'] as String?);
 
-                      return Container(
-                        margin: const EdgeInsets.only(bottom: 16),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                          boxShadow: [
-                            BoxShadow(color: color.withOpacity(0.1), blurRadius: 10, offset: const Offset(0, 3)),
-                          ],
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: color.withOpacity(0.05),
-                                borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-                              ),
-                              child: Row(
-                                children: [
-                                  Container(
-                                    width: 48, height: 48,
-                                    decoration: BoxDecoration(
-                                      color: color.withOpacity(0.1),
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: Icon(icon, color: color, size: 24),
-                                  ),
-                                  const SizedBox(width: 14),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(subject['name'] ?? '',
-                                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: color)),
-                                        Text('${teachers.length} teacher(s)',
-                                            style: const TextStyle(fontSize: 12, color: Colors.grey)),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 16),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(color: color.withOpacity(0.1), blurRadius: 10, offset: const Offset(0, 3)),
+                        ],
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: color.withOpacity(0.05),
+                              borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
                             ),
-                            ...teachers.map((teacher) {
-                              final profile = teacher['profile'] as Map<String, dynamic>;
-                              final canAccess = _canAccess(teacher);
-                              final statusText = _getStatusText(teacher);
-                              final statusColor = _getStatusColor(statusText);
-                              final teacherName = profile['display_name'] ?? profile['full_name'] ?? 'Teacher';
-                              final isExpired = statusText.contains('Ended');
-
-                              return Container(
-                                decoration: BoxDecoration(
-                                  border: Border(bottom: BorderSide(color: Colors.grey.shade100, width: 0.5)),
-                                ),
-                                child: ListTile(
-                                  leading: CircleAvatar(
-                                    radius: 18,
-                                    backgroundColor: canAccess ? color.withOpacity(0.1) : Colors.grey.shade200,
-                                    child: Icon(Icons.person, color: canAccess ? color : Colors.grey, size: 18),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 48, height: 48,
+                                  decoration: BoxDecoration(
+                                    color: color.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(12),
                                   ),
-                                  title: Row(
+                                  child: Icon(icon, color: color, size: 24),
+                                ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      Expanded(
-                                        child: Text(teacherName,
-                                            style: TextStyle(
-                                              fontWeight: FontWeight.w600,
-                                              fontSize: 14,
-                                              color: canAccess ? Colors.black87 : Colors.grey,
-                                            )),
-                                      ),
-                                      if (statusText.isNotEmpty) ...[
-                                        const SizedBox(width: 8),
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                          decoration: BoxDecoration(
-                                            color: statusColor.withOpacity(0.1),
-                                            borderRadius: BorderRadius.circular(8),
-                                          ),
-                                          child: Text(statusText,
-                                              style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: statusColor)),
-                                        ),
-                                      ],
+                                      Text(subject['name'] ?? '',
+                                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: color)),
+                                      Text('${teachers.length} teacher(s)',
+                                          style: const TextStyle(fontSize: 12, color: Colors.grey)),
                                     ],
                                   ),
-                                  trailing: isExpired
-                                      ? GestureDetector(
-                                          onTap: () {
-                                            Navigator.push(
-                                              context,
-                                              MaterialPageRoute(
-                                                builder: (_) => PaymentScreen(
-                                                  teacherId: teacher['teacher_id'] as String,
-                                                  teacherName: teacherName,
-                                                  subjectName: subject['name'] ?? '',
-                                                  enrollmentId: teacher['enrollment_id'] as String,
-                                                  subjectId: teacher['subject_id'] as String?,   // ✅ Pass
-                                                  levelId: teacher['level_id'] as String?,       // ✅ Pass
-                                                  
-                                                ),
-                                              ),
-                                            ).then((_) => _loadMySubjects());
-                                          },
-                                          child: Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                            decoration: BoxDecoration(
-                                              gradient: const LinearGradient(
-                                                colors: [Color(0xFF1A237E), Color(0xFF283593)],
-                                              ),
-                                              borderRadius: BorderRadius.circular(8),
-                                            ),
-                                            child: Text(
-                                              statusText.contains('Subscription') ? 'Renew' : 'Subscribe',
-                                              style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
-                                            ),
-                                          ),
-                                        )
-                                      : canAccess
-                                          ? Icon(Icons.chevron_right, color: color)
-                                          : const Icon(Icons.lock, color: Colors.grey, size: 20),
-                                  onTap: canAccess
-                                      ? () {
+                                ),
+                              ],
+                            ),
+                          ),
+                          ...teachers.map((teacher) {
+                            final profile = teacher['profile'] as Map<String, dynamic>;
+                            final canAccess = _canAccess(teacher);
+                            final statusText = _getStatusText(teacher);
+                            final statusColor = _getStatusColor(statusText);
+                            final teacherName = profile['display_name'] ?? profile['full_name'] ?? 'Teacher';
+                            final isExpired = statusText.contains('Ended');
+
+                            return Container(
+                              decoration: BoxDecoration(
+                                border: Border(bottom: BorderSide(color: Colors.grey.shade100, width: 0.5)),
+                              ),
+                              child: ListTile(
+                                leading: CircleAvatar(
+                                  radius: 18,
+                                  backgroundColor: canAccess ? color.withOpacity(0.1) : Colors.grey.shade200,
+                                  child: Icon(Icons.person, color: canAccess ? color : Colors.grey, size: 18),
+                                ),
+                                title: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(teacherName,
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                            fontSize: 14,
+                                            color: canAccess ? Colors.black87 : Colors.grey,
+                                          )),
+                                    ),
+                                    if (statusText.isNotEmpty) ...[
+                                      const SizedBox(width: 8),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                        decoration: BoxDecoration(
+                                          color: statusColor.withOpacity(0.1),
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: Text(statusText,
+                                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: statusColor)),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                                trailing: isExpired
+                                    ? GestureDetector(
+                                        onTap: () {
                                           Navigator.push(
                                             context,
                                             MaterialPageRoute(
-                                              builder: (_) => TeacherContentScreen(
+                                              builder: (_) => PaymentScreen(
                                                 teacherId: teacher['teacher_id'] as String,
                                                 teacherName: teacherName,
                                                 subjectName: subject['name'] ?? '',
-                                                subjectColor: color,
-                                                subjectId: teacher['subject_id'] as String,   // ✅ Pass
+                                                enrollmentId: teacher['enrollment_id'] as String,
+                                                subjectId: teacher['subject_id'] as String?,
+                                                levelId: teacher['level_id'] as String?,
                                               ),
                                             ),
-                                          );
-                                        }
-                                      : null,
-                                ),
-                                
-                              );
-                              
-                            }),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
+                                          ).then((_) => _loadMySubjects());
+                                        },
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                          decoration: BoxDecoration(
+                                            gradient: const LinearGradient(
+                                              colors: [Color(0xFF1A237E), Color(0xFF283593)],
+                                            ),
+                                            borderRadius: BorderRadius.circular(8),
+                                          ),
+                                          child: Text(
+                                            statusText.contains('Subscription') ? 'Renew' : 'Subscribe',
+                                            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                                          ),
+                                        ),
+                                      )
+                                    : canAccess
+                                        ? Icon(Icons.chevron_right, color: color)
+                                        : const Icon(Icons.lock, color: Colors.grey, size: 20),
+                                onTap: canAccess
+                                    ? () {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (_) => TeacherContentScreen(
+                                              teacherId: teacher['teacher_id'] as String,
+                                              teacherName: teacherName,
+                                              subjectName: subject['name'] ?? '',
+                                              subjectColor: color,
+                                              subjectId: teacher['subject_id'] as String,
+                                            ),
+                                          ),
+                                        );
+                                      }
+                                    : null,
+                              ),
+                            );
+                          }),
+                        ],
+                      ),
+                    );
+                  },
                 ),
-                
-    );
-  }
+              ),
+  );
+}
 
  Widget _buildSelfStudyCard() {
   return Container(

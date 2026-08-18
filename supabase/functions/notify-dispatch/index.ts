@@ -173,10 +173,10 @@ serve(async (req) => {
     const supabase = createClient(PROJECT_URL, SERVICE_ROLE_KEY);
 
     const { data: notification, error: fetchError } = await supabase
-      .from('notifications')
-      .select('*, profiles(id, email, full_name, fcm_tokens)')
-      .eq('id', notificationId)
-      .maybeSingle();
+  .from('notifications')
+  .select('*, profiles(id, email, full_name)') // <-- REMOVED fcm_tokens
+  .eq('id', notificationId)
+  .maybeSingle();
 
     if (fetchError) throw fetchError;
     if (!notification) {
@@ -217,10 +217,7 @@ serve(async (req) => {
       if (devicesError) throw devicesError;
 
       const tokens = Array.isArray(devices) ? devices.map((d: any) => d.token).filter(Boolean) : [];
-      if (tokens.length === 0 && user?.fcm_tokens) {
-        tokens.push(...(Array.isArray(user.fcm_tokens) ? user.fcm_tokens : [user.fcm_tokens]));
-      }
-
+     
       if (tokens.length > 0) {
         const pushResults: any[] = [];
         for (const token of tokens) {
