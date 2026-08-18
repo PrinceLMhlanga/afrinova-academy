@@ -16,12 +16,11 @@ serve(async (req) => {
   try {
     const supabase = createClient(PROJECT_URL, SERVICE_ROLE_KEY);
 
-    // Fetch undelivered notifications that need push/email
+    // Fetch undelivered notifications
     const { data: pending, error: fetchError } = await supabase
       .from('notifications')
       .select('id')
       .is('delivered_at', null)
-      .contains('channels', ['push', 'email'])  // Only process push/email
       .order('created_at', { ascending: true })
       .limit(100);
 
@@ -45,14 +44,11 @@ serve(async (req) => {
         });
 
         if (resp.ok) {
-          await supabase
-            .from('notifications')
-            .update({ delivered_at: new Date().toISOString() })
-            .eq('id', n.id);
-          results.push({ id: n.id, status: 'processed' });
+          await supabase.from('notifications').update({ delivered_at: new Date().toISOString() }).eq('id', n.id);
+          results.push({ id: n.id, status: resp.status });
         } else {
           const text = await resp.text();
-          results.push({ id: n.id, status: 'failed', body: text });
+          results.push({ id: n.id, status: resp.status, body: text });
         }
       } catch (e) {
         results.push({ id: n.id, error: String(e) });

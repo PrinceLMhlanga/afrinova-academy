@@ -6,6 +6,7 @@ const SERVICE_ROLE_KEY = Deno.env.get("SERVICE_ROLE_KEY")!;
 const SENDGRID_API_KEY = Deno.env.get("SENDGRID_API_KEY");
 const FCM_SERVICE_ACCOUNT = Deno.env.get("FCM_SERVICE_ACCOUNT");
 const FCM_PROJECT_ID = Deno.env.get("FCM_PROJECT_ID");
+const FCM_SERVER_KEY = Deno.env.get("FCM_SERVER_KEY");
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -72,15 +73,15 @@ const getGoogleAccessToken = async () => {
   const assertion = await signJwt(
     {
       iss: key.client_email,
-      scope: 'https://www.googleapis.com/auth/firebase.messaging',
-      aud: 'https://oauth2.googleapis.com/token',
+      scope: 'https://googleapis.com',
+      aud: 'https://googleapis.com',
       iat: now,
       exp: now + 3600,
     },
     key.private_key,
   );
 
-  const response = await fetch('https://oauth2.googleapis.com/token', {
+  const response = await fetch('https://googleapis.com', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${encodeURIComponent(assertion)}`,
@@ -96,14 +97,8 @@ const getGoogleAccessToken = async () => {
   return cachedAccessToken;
 };
 
-const sendFcmMessage = async (token: string, title: string, body: string, data: any) => {
-  if (!FCM_SERVICE_ACCOUNT || !FCM_PROJECT_ID) {
-    throw new Error('Missing FCM credentials');
-  }
-
-  const accessToken = await getGoogleAccessToken();
-  
-  // Clean data for FCM (only string values allowed)
+const sendFcmMessage = async (token: string, title: string, body: string, data: unknown) => {
+  // Clean data for FCM (flat key-value pairs of strings only)
   const cleanData: Record<string, string> = {};
   if (data && typeof data === 'object') {
     for (const [key, value] of Object.entries(data)) {
@@ -114,40 +109,56 @@ const sendFcmMessage = async (token: string, title: string, body: string, data: 
       }
     }
   }
-  
-  const message = {
-    token,
-    notification: { title, body },
-    data: cleanData,
-    webpush: {
-      notification: {
-        icon: '/icons/Icon-192.png',
-        badge: '/icons/Icon-96.png',
-        requireInteraction: true,
-      },
-      fcmOptions: {
-        link: cleanData.type === 'live_lesson' 
-          ? `/lesson/${cleanData.lesson_id || ''}` 
-          : cleanData.type === 'chat_message' 
-            ? `/chat/${cleanData.session_id || ''}` 
-            : '/'
-      }
-    }
-  };
 
-  const response = await fetch(
-    `https://fcm.googleapis.com/v1/projects/${FCM_PROJECT_ID}/messages:send`,
-    {
+  if (FCM_SERVICE_ACCOUNT && FCM_PROJECT_ID) {
+    const accessToken = await getGoogleAccessToken();
+    const response = await fetch(`https://googleapis.com{FCM_PROJECT_ID}/messages:send`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${accessToken}`,
       },
-      body: JSON.stringify({ message }),
-    }
-  );
-  
-  return response;
+      body: JSON.stringify({
+        message: {
+          token,
+          notification: { title, body },
+          data: cleanData,
+          webpush: {
+            notification: {
+              icon: '/icons/Icon-192.png',
+              badge: '/icons/Icon-96.png',
+              requireInteraction: true,
+            },
+            fcmOptions: {
+              link: cleanData.type === 'live_lesson' 
+                ? `/lesson/${cleanData.lesson_id || cleanData.id || ''}` 
+                : cleanData.type === 'chat_message' 
+                  ? `/chat/${cleanData.session_id || ''}` 
+                  : '/'
+            }
+          }
+        },
+      }),
+    });
+    return response;
+  }
+
+  if (!FCM_SERVER_KEY) {
+    throw new Error('No push credentials configured');
+  }
+
+  return await fetch('https://googleapis.com', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `key=${FCM_SERVER_KEY}`,
+    },
+    body: JSON.stringify({
+      to: token,
+      notification: { title, body },
+      data: cleanData,
+    }),
+  });
 };
 
 serve(async (req) => {
@@ -163,7 +174,7 @@ serve(async (req) => {
 
     const { data: notification, error: fetchError } = await supabase
       .from('notifications')
-      .select('*, profiles(id, email, full_name)')
+      .select('*, profiles(id, email, full_name, fcm_tokens)')
       .eq('id', notificationId)
       .maybeSingle();
 
@@ -176,10 +187,9 @@ serve(async (req) => {
     const channels: string[] = notification.channels || ['in_app'];
     const results: any = { notificationId };
 
-    // Send email if configured
     if (channels.includes('email') && SENDGRID_API_KEY && user?.email) {
       try {
-        const sgResp = await fetch('https://api.sendgrid.com/v3/mail/send', {
+        const sgResp = await fetch('https://sendgrid.com', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -198,52 +208,54 @@ serve(async (req) => {
       }
     }
 
-    // Send push notification
-    if (channels.includes('push') && user?.id) {
+    if (channels.includes('push')) {
       const { data: devices, error: devicesError } = await supabase
         .from('user_devices')
         .select('token')
-        .eq('user_id', user.id)
-        .not('token', 'is', null);
+        .eq('user_id', user?.id);
 
       if (devicesError) throw devicesError;
 
-      const tokens = Array.isArray(devices) 
-        ? devices.map((d: any) => d.token).filter(Boolean) 
-        : [];
-      
+      const tokens = Array.isArray(devices) ? devices.map((d: any) => d.token).filter(Boolean) : [];
+      if (tokens.length === 0 && user?.fcm_tokens) {
+        tokens.push(...(Array.isArray(user.fcm_tokens) ? user.fcm_tokens : [user.fcm_tokens]));
+      }
+
       if (tokens.length > 0) {
         const pushResults: any[] = [];
         for (const token of tokens) {
           try {
-            // FIXED: Correct argument order
+            // FIX: Restored correct positional arguments: token, title, body, data
             const resp = await sendFcmMessage(
-              token,
-              notification.title,
-              notification.body || '',
+              token, 
+              notification.title, 
+              notification.body || '', 
               {
                 ...notification.data,
                 type: notification.type,
                 notification_id: notification.id
               }
             );
-            pushResults.push({ status: resp.status });
+
+            // Housekeeping: remove expired tokens from DB dynamically
+            if (resp.status === 404 || resp.status === 410) {
+              await supabase.from('user_devices').delete().eq('token', token);
+            }
+
+            pushResults.push({ token: token.substring(0, 15) + '...', status: resp.status });
           } catch (e) {
-            pushResults.push({ error: getErrorMessage(e) });
+            pushResults.push({ token: token.substring(0, 15) + '...', error: getErrorMessage(e) });
           }
         }
-        results.push = { sent: pushResults.length, results: pushResults };
+        results.push = pushResults;
       } else {
-        results.push = { error: 'No device tokens found for user' };
+        results.push = { error: 'No device tokens found' };
       }
     }
 
     // Mark as delivered
     try {
-      await supabase
-        .from('notifications')
-        .update({ delivered_at: new Date().toISOString() })
-        .eq('id', notificationId);
+      await supabase.from('notifications').update({ delivered_at: new Date().toISOString() }).eq('id', notificationId);
     } catch (_) {}
 
     return new Response(JSON.stringify({ success: true, results }), { headers: corsHeaders });
