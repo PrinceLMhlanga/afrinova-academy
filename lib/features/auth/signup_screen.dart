@@ -4,6 +4,7 @@ import '../../core/notification_service.dart';
 import 'teacher_application_screen.dart';
 import '../home/home_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'complete_student_profile_screen.dart';
 
 class SignupScreen extends StatefulWidget {
   const SignupScreen({super.key});
@@ -53,65 +54,66 @@ Future<void> _loadLevels() async {
 }
 
   Future<void> _signup() async {
-    if (!_formKey.currentState!.validate()) return;
-    
-    if (_selectedRole == 'student' && _selectedLevelId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select your class level'), backgroundColor: Colors.red),
-      );
-      return;
+  if (!_formKey.currentState!.validate()) return;
+  
+  if (_selectedRole == 'student' && _selectedLevelId == null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Please select your class level'), backgroundColor: Colors.red),
+    );
+    return;
+  }
+
+  setState(() => _isLoading = true);
+
+  try {
+    final response = await _authService.signUp(
+      email: _emailController.text.trim(),
+      password: _passwordController.text.trim(),
+      fullName: _nameController.text.trim(),
+      role: _selectedRole,
+    );
+
+    // Save level to profiles for students
+    if (_selectedRole == 'student' && _selectedLevelId != null && response.user != null) {
+      await Supabase.instance.client
+          .from('profiles')
+          .update({'level_id': _selectedLevelId})
+          .eq('id', response.user!.id);
     }
 
-    setState(() => _isLoading = true);
+    await NotificationService.instance.registerDeviceToken();
 
-    try {
-      final response = await _authService.signUp(
-        email: _emailController.text.trim(),
-        password: _passwordController.text.trim(),
-        fullName: _nameController.text.trim(),
-        role: _selectedRole,
-      );
-
-      // ✅ Save level to profiles for students
-      if (_selectedRole == 'student' && _selectedLevelId != null && response.user != null) {
-        await Supabase.instance.client
-            .from('profiles')
-            .update({'level_id': _selectedLevelId})
-            .eq('id', response.user!.id);
-      }
-
-      await NotificationService.instance.registerDeviceToken();
-
-      if (mounted) {
-        if (_selectedRole == 'teacher') {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(
-              builder: (_) => TeacherApplicationScreen(
-                userId: response.user?.id ?? '',
-                userEmail: _emailController.text.trim(),
-                userName: _nameController.text.trim(),
-              ),
+    if (mounted) {
+      if (_selectedRole == 'teacher') {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => TeacherApplicationScreen(
+              userId: response.user?.id ?? '',
+              userEmail: _emailController.text.trim(),
+              userName: _nameController.text.trim(),
             ),
-          );
-        } else {
-          Navigator.pushAndRemoveUntil(
-            context,
-            MaterialPageRoute(builder: (_) => HomeScreen()),
-            (route) => false,
-          );
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Signup failed: ${e.toString()}'), backgroundColor: Colors.red),
+          ),
+        );
+      } else {
+        // Navigate to CompleteStudentProfileScreen instead of HomeScreen
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (_) => const CompleteStudentProfileScreen()),
+          (route) => false,
         );
       }
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
     }
+  } catch (e) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Signup failed: ${e.toString()}'), backgroundColor: Colors.red),
+      );
+    }
+  } finally {
+    if (mounted) setState(() => _isLoading = false);
   }
+}
 
   @override
   void dispose() {

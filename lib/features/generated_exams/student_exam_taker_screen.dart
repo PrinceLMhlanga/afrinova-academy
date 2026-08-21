@@ -592,7 +592,7 @@ Future<void> _getAIFeedback() async {
     );
   }
 
-  Widget _buildResults() {
+ Widget _buildResults() {
   final percentage = _totalMarks > 0 ? (_score / _totalMarks * 100).toStringAsFixed(1) : '0.0';
   final passed = double.parse(percentage) >= 50;
 
@@ -675,6 +675,11 @@ Future<void> _getAIFeedback() async {
           final question = widget.questions[index];
           final questionId = question['id'] as String;
           
+          // ✅ Check for diagram
+          final hasDiagram = question['diagram_url'] != null && 
+              (question['diagram_url'] as String).isNotEmpty;
+          final diagramUrl = question['diagram_url'] as String?;
+          
           final studentLetter = r['student_answer'] as String? ?? '';
           final studentText = studentLetter.isNotEmpty 
               ? _getOptionText(studentLetter, question) 
@@ -685,7 +690,7 @@ Future<void> _getAIFeedback() async {
               ? _getOptionText(correctLetter, question) 
               : '';
 
-          // ✅ Get AI explanation for this specific question
+          // Get AI explanation for this specific question
           final aiExplanation = _perQuestionFeedback[questionId];
 
           return Card(
@@ -698,6 +703,7 @@ Future<void> _getAIFeedback() async {
                 children: [
                   // Question header
                   Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Icon(isCorrect ? Icons.check_circle : Icons.cancel, 
                           color: isCorrect ? const Color(0xFF4CAF50) : Colors.red, size: 22),
@@ -712,6 +718,41 @@ Future<void> _getAIFeedback() async {
                     ],
                   ),
                   const SizedBox(height: 8),
+                  
+                  // ✅ Diagram display
+                  if (hasDiagram && diagramUrl != null)
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.grey.shade200),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Image.network(
+                          diagramUrl,
+                          fit: BoxFit.contain,
+                          loadingBuilder: (context, child, loadingProgress) {
+                            if (loadingProgress == null) return child;
+                            return Container(
+                              height: 200,
+                              color: Colors.grey.shade100,
+                              child: const Center(
+                                child: CircularProgressIndicator(),
+                              ),
+                            );
+                          },
+                          errorBuilder: (context, error, stackTrace) => Container(
+                            height: 100,
+                            color: Colors.grey.shade100,
+                            child: const Center(
+                              child: Icon(Icons.broken_image, color: Colors.grey),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                   
                   // Student answer
                   Row(
@@ -745,47 +786,46 @@ Future<void> _getAIFeedback() async {
                       ),
                     ),
 
-                  // ✅ AI Feedback for this question (only for failed questions)
-                  // ✅ AI Feedback for this question (only for failed questions)
-if (!isCorrect && aiExplanation != null && aiExplanation.isNotEmpty)
-  Container(
-    margin: const EdgeInsets.only(top: 12),
-    padding: const EdgeInsets.all(12),
-    decoration: BoxDecoration(
-      gradient: LinearGradient(
-        colors: [Colors.purple.shade50, Colors.blue.shade50],
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-      ),
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: Colors.purple.withOpacity(0.15)),
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            const Icon(Icons.auto_awesome, color: Colors.purple, size: 14),
-            const SizedBox(width: 6),
-            const Text('AI Feedback', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: Colors.purple)),
-            const Spacer(),
-            if (_isAnalyzing)
-              const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.purple)),
-          ],
-        ),
-        const SizedBox(height: 8),
-        GptMarkdown(  // ✅ Use GptMarkdown like your original
-          aiExplanation,
-          useDollarSignsForLatex: true,
-          style: const TextStyle(
-            fontSize: 13,
-            height: 1.5,
-            color: Colors.black87,
-          ),
-        ),
-      ],
-    ),
-  ),
+                  // AI Feedback for this question (only for failed questions)
+                  if (!isCorrect && aiExplanation != null && aiExplanation.isNotEmpty)
+                    Container(
+                      margin: const EdgeInsets.only(top: 12),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [Colors.purple.shade50, Colors.blue.shade50],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.purple.withOpacity(0.15)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.auto_awesome, color: Colors.purple, size: 14),
+                              const SizedBox(width: 6),
+                              const Text('AI Feedback', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: Colors.purple)),
+                              const Spacer(),
+                              if (_isAnalyzing)
+                                const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.purple)),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          GptMarkdown(
+                            aiExplanation,
+                            useDollarSignsForLatex: true,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              height: 1.5,
+                              color: Colors.black87,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                 ],
               ),
             ),

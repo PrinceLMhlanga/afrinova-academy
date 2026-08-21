@@ -11,7 +11,7 @@ import '../ai/ai_tutor_screen.dart';
 import '../subjects/my_subjects_screen.dart';
 import '../exams/student_papers_screen.dart';
 import '../../core/progress_service.dart';
-import '../leaderboard/leaderboard_screen.dart';
+import '../leaderboard/subject_leaderboard_screen.dart';
 import '../badges/badges_screen.dart';
 import '../admin/admin_dashboard.dart';
 import '../trial/trial_banner.dart';
@@ -842,7 +842,7 @@ Container(
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const LeaderboardScreen(),
+                      builder: (_) => const SubjectLeaderboardScreen(),
                     ),
                   );
                 },

@@ -141,6 +141,11 @@ class _ExamReviewScreenState extends State<ExamReviewScreen> {
                   final isCorrect = q['is_correct'] == true;
                   final aiExplanation = q['ai_explanation'] as String?;
 
+                  // ✅ Check for diagram
+                  final hasDiagram = question?['diagram_url'] != null && 
+                      (question?['diagram_url'] as String? ?? '').isNotEmpty;
+                  final diagramUrl = question?['diagram_url'] as String?;
+
                   return Card(
                     margin: const EdgeInsets.only(bottom: 10),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -150,26 +155,62 @@ class _ExamReviewScreenState extends State<ExamReviewScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Icon(isCorrect ? Icons.check_circle : Icons.cancel, color: isCorrect ? const Color(0xFF4CAF50) : Colors.red, size: 22),
                               const SizedBox(width: 8),
                               Expanded(
-  child: MathRenderer(  // ✅ Use MathRenderer
-    'Q${index + 1}: ${question?['question_text'] ?? 'N/A'}',
-    fontSize: 14,
-    textColor: const Color(0xFF1A237E),
-  ),
-),
+                                child: MathRenderer(
+                                  'Q${index + 1}: ${question?['question_text'] ?? 'N/A'}',
+                                  fontSize: 14,
+                                  textColor: const Color(0xFF1A237E),
+                                ),
+                              ),
                             ],
                           ),
                           const SizedBox(height: 8),
                           
+                          // ✅ Diagram display
+                          if (hasDiagram && diagramUrl != null)
+                            Container(
+                              margin: const EdgeInsets.only(bottom: 12),
+                              decoration: BoxDecoration(
+                                color: Colors.grey.shade50,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: Colors.grey.shade200),
+                              ),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: Image.network(
+                                  diagramUrl,
+                                  fit: BoxFit.contain,
+                                  loadingBuilder: (context, child, loadingProgress) {
+                                    if (loadingProgress == null) return child;
+                                    return Container(
+                                      height: 200,
+                                      color: Colors.grey.shade100,
+                                      child: const Center(
+                                        child: CircularProgressIndicator(),
+                                      ),
+                                    );
+                                  },
+                                  errorBuilder: (context, error, stackTrace) => Container(
+                                    height: 100,
+                                    color: Colors.grey.shade100,
+                                    child: const Center(
+                                      child: Icon(Icons.broken_image, color: Colors.grey),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          
                           // Options
                           if (question != null) ...[
                             _buildOption('A', question['option_a'] as String?, q['selected_answer'] == 'A', question['correct_answer'] == 'A', isCorrect),
-_buildOption('B', question['option_b'] as String?, q['selected_answer'] == 'B', question['correct_answer'] == 'B', isCorrect),
-_buildOption('C', question['option_c'] as String?, q['selected_answer'] == 'C', question['correct_answer'] == 'C', isCorrect),
-_buildOption('D', question['option_d'] as String?, q['selected_answer'] == 'D', question['correct_answer'] == 'D', isCorrect),
+                            _buildOption('B', question['option_b'] as String?, q['selected_answer'] == 'B', question['correct_answer'] == 'B', isCorrect),
+                            _buildOption('C', question['option_c'] as String?, q['selected_answer'] == 'C', question['correct_answer'] == 'C', isCorrect),
+                            _buildOption('D', question['option_d'] as String?, q['selected_answer'] == 'D', question['correct_answer'] == 'D', isCorrect),
                           ],
                           
                           // AI Explanation for wrong answers
@@ -215,51 +256,51 @@ _buildOption('D', question['option_d'] as String?, q['selected_answer'] == 'D', 
   }
 
   Widget _buildOption(String letter, String? text, bool isSelected, bool isCorrect, bool questionCorrect) {
-  if (text == null || text.isEmpty) return const SizedBox.shrink();
-  
-  Color bgColor = Colors.grey.shade50;
-  Color borderColor = Colors.grey.shade200;
-  
-  if (isSelected && isCorrect) {
-    bgColor = const Color(0xFF4CAF50).withOpacity(0.1);
-    borderColor = const Color(0xFF4CAF50);
-  } else if (isSelected && !isCorrect) {
-    bgColor = Colors.red.withOpacity(0.1);
-    borderColor = Colors.red;
-  } else if (isCorrect && !questionCorrect) {
-    bgColor = const Color(0xFF4CAF50).withOpacity(0.05);
-    borderColor = const Color(0xFF4CAF50).withOpacity(0.5);
-  }
+    if (text == null || text.isEmpty) return const SizedBox.shrink();
+    
+    Color bgColor = Colors.grey.shade50;
+    Color borderColor = Colors.grey.shade200;
+    
+    if (isSelected && isCorrect) {
+      bgColor = const Color(0xFF4CAF50).withOpacity(0.1);
+      borderColor = const Color(0xFF4CAF50);
+    } else if (isSelected && !isCorrect) {
+      bgColor = Colors.red.withOpacity(0.1);
+      borderColor = Colors.red;
+    } else if (isCorrect && !questionCorrect) {
+      bgColor = const Color(0xFF4CAF50).withOpacity(0.05);
+      borderColor = const Color(0xFF4CAF50).withOpacity(0.5);
+    }
 
-  return Container(
-    margin: const EdgeInsets.only(bottom: 6),
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-    decoration: BoxDecoration(
-      color: bgColor,
-      borderRadius: BorderRadius.circular(8),
-      border: Border.all(color: borderColor),
-    ),
-    child: Row(
-      children: [
-        Container(
-          width: 24, height: 24,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: isSelected ? (isCorrect ? const Color(0xFF4CAF50) : Colors.red) : Colors.grey.shade300,
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: borderColor),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 24, height: 24,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: isSelected ? (isCorrect ? const Color(0xFF4CAF50) : Colors.red) : Colors.grey.shade300,
+            ),
+            child: Center(child: Text(letter, style: TextStyle(color: isSelected ? Colors.white : Colors.grey.shade600, fontSize: 11, fontWeight: FontWeight.bold))),
           ),
-          child: Center(child: Text(letter, style: TextStyle(color: isSelected ? Colors.white : Colors.grey.shade600, fontSize: 11, fontWeight: FontWeight.bold))),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: MathRenderer(  // ✅ Use MathRenderer for options
-            text,
-            fontSize: 13,
-            textColor: Colors.black87,
+          const SizedBox(width: 10),
+          Expanded(
+            child: MathRenderer(
+              text,
+              fontSize: 13,
+              textColor: Colors.black87,
+            ),
           ),
-        ),
-        if (isCorrect) const Icon(Icons.check, color: Color(0xFF4CAF50), size: 16),
-      ],
-    ),
-  );
-}
+          if (isCorrect) const Icon(Icons.check, color: Color(0xFF4CAF50), size: 16),
+        ],
+      ),
+    );
+  }
 }

@@ -9,6 +9,7 @@ import 'platform_settings_screen.dart';
 import 'teacher_management_screen.dart';
 import 'approve_teachers_screen.dart';
 import 'syllabus_management_screen.dart';
+import 'teacher_activity_screen.dart';
 
 class AdminDashboard extends StatelessWidget {
   final String userName;
@@ -70,6 +71,16 @@ class AdminDashboard extends StatelessWidget {
             MaterialPageRoute(builder: (_) => const ManageUsersScreen()),
           ),
         ),
+        AdminActionData(
+  icon: Icons.analytics_rounded,
+  title: 'Teacher Activity',
+  subtitle: 'Monitor teacher content and student engagement',
+  color: const Color(0xFF00897B), // Teal color
+  onTap: () => Navigator.push(
+    context,
+    MaterialPageRoute(builder: (_) => const TeacherActivityScreen()),
+  ),
+),
         AdminActionData(
           icon: Icons.topic_rounded,
           title: 'Platform Topics',

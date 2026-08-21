@@ -110,7 +110,6 @@ Future<void> _addSelfStudySubject() async {
   final userId = _authService.currentUserId;
   if (userId == null) return;
 
-  // Show dialog to select subject
   final allSubjects = await Supabase.instance.client
       .from('subjects')
       .select()
@@ -121,86 +120,20 @@ Future<void> _addSelfStudySubject() async {
 
   showDialog(
     context: context,
-    builder: (ctx) => StatefulBuilder(
-      builder: (context, setDialogState) {
-        final selectedIds = _selfStudySubjects
-            .map((s) => s['subject_id'] as String)
-            .toSet();
-        
-        return AlertDialog(
-          title: const Text('Add Subjects You Study'),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: allSubjects.length,
-              itemBuilder: (context, index) {
-                final subject = allSubjects[index];
-                final subjectId = subject['id'] as String;
-                final isAlreadyEnrolled = _mySubjects.any(
-                  (s) => (s['subject'] as Map)['id'] == subjectId
-                );
-                final isSelfStudy = selectedIds.contains(subjectId);
-
-                return CheckboxListTile(
-                  value: isSelfStudy,
-                  enabled: !isAlreadyEnrolled,
-                  onChanged: isAlreadyEnrolled ? null : (v) async {
-  if (v == true) {
-    // Add subject
-    await Supabase.instance.client
-        .from('student_subjects')
-        .insert({
-          'student_id': userId,
-          'subject_id': subjectId,
-          'source': 'manual',
-        });
-    
-    // DON'T close the dialog immediately - let them select multiple
-    // Or reload data in background
-    _loadMySubjects();
-  } else {
-    // Remove subject
-    await Supabase.instance.client
-        .from('student_subjects')
-        .delete()
-        .eq('student_id', userId)
-        .eq('subject_id', subjectId);
-    
-    _loadMySubjects();
-  }
-  
-  // Remove this line - don't close dialog on each selection
-  // Navigator.pop(ctx);
-  
-  // Instead, update the dialog state
-  setDialogState(() {});
-},
-                  title: Text(
-                    subject['name'] ?? '',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: isAlreadyEnrolled ? Colors.grey : null,
-                    ),
-                  ),
-                  subtitle: isAlreadyEnrolled
-                      ? const Text('Already enrolled with a teacher', style: TextStyle(fontSize: 11))
-                      : null,
-                );
-              },
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Done'),
-            ),
-          ],
-        );
-      },
+    builder: (ctx) => _SubjectSelectionDialog(
+      allSubjects: List<Map<String, dynamic>>.from(allSubjects),
+      existingSelfStudyIds: _selfStudySubjects
+          .map((s) => s['subject_id'] as String)
+          .toSet(),
+      enrolledSubjectIds: _mySubjects
+          .map((s) => (s['subject'] as Map)['id'] as String)
+          .toSet(),
+      userId: userId,
+      onSaved: _loadMySubjects,
     ),
   );
 }
+
 
   // ✅ Full access check — trial + subscription
   bool _canAccess(Map<String, dynamic> teacher) {
@@ -633,4 +566,155 @@ TextButton.icon(
     ),
   );
 }
+}
+
+class _SubjectSelectionDialog extends StatefulWidget {
+  final List<Map<String, dynamic>> allSubjects;
+  final Set<String> existingSelfStudyIds;
+  final Set<String> enrolledSubjectIds;
+  final String userId;
+  final Future<void> Function() onSaved;
+
+  const _SubjectSelectionDialog({
+    required this.allSubjects,
+    required this.existingSelfStudyIds,
+    required this.enrolledSubjectIds,
+    required this.userId,
+    required this.onSaved,
+  });
+
+  @override
+  State<_SubjectSelectionDialog> createState() => _SubjectSelectionDialogState();
+}
+
+class _SubjectSelectionDialogState extends State<_SubjectSelectionDialog> {
+  late Set<String> _selectedIds;
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedIds = Set<String>.from(widget.existingSelfStudyIds);
+  }
+
+  Future<void> _save() async {
+    setState(() {
+      _isSaving = true;
+    });
+
+    try {
+      // Delete existing manual subjects
+      await Supabase.instance.client
+          .from('student_subjects')
+          .delete()
+          .eq('student_id', widget.userId)
+          .eq('source', 'manual');
+
+      // Insert all selected subjects
+      for (final subjectId in _selectedIds) {
+        await Supabase.instance.client
+            .from('student_subjects')
+            .insert({
+              'student_id': widget.userId,
+              'subject_id': subjectId,
+              'source': 'manual',
+            });
+      }
+
+      // Close dialog
+      if (mounted) Navigator.pop(context);
+      
+      // Reload subjects
+      await widget.onSaved();
+      
+      // Show success message
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${_selectedIds.length} subject(s) saved! ✅'),
+            backgroundColor: const Color(0xFF4CAF50),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error saving subjects: $e');
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to save: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Add Subjects You Study'),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: ListView.builder(
+          shrinkWrap: true,
+          itemCount: widget.allSubjects.length,
+          itemBuilder: (context, index) {
+            final subject = widget.allSubjects[index];
+            final subjectId = subject['id'] as String;
+            final isAlreadyEnrolled = widget.enrolledSubjectIds.contains(subjectId);
+            final isSelected = _selectedIds.contains(subjectId);
+
+            return CheckboxListTile(
+              value: isSelected,
+              enabled: !isAlreadyEnrolled && !_isSaving,
+              onChanged: isAlreadyEnrolled 
+                ? null 
+                : (v) {
+                    setState(() {
+                      if (v == true) {
+                        _selectedIds.add(subjectId);
+                      } else {
+                        _selectedIds.remove(subjectId);
+                      }
+                    });
+                  },
+              title: Text(
+                subject['name'] ?? '',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: isAlreadyEnrolled ? Colors.grey : null,
+                ),
+              ),
+              subtitle: isAlreadyEnrolled
+                  ? const Text('Already enrolled with a teacher', style: TextStyle(fontSize: 11))
+                  : null,
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _isSaving ? null : () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: _isSaving ? null : _save,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF1A237E),
+            foregroundColor: Colors.white,
+          ),
+          child: _isSaving
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                )
+              : const Text('Save'),
+        ),
+      ],
+    );
+  }
 }
