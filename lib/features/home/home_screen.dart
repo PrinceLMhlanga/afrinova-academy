@@ -25,6 +25,7 @@ import '../flashcards/my_flashcards_screen.dart';
 import '../../widgets/ai_feature_guard.dart';
 import '../study_planner/availability_setup_screen.dart';
 import '../study_planner/study_plan_screen.dart';
+import '../referrals/referral_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -797,7 +798,7 @@ Container(
               borderRadius: BorderRadius.circular(12),
             ),
             child: const Text(
-              '2 features',
+              '3 features', // ✅ Updated
               style: TextStyle(
                 fontSize: 11,
                 color: Colors.white,
@@ -809,7 +810,7 @@ Container(
       ),
       const SizedBox(height: 4),
       Text(
-        'Track your progress and compete with others',
+        'Track your progress, compete, and earn rewards',
         style: TextStyle(
           fontSize: 13,
           color: Colors.grey[600],
@@ -859,6 +860,22 @@ Container(
                     context,
                     MaterialPageRoute(
                       builder: (_) => const BadgesScreen(),
+                    ),
+                  );
+                },
+              ),
+              // ✅ Referral (NEW)
+              _AnimatedQuickActionCard(
+                icon: Icons.card_giftcard_rounded,
+                label: 'Refer & Earn',
+                color: const Color(0xFFE91E63),
+                index: 2,
+                width: cardWidth,
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const ReferralScreen(),
                     ),
                   );
                 },

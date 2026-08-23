@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../core/auth_service.dart';
 import '../../core/notification_service.dart';
+import '../../core/referral_service.dart';
 import 'teacher_application_screen.dart';
 import '../home/home_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -73,12 +74,17 @@ Future<void> _loadLevels() async {
       role: _selectedRole,
     );
 
-    // Save level to profiles for students
+    // ✅ Save level to profiles for students
     if (_selectedRole == 'student' && _selectedLevelId != null && response.user != null) {
       await Supabase.instance.client
           .from('profiles')
           .update({'level_id': _selectedLevelId})
           .eq('id', response.user!.id);
+    }
+
+    // ✅ Track referral automatically after successful signup
+    if (response.user != null) {
+      await ReferralService().trackReferralAutomatically(response.user!.id);
     }
 
     await NotificationService.instance.registerDeviceToken();
@@ -96,7 +102,7 @@ Future<void> _loadLevels() async {
           ),
         );
       } else {
-        // Navigate to CompleteStudentProfileScreen instead of HomeScreen
+        // Navigate to CompleteStudentProfileScreen
         Navigator.pushAndRemoveUntil(
           context,
           MaterialPageRoute(builder: (_) => const CompleteStudentProfileScreen()),
