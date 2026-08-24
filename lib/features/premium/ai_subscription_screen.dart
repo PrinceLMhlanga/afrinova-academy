@@ -74,7 +74,7 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
 
       final response = await _payNowService.initiateMobilePayment(
         reference: _reference!,
-        amount: 0.01,
+        amount: 5,
         mobileNumber: formattedPhone,
         email: email,
         carrier: 'ecocash',
