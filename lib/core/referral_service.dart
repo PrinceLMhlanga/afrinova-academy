@@ -117,17 +117,23 @@ class ReferralService {
   }
 
   // Share referral link
-  Future<void> shareReferralLink(String code, String referrerName) async {
+Future<void> shareReferralLink(String code, String referrerName) async {
     final link = getReferralLink(code);
-    final message = '🎓 Join AfriNova Academy with ${referrerName}\'s referral!\n\n'
-        'Get access to premium AI tutoring, exam prep, and more.\n\n'
+    final message = '🎓 Join AfriNova Academy using my link!\n\n'
+        'I\'ve been using AfriNova and it\'s been amazing for my exam prep.\n\n'
+        'What you get:\n'
+        '✅ Syllabus-based AI Tutor that knows ZIMSEC & Cambridge inside out\n'
+        '✅ Easy-to-understand syllabus summaries\n'
+        '✅ AI Flashcards for quick concept mastery\n'
+        '✅ Custom exam generation with AI feedback on failed questions\n'
+        '✅ Past papers & marking schemes\n\n'
         '👉 $link\n\n'
-        'Earn rewards when your friends join!';
+        'Trust me, your grades will thank you! 🚀';
     
     try {
       await Share.share(
         message,
-        subject: 'Join AfriNova Academy',
+        subject: 'Join me on AfriNova Academy',
       );
     } catch (e) {
       print('Error sharing: $e');
