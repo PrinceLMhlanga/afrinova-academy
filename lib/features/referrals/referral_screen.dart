@@ -232,81 +232,106 @@ class _ReferralScreenState extends State<ReferralScreen> {
                       ),
                     const SizedBox(height: 24),
 
-                    // Stats section
-                    if (_stats != null) ...[
-                      const Text(
-                        'Your Progress',
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          _buildStatCard(
-                            'Total Referrals',
-                            _stats!['total_referrals']?.toString() ?? '0',
-                            Icons.people,
-                            Colors.blue,
-                          ),
-                          const SizedBox(width: 12),
-                          _buildStatCard(
-                            'Successful',
-                            _stats!['successful_referrals']?.toString() ?? '0',
-                            Icons.check_circle,
-                            Colors.green,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          _buildStatCard(
-                            'In Trial',
-                            _stats!['trial_referrals']?.toString() ?? '0',
-                            Icons.timer,
-                            Colors.orange,
-                          ),
-                          const SizedBox(width: 12),
-                          _buildStatCard(
-                            'Rewards',
-                            _stats!['rewards_earned']?.toString() ?? '0',
-                            Icons.card_giftcard,
-                            Colors.purple,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 24),
-
-                      // Progress to next reward
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.grey.shade200),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'Progress to Free AI Month',
-                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                            ),
-                            const SizedBox(height: 12),
-                            LinearProgressIndicator(
-                              value: progress,
-                              backgroundColor: Colors.grey.shade200,
-                              color: const Color(0xFF4CAF50),
-                              minHeight: 8,
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              '$successfulReferrals / 5 successful referrals',
-                              style: const TextStyle(fontSize: 12, color: Colors.grey),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
+                   // Stats section
+if (_stats != null) ...[
+  const Text(
+    'Your Referral Progress',
+    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+  ),
+  const SizedBox(height: 12),
+  
+  // Row 1: Total Referrals + Registered
+  Row(
+    children: [
+      _buildStatCard(
+        'Total Referrals',
+        _stats!['total_referrals']?.toString() ?? '0',
+        Icons.people,
+        Colors.blue,
+      ),
+      const SizedBox(width: 12),
+      _buildStatCard(
+        'Registered',
+        _stats!['registered_referrals']?.toString() ?? '0',
+        Icons.person_add_alt,
+        Colors.indigo,
+      ),
+    ],
+  ),
+  const SizedBox(height: 12),
+  
+  // Row 2: In Trial + Subscribed
+  Row(
+    children: [
+      _buildStatCard(
+        'In Trial',
+        _stats!['trial_referrals']?.toString() ?? '0',
+        Icons.timer,
+        Colors.orange,
+      ),
+      const SizedBox(width: 12),
+      _buildStatCard(
+        'Subscribed',
+        _stats!['successful_referrals']?.toString() ?? '0',
+        Icons.check_circle,
+        Colors.green,
+      ),
+    ],
+  ),
+  const SizedBox(height: 12),
+  
+  // Row 3: Rewards Earned + Claimed
+  Row(
+    children: [
+      _buildStatCard(
+        'Rewards Earned',
+        _stats!['rewards_earned']?.toString() ?? '0',
+        Icons.card_giftcard,
+        Colors.purple,
+      ),
+      const SizedBox(width: 12),
+      _buildStatCard(
+        'Rewards Claimed',
+        _stats!['rewards_claimed']?.toString() ?? '0',
+        Icons.redeem,
+        Colors.pink,
+      ),
+    ],
+  ),
+  
+  const SizedBox(height: 24),
+  
+  // Progress to next reward
+  Container(
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: Colors.grey.shade200),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Progress to Free AI Month',
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+        ),
+        const SizedBox(height: 12),
+        LinearProgressIndicator(
+          value: progress,
+          backgroundColor: Colors.grey.shade200,
+          color: const Color(0xFF4CAF50),
+          minHeight: 8,
+        ),
+        const SizedBox(height: 8),
+        Text(
+          '$successfulReferrals / 5 successful referrals',
+          style: const TextStyle(fontSize: 12, color: Colors.grey),
+        ),
+      ],
+    ),
+  ),
+],
                   ],
                 ),
               ),
