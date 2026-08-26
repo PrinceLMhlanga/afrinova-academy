@@ -111,7 +111,7 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
       // ✅ Record pending payment before initiating
       await _recordPayment(
         studentId: userId,
-        amount: 0.01,
+        amount: 5.0,
         gatewayReference: _reference!,
         status: 'pending',
         paymentMethod: 'ecocash',
@@ -119,7 +119,7 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
 
       final response = await _payNowService.initiateMobilePayment(
         reference: _reference!,
-        amount: 0.01,
+        amount: 5,
         mobileNumber: formattedPhone,
         email: email,
         carrier: 'ecocash',
