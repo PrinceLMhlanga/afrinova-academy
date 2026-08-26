@@ -3,7 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/ai_access_checker.dart';
 import '../../core/auth_service.dart';
 import '../../core/paynow_service.dart';
-import 'dart:async';  // For Timer
+import 'dart:async';
 
 class AISubscriptionScreen extends StatefulWidget {
   const AISubscriptionScreen({super.key});
@@ -19,7 +19,7 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
   final _emailController = TextEditingController();
   
   bool _isPaying = false;
-  String _status = 'idle'; // idle, processing, waiting, completed, failed
+  String _status = 'idle';
   String? _pollUrl;
   String? _reference;
   Map<String, dynamic> _accessStatus = {};
@@ -33,6 +33,42 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
   Future<void> _loadStatus() async {
     final status = await AIAccessChecker.getStatus();
     if (mounted) setState(() => _accessStatus = status);
+  }
+
+  // ✅ NEW: Record payment in payments table
+  Future<void> _recordPayment({
+    required String studentId,
+    required double amount,
+    required String gatewayReference,
+    required String status,
+    required String paymentMethod,
+  }) async {
+    try {
+      await Supabase.instance.client.from('payments').insert({
+        'student_id': studentId,
+        'teacher_id': null, // No teacher for AI subscription
+        'enrollment_id': null, // No enrollment for AI subscription
+        'amount': amount,
+        'currency': 'USD',
+        'gateway': 'paynow',
+        'gateway_reference': gatewayReference,
+        'status': status,
+        'payment_type': 'ai_subscription',
+        'subscription_type': 'ai_premium_monthly',
+        'payment_method': paymentMethod,
+        'metadata': {
+          'payment_category': 'platform_subscription',
+          'feature': 'ai_premium',
+          'duration_days': 30,
+        },
+        'created_at': DateTime.now().toUtc().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      });
+      
+      print('✅ Payment recorded successfully');
+    } catch (e) {
+      print('❌ Error recording payment: $e');
+    }
   }
 
   Future<void> _subscribe() async {
@@ -72,9 +108,18 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
 
       _reference = 'AI-SUB-${DateTime.now().millisecondsSinceEpoch}';
 
+      // ✅ Record pending payment before initiating
+      await _recordPayment(
+        studentId: userId,
+        amount: 0.01,
+        gatewayReference: _reference!,
+        status: 'pending',
+        paymentMethod: 'ecocash',
+      );
+
       final response = await _payNowService.initiateMobilePayment(
         reference: _reference!,
-        amount: 5,
+        amount: 0.01,
         mobileNumber: formattedPhone,
         email: email,
         carrier: 'ecocash',
@@ -85,6 +130,10 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
         _startPolling();
       } else {
         setState(() { _status = 'failed'; _isPaying = false; });
+        
+        // ✅ Update payment status to failed
+        await _updatePaymentStatus(_reference!, 'failed');
+        
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text(response.error ?? 'Payment failed'), backgroundColor: Colors.red),
@@ -93,6 +142,12 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
       }
     } catch (e) {
       setState(() { _status = 'failed'; _isPaying = false; });
+      
+      // ✅ Update payment status to failed
+      if (_reference != null) {
+        await _updatePaymentStatus(_reference!, 'failed');
+      }
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
@@ -101,7 +156,24 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
     }
   }
 
-  void _startPolling() {
+  // ✅ NEW: Update payment status
+  Future<void> _updatePaymentStatus(String gatewayReference, String status) async {
+    try {
+      await Supabase.instance.client
+          .from('payments')
+          .update({
+            'status': status,
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          })
+          .eq('gateway_reference', gatewayReference);
+      
+      print('✅ Payment status updated to: $status');
+    } catch (e) {
+      print('❌ Error updating payment status: $e');
+    }
+  }
+
+    void _startPolling() {
     Timer.periodic(const Duration(seconds: 3), (timer) async {
       if (_pollUrl == null || !mounted) {
         timer.cancel();
@@ -112,13 +184,21 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
         final status = await _payNowService.pollTransaction(_pollUrl!);
         
         if (status.paid || status.status.toLowerCase() == 'paid') {
-          timer.cancel();
+          // 🛑 CRITICAL FIX: Cancel the timer FIRST before any await calls
+          timer.cancel(); 
           
+          // ✅ Update payment status to completed
+          await _updatePaymentStatus(_reference!, 'completed');
+          
+          // Check if widget is still in the tree before updating State/UI
+          if (!mounted) return;
+
           // Activate subscription
           await Supabase.instance.client
               .from('profiles')
               .update({
                 'is_subscribed': true,
+                'subscription_plan': 'ai_premium',
                 'subscription_expires_at': DateTime.now().add(const Duration(days: 30)).toIso8601String(),
               })
               .eq('id', _authService.currentUserId!);
@@ -135,7 +215,12 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
         } else if (status.status.toLowerCase() == 'cancelled' || 
                    status.status.toLowerCase() == 'declined' ||
                    status.status.toLowerCase() == 'error') {
-          timer.cancel();
+          // 🛑 CRITICAL FIX: Cancel the timer FIRST here too
+          timer.cancel(); 
+          
+          // ✅ Update payment status
+          await _updatePaymentStatus(_reference!, status.status.toLowerCase());
+          
           if (mounted) {
             setState(() { _status = 'failed'; _isPaying = false; });
             ScaffoldMessenger.of(context).showSnackBar(
@@ -143,9 +228,12 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
             );
           }
         }
-      } catch (_) {}
+      } catch (_) {
+        // Optional: clear timer if a persistent error happens to avoid endless loop
+      }
     });
   }
+
 
   @override
   void dispose() {

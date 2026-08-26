@@ -10,6 +10,7 @@ import 'teacher_management_screen.dart';
 import 'approve_teachers_screen.dart';
 import 'syllabus_management_screen.dart';
 import 'teacher_activity_screen.dart';
+import 'platform_wallet_screen.dart';
 
 class AdminDashboard extends StatelessWidget {
   final String userName;
@@ -31,6 +32,16 @@ class AdminDashboard extends StatelessWidget {
       userRole: 'admin',
       onLogout: onLogout,
       extraActions: [
+        AdminActionData(
+  icon: Icons.account_balance_wallet_rounded,
+  title: 'Platform Wallet',
+  subtitle: 'Track revenue, AI subscriptions, and withdrawals',
+  color: const Color(0xFF00897B), // Teal
+  onTap: () => Navigator.push(
+    context,
+    MaterialPageRoute(builder: (_) => const PlatformWalletScreen()),
+  ),
+),
         AdminActionData(
           icon: Icons.verified_user_rounded,
           title: 'Approve Teacher Requests',

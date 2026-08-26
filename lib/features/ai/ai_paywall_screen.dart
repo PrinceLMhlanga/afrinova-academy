@@ -4,7 +4,6 @@ import '../../core/ai_access_checker.dart';
 import '../../core/auth_service.dart';
 import '../premium/ai_subscription_screen.dart';
 
-
 class AIPaywallScreen extends StatefulWidget {
   final String featureName;
   final VoidCallback? onSubscribe;
@@ -33,6 +32,40 @@ class _AIPaywallScreenState extends State<AIPaywallScreen> {
     final status = await AIAccessChecker.getStatus();
     if (mounted) setState(() { _status = status; _isLoading = false; });
   }
+
+  // inside _AIPaywallScreenState
+
+Future<void> _handleSubscription() async {
+  final subscribed = await Navigator.push<bool>(
+    context,
+    MaterialPageRoute(builder: (_) => const AISubscriptionScreen()),
+  );
+  
+  if (subscribed == true && mounted) {
+    // Notify AIFeatureGuard first
+    if (widget.onSubscribe != null) {
+      widget.onSubscribe!();
+    }
+    // Then bubble back up past the paywall layer
+    Navigator.pop(context, true);
+  }
+}
+
+Future<void> _handleTrialStart() async {
+  await AIAccessChecker.startTrial();
+  if (mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('🎉 Trial started!'), backgroundColor: Color(0xFF4CAF50)),
+    );
+    
+    if (widget.onSubscribe != null) {
+      widget.onSubscribe!();
+    }
+    
+    Navigator.pop(context, true);
+  }
+}
+
 
   @override
   Widget build(BuildContext context) {
@@ -110,7 +143,7 @@ class _AIPaywallScreenState extends State<AIPaywallScreen> {
                       
                       const SizedBox(height: 24),
                       
-                      // ✅ Show trial button only if trial hasn't been started
+                      // Trial button
                       if (showTrialButton) ...[
                         Container(
                           padding: const EdgeInsets.all(16),
@@ -132,15 +165,7 @@ class _AIPaywallScreenState extends State<AIPaywallScreen> {
                         SizedBox(
                           width: double.infinity, height: 56,
                           child: ElevatedButton.icon(
-                            onPressed: () async {
-                              await AIAccessChecker.startTrial();
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('🎉 Trial started!'), backgroundColor: Color(0xFF4CAF50)),
-                                );
-                                Navigator.pop(context, true);
-                              }
-                            },
+                            onPressed: _handleTrialStart,  // ✅ Use helper
                             icon: const Icon(Icons.rocket_launch),
                             label: const Text('Start Free Trial', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1A237E), foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
@@ -148,7 +173,7 @@ class _AIPaywallScreenState extends State<AIPaywallScreen> {
                         ),
                       ],
                       
-                      // ✅ Show subscribe button only if trial expired
+                      // Subscribe button
                       if (showSubscribeButton) ...[
                         Container(
                           padding: const EdgeInsets.all(16),
@@ -170,12 +195,7 @@ class _AIPaywallScreenState extends State<AIPaywallScreen> {
                         SizedBox(
                           width: double.infinity, height: 56,
                           child: ElevatedButton.icon(
-                            onPressed: () {
-                              Navigator.push(context, MaterialPageRoute(builder: (_) => const AISubscriptionScreen()))
-                                  .then((subscribed) {
-                                if (subscribed == true && mounted) Navigator.pop(context, true);
-                              });
-                            },
+                            onPressed: _handleSubscription,  // ✅ Use helper
                             icon: const Icon(Icons.diamond),
                             label: const Text('Subscribe Now - \$5', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFFFD700), foregroundColor: const Color(0xFF1A237E), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
@@ -184,19 +204,12 @@ class _AIPaywallScreenState extends State<AIPaywallScreen> {
                       ],
 
                       const SizedBox(height: 12),
-TextButton(
-  onPressed: () {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const AISubscriptionScreen()),
-    ).then((subscribed) {
-      if (subscribed == true && mounted) {
-        Navigator.pop(context, true);
-      }
-    });
-  },
-  child: const Text('View Plans', style: TextStyle(fontSize: 14, color: Color(0xFF1A237E))),
-),
+                      
+                      // View Plans button
+                      TextButton(
+                        onPressed: _handleSubscription,  // ✅ Use helper
+                        child: const Text('View Plans', style: TextStyle(fontSize: 14, color: Color(0xFF1A237E))),
+                      ),
                       
                       const SizedBox(height: 20),
                     ],

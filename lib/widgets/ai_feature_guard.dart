@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import '../core/ai_access_checker.dart';
 import '../features/ai/ai_paywall_screen.dart';
+import '../features/premium/ai_subscription_screen.dart';
 
-class AIFeatureGuard extends StatelessWidget {
+class AIFeatureGuard extends StatefulWidget {
   final Widget child;
   final String featureName;
 
@@ -13,45 +14,66 @@ class AIFeatureGuard extends StatelessWidget {
   });
 
   @override
+  State<AIFeatureGuard> createState() => _AIFeatureGuardState();
+}
+
+class _AIFeatureGuardState extends State<AIFeatureGuard> {
+  bool _hasAccess = false;
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkAccess();
+  }
+
+  Future<void> _checkAccess() async {
+    final hasAccess = await AIAccessChecker.canAccessAIFeatures();
+    if (mounted) {
+      setState(() {
+        _hasAccess = hasAccess;
+        _isLoading = false;
+      });
+    }
+  }
+
+  // inside _AIFeatureGuardState
+
+Future<void> _handleSubscription() async {
+  final subscribed = await Navigator.push<bool>(
+    context,
+    MaterialPageRoute(
+      builder: (_) => const AISubscriptionScreen(),
+    ),
+  );
+  
+  if (subscribed == true && mounted) {
+    // 1. Force await the access checker to finish network validation
+    await _checkAccess();
+    
+    // 2. State has now changed inside _checkAccess via setState(), 
+    // widget.build() will automatically swap AIPaywallScreen with widget.child!
+  }
+}
+
+
+  @override
   Widget build(BuildContext context) {
-    return FutureBuilder<bool>(
-      future: AIAccessChecker.canAccessAIFeatures(),
-      builder: (context, snapshot) {
-        // Loading
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator(color: Color(0xFF1A237E))),
-          );
-        }
+    if (_isLoading) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator(color: Color(0xFF1A237E))),
+      );
+    }
 
-        // Error
-        if (snapshot.hasError) {
-          return Scaffold(
-            body: Center(
-              child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                const Icon(Icons.error_outline, size: 48, color: Colors.red),
-                const SizedBox(height: 16),
-                const Text('Could not verify access', style: TextStyle(fontSize: 16)),
-                const SizedBox(height: 8),
-                ElevatedButton(onPressed: () => Navigator.pop(context), child: const Text('Go Back')),
-              ]),
-            ),
-          );
-        }
+    // Access granted - show the feature directly
+    if (_hasAccess) {
+      return widget.child;
+    }
 
-        // Access granted
-        if (snapshot.data == true) {
-          return child;
-        }
-
-        // Access denied - show paywall
-        return AIPaywallScreen(
-          featureName: featureName,
-          onSubscribe: () {
-            // Navigate to payment/subscription screen
-          },
-        );
-      },
+    // Access denied - show paywall
+    return AIPaywallScreen(
+      featureName: widget.featureName,
+      onSubscribe: _handleSubscription,
     );
   }
 }
