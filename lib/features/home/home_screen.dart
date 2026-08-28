@@ -26,6 +26,7 @@ import '../../widgets/ai_feature_guard.dart';
 import '../study_planner/availability_setup_screen.dart';
 import '../study_planner/study_plan_screen.dart';
 import '../referrals/referral_screen.dart';
+import '../ai/expert_tutor_selection_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -274,7 +275,7 @@ String _getFormattedDate() {
 
   int _getCoreFeaturesCount() => 7; // My Subjects, MCQ Exams, Exam Papers, Progress, Resources, Live Lessons
   int _getPremiumFeaturesCount() {
-  return 5; // AI Tutor, Generate Exams, Premium Content
+  return 7; // AI Tutor, Generate Exams, Premium Content
 }
 
   @override
@@ -1014,7 +1015,7 @@ const SizedBox(height: 30),
                                 // AI Tutor - Moved to Premium
                                 _AnimatedQuickActionCard(
                                   icon: Icons.auto_awesome_rounded,
-                                  label: 'AI Tutor',
+                                  label: 'General Tutor',
                                   color: const Color(0xFFE91E63),
                                   index: 0,
                                   width: cardWidth,
@@ -1022,12 +1023,29 @@ const SizedBox(height: 30),
                                   onTap: () {
                                     Navigator.push(context, MaterialPageRoute(
   builder: (_) => AIFeatureGuard(
-    featureName: 'AI Tutor',
+    featureName: 'General Tutor',
     child: const AITutorScreen(),
   ),
 ));
                                   },
                                 ),
+
+                                _AnimatedQuickActionCard(
+  icon: Icons.school_rounded,
+  label: 'Expert Tutor',
+  color: const Color(0xFF6A1B9A), // Deep Purple
+  index: 6,
+  width: cardWidth,
+  isPremium: true,
+  onTap: () {
+    Navigator.push(context, MaterialPageRoute(
+      builder: (_) => AIFeatureGuard(
+        featureName: 'Expert Tutor',
+        child: const ExpertTutorSelectionScreen(),
+      ),
+    ));
+  },
+),
                                 // Generate Exams - NEW Premium Feature
                                 _AnimatedQuickActionCard(
                                   icon: Icons.generating_tokens_rounded,
