@@ -432,7 +432,7 @@ RESPOND AS PLAIN TEXT`;
         model: modelName,
         contents: contents,
         config: { 
-          temperature: 0.7, 
+          temperature: 0.4, 
           maxOutputTokens: 8000 
         },
       });

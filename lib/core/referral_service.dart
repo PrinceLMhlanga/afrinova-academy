@@ -8,19 +8,24 @@ class ReferralService {
   final SupabaseClient _client = Supabase.instance.client;
 
   // Generate referral code for user
-  Future<String> generateReferralCode(String userId, {String? campaignName}) async {
-    try {
-      final response = await _client.rpc('generate_referral_code', params: {
-        'p_owner_id': userId,
-        'p_campaign_name': campaignName,
-      });
-      
-      return response as String;
-    } catch (e) {
-      print('Error generating referral code: $e');
-      throw e;
-    }
+Future<String> generateReferralCode(
+  String userId, {
+  String? campaignName,
+  String? referrerRole,
+}) async {
+  try {
+    final response = await _client.rpc('generate_referral_code', params: {
+      'p_owner_id': userId,
+      'p_campaign_name': campaignName,
+      'p_referrer_role': referrerRole ?? 'student', // ✅ Default to student
+    });
+    
+    return response as String;
+  } catch (e) {
+    print('Error generating referral code: $e');
+    throw e;
   }
+}
 
   // Get user's referral codes
   Future<List<Map<String, dynamic>>> getUserReferralCodes(String userId) async {

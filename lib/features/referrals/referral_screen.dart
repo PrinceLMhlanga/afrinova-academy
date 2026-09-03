@@ -20,6 +20,8 @@ class _ReferralScreenState extends State<ReferralScreen> {
   bool _isLoading = true;
   bool _isGenerating = false;
 
+  String _userRole = 'student';
+
   @override
   void initState() {
     super.initState();
@@ -30,6 +32,9 @@ class _ReferralScreenState extends State<ReferralScreen> {
     try {
       final userId = _authService.currentUserId;
       if (userId == null) return;
+
+      final profile = await _authService.getProfile();
+    _userRole = profile?['role'] as String? ?? 'student';
 
       // Get existing codes
       final codes = await _referralService.getUserReferralCodes(userId);
@@ -60,7 +65,10 @@ class _ReferralScreenState extends State<ReferralScreen> {
       final userId = _authService.currentUserId;
       if (userId == null) return;
 
-      final code = await _referralService.generateReferralCode(userId);
+      final code = await _referralService.generateReferralCode(
+      userId,
+      referrerRole: _userRole, // ✅ Pass role
+    );
       
       setState(() {
         _referralCode = code;
@@ -112,8 +120,32 @@ class _ReferralScreenState extends State<ReferralScreen> {
     await _referralService.shareReferralLink(_referralCode!, userName);
   }
 
+  // In ReferralScreen, update the header message based on role:
+String _getHeaderMessage() {
+  switch (_userRole) {
+    case 'teacher':
+      return 'Refer Students, Earn \$2 Each!';
+    case 'admin':
+      return 'Refer Students, Earn \$2 Each!';
+    default:
+      return 'Refer Friends, Earn Rewards!';
+  }
+}
+
+String _getSubtitleMessage() {
+  switch (_userRole) {
+    case 'teacher':
+      return 'Get \$2 for every student who subscribes to AI Premium using your link!';
+    case 'admin':
+      return 'Get \$2 for every student who subscribes to AI Premium using your link!';
+    default:
+      return 'Get 5 friends to subscribe and get FREE AI access for a month!';
+  }
+}
+
 @override
 Widget build(BuildContext context) {
+  final isTeacher = _userRole == 'teacher' || _userRole == 'admin';
   // ✅ Check if stats is null first
   final successfulReferrals = int.tryParse(_stats?['successful_referrals']?.toString() ?? '0') ?? 0;
   final rewardsEarned = int.tryParse(_stats?['rewards_earned']?.toString() ?? '0') ?? 0;
@@ -136,35 +168,39 @@ Widget build(BuildContext context) {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // Header card
-                  Container(
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFF1A237E), Color(0xFF283593)],
-                      ),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: const Column(
-                      children: [
-                        Icon(Icons.card_giftcard, color: Colors.white, size: 48),
-                        SizedBox(height: 12),
-                        Text(
-                          'Refer Friends, Earn Rewards!',
-                          style: TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                          ),
-                        ),
-                        SizedBox(height: 8),
-                        Text(
-                          'Get 5 friends to subscribe and get FREE AI features access for a month!',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: Colors.white70, fontSize: 14),
-                        ),
-                      ],
-                    ),
-                  ),
+                 Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF1A237E), Color(0xFF283593)],
+        ),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        children: [
+          Icon(
+            isTeacher ? Icons.payments : Icons.card_giftcard,
+            color: Colors.white,
+            size: 48,
+          ),
+          const SizedBox(height: 12),
+          Text(
+            _getHeaderMessage(),
+            style: const TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _getSubtitleMessage(),
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.white70, fontSize: 14),
+          ),
+        ],
+      ),
+    ),
                   const SizedBox(height: 24),
 
                   // Referral link section
@@ -283,24 +319,33 @@ Widget build(BuildContext context) {
                     const SizedBox(height: 12),
                     
                     // Row 3: Rewards Earned + Claimed
-                    Row(
+                   Row(
                       children: [
-                        _buildStatCard(
-                          'Rewards Earned',
-                          _stats!['rewards_earned']?.toString() ?? '0',
-                          Icons.card_giftcard,
-                          Colors.purple,
-                        ),
-                        const SizedBox(width: 12),
-                        _buildStatCard(
-                          'Rewards Claimed',
-                          _stats!['rewards_claimed']?.toString() ?? '0',
-                          Icons.redeem,
-                          Colors.pink,
-                        ),
+                        if (isTeacher) ...[
+                          _buildStatCard(
+                            'Total Earned',
+                            '\$${(rewardsEarned * 2).toStringAsFixed(2)}',
+                            Icons.payments,
+                            Colors.green,
+                          ),
+                        ] else ...[
+                          _buildStatCard(
+                            'Rewards Earned',
+                            _stats!['rewards_earned']?.toString() ?? '0',
+                            Icons.card_giftcard,
+                            Colors.purple,
+                          ),
+                          const SizedBox(width: 12),
+                          _buildStatCard(
+                            'Days of Free AI',
+                            (rewardsEarned * 30).toString(),
+                            Icons.calendar_month_rounded,
+                            Colors.green,
+                          ),
+                        ],
                       ],
                     ),
-                    
+                    if (!isTeacher) ...[
                     const SizedBox(height: 24),
                     
                     // Progress to next reward
@@ -337,6 +382,7 @@ Widget build(BuildContext context) {
                         ],
                       ),
                     ),
+                    ]
                   ],
                 ],
               ),

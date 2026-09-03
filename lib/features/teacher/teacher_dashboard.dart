@@ -22,6 +22,7 @@ import 'payout_account_screen.dart';
 import 'my_classes_screen.dart';
 import 'teacher_pricing_screen.dart';
 import '../tutoring/teacher_students_screen.dart';
+import '../referrals/referral_screen.dart';
 
 // ===== ADMIN ACTION DATA CLASS =====
 class AdminActionData {
@@ -620,6 +621,17 @@ _buildCategoryCard(
                           );
                         },
                       ),
+                      _FeatureItem(
+  icon: Icons.card_giftcard_rounded,
+  label: 'Refer & Earn',
+  color: const Color(0xFFE91E63),
+  onTap: () {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const ReferralScreen()),
+    );
+  },
+),
                     ],
                   ),
 
