@@ -68,7 +68,7 @@ serve(async (req) => {
       if (completedPayment) {
         paymentId = completedPayment.id;
       } else {
-        // Fallback: create if doesn't exist (shouldn't happen normally)
+        // Fallback: create if doesn't exist
         const { data: newPayment, error: paymentError } = await supabase
           .from("payments")
           .insert({
@@ -77,6 +77,7 @@ serve(async (req) => {
             amount: Number(amount),
             gateway_reference: gatewayReference,
             status: "completed",
+            payment_type: 'enrollment',
           })
           .select("id")
           .single();
@@ -89,40 +90,38 @@ serve(async (req) => {
     }
     
 
-    // ✅ Get default commission from platform_settings FIRST
-const { data: defaultCommission } = await supabase
-  .from("platform_settings")
-  .select("value")
-  .eq("key", "default_commission")  // Fixed typo: was "default_commision"
-  .maybeSingle();
+    // ✅ Get default commission from platform_settings
+    const { data: defaultCommission } = await supabase
+      .from("platform_settings")
+      .select("value")
+      .eq("key", "default_commission")
+      .maybeSingle();
 
-// Parse default: "20:80" → platform=20, teacher=80
-let platformPct = 20;  // Fallback if not set
-let teacherPct = 80;   // Fallback if not set
+    let platformPct = 20;
+    let teacherPct = 80;
 
-if (defaultCommission?.value) {
-  const parts = String(defaultCommission.value).split(":");
-  platformPct = parseInt(parts[0], 10) || 20;
-  teacherPct = parseInt(parts[1], 10) || 80;
-}
+    if (defaultCommission?.value) {
+      const parts = String(defaultCommission.value).split(":");
+      platformPct = parseInt(parts[0], 10) || 20;
+      teacherPct = parseInt(parts[1], 10) || 80;
+    }
 
-// ✅ Then check for teacher-specific override
-const { data: teacherCommission } = await supabase
-  .from("commission_rules")
-  .select("platform_percentage, teacher_percentage")
-  .eq("teacher_id", teacherId)
-  .eq("is_active", true)
-  .order("effective_from", { ascending: false })
-  .maybeSingle();
+    // ✅ Check for teacher-specific override
+    const { data: teacherCommission } = await supabase
+      .from("commission_rules")
+      .select("platform_percentage, teacher_percentage")
+      .eq("teacher_id", teacherId)
+      .eq("is_active", true)
+      .order("effective_from", { ascending: false })
+      .maybeSingle();
 
-// Teacher-specific overrides the default
-if (teacherCommission) {
-  platformPct = teacherCommission.platform_percentage;
-  teacherPct = teacherCommission.teacher_percentage;
-}
+    if (teacherCommission) {
+      platformPct = teacherCommission.platform_percentage;
+      teacherPct = teacherCommission.teacher_percentage;
+    }
 
-const teacherAmount = Number(amount) * (Number(teacherPct) / 100);
-const platformAmount = Number(amount) * (Number(platformPct) / 100);
+    const teacherAmount = Number(amount) * (Number(teacherPct) / 100);
+    const platformAmount = Number(amount) * (Number(platformPct) / 100);
 
     // Check for existing financial transactions (prevent duplicates)
     const { data: existingTxns } = await supabase
@@ -146,24 +145,24 @@ const platformAmount = Number(amount) * (Number(platformPct) / 100);
           owner_id: studentId,
           amount: platformAmount,
           type: "credit",
-          description: "Platform fee",
+          description: "Platform fee from enrollment",
         },
       ]);
     }
 
-    // Update teacher wallet
+    // ✅ Update teacher wallet (simplified - no pending_balance)
     const { data: currentWallet } = await supabase
       .from("teacher_wallets")
-      .select("pending_balance, lifetime_earnings")
+      .select("available_balance, lifetime_earnings")
       .eq("teacher_id", teacherId)
       .maybeSingle();
 
-    const currentPending = Number(currentWallet?.pending_balance ?? 0);
+    const currentAvailable = Number(currentWallet?.available_balance ?? 0);
     const currentLifetime = Number(currentWallet?.lifetime_earnings ?? 0);
 
     await supabase.from("teacher_wallets").upsert({
       teacher_id: teacherId,
-      pending_balance: currentPending + teacherAmount,
+      available_balance: currentAvailable + teacherAmount,
       lifetime_earnings: currentLifetime + teacherAmount,
       last_updated: new Date().toISOString(),
     }, { onConflict: "teacher_id" });

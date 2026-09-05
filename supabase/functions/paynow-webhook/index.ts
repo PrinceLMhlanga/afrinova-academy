@@ -147,21 +147,22 @@ serve(async (req) => {
     }
 
     // Teacher wallet
-    const { data: wallet } = await supabase
-      .from("teacher_wallets")
-      .select("pending_balance, lifetime_earnings")
-      .eq("teacher_id", payment.teacher_id)
-      .maybeSingle();
+    
+const { data: wallet } = await supabase
+  .from("teacher_wallets")
+  .select("available_balance, lifetime_earnings")
+  .eq("teacher_id", payment.teacher_id)
+  .maybeSingle();
 
-    const currentPending = wallet?.pending_balance || 0;
-    const currentLifetime = wallet?.lifetime_earnings || 0;
+const currentAvailable = wallet?.available_balance || 0;
+const currentLifetime = wallet?.lifetime_earnings || 0;
 
-    await supabase.from("teacher_wallets").upsert({
-      teacher_id: payment.teacher_id,
-      pending_balance: currentPending + teacherAmount,
-      lifetime_earnings: currentLifetime + teacherAmount,
-      last_updated: new Date().toISOString(),
-    }, { onConflict: "teacher_id" });
+await supabase.from("teacher_wallets").upsert({
+  teacher_id: payment.teacher_id,
+  available_balance: currentAvailable + teacherAmount,
+  lifetime_earnings: currentLifetime + teacherAmount,
+  last_updated: new Date().toISOString(),
+}, { onConflict: "teacher_id" });
 
     // Update student profile
     await supabase.from("profiles").update({

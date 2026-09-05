@@ -119,7 +119,7 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
 
       final response = await _payNowService.initiateMobilePayment(
         reference: _reference!,
-        amount: 5,
+        amount: 5.0,
         mobileNumber: formattedPhone,
         email: email,
         carrier: 'ecocash',
@@ -377,39 +377,120 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
                 const SizedBox(height: 20),
                 
                 if (!isActive) ...[
-                  TextField(
-                    controller: _phoneController,
-                    keyboardType: TextInputType.phone,
-                    decoration: InputDecoration(
-                      labelText: 'EcoCash Number',
-                      hintText: '077XXXXXXX',
-                      prefixText: '+263 ',
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: _emailController,
-                    keyboardType: TextInputType.emailAddress,
-                    decoration: InputDecoration(
-                      labelText: 'Email (optional)',
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  SizedBox(
-                    width: double.infinity, height: 56,
-                    child: ElevatedButton.icon(
-                      onPressed: _isPaying ? null : _subscribe,
-                      icon: const Icon(Icons.lock_open),
-                      label: const Text('Pay \$5 with EcoCash', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFFFD700),
-                        foregroundColor: const Color(0xFF1A237E),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                      ),
-                    ),
-                  ),
+                  // Phone field
+TextField(
+  controller: _phoneController,
+  keyboardType: TextInputType.phone,
+  decoration: InputDecoration(
+    labelText: 'EcoCash Number',
+    hintText: '077XXXXXXX',
+    prefixText: '+263 ',
+    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+  ),
+),
+const SizedBox(height: 10),
+
+// Email field
+TextField(
+  controller: _emailController,
+  keyboardType: TextInputType.emailAddress,
+  decoration: InputDecoration(
+    labelText: 'Email (optional)',
+    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+  ),
+),
+const SizedBox(height: 16),
+
+// ✅ PayNow Fee Breakdown
+Container(
+  padding: const EdgeInsets.all(14),
+  decoration: BoxDecoration(
+    color: Colors.grey.shade50,
+    borderRadius: BorderRadius.circular(12),
+    border: Border.all(color: Colors.grey.shade200),
+  ),
+  child: Column(
+    children: [
+      // Subscription amount
+      Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          const Text('Subscription', style: TextStyle(fontSize: 13, color: Colors.grey)),
+          const Text('\$5.00', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+        ],
+      ),
+      const SizedBox(height: 6),
+      
+      // PayNow fee
+      Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          const Text('PayNow fee (2.5%)', style: TextStyle(fontSize: 13, color: Colors.grey)),
+          Text(
+            '\$${(5.00 * 0.025).toStringAsFixed(2)}',
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+          ),
+        ],
+      ),
+      
+      const Divider(height: 16),
+      
+      // Total
+      Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          const Text('You will pay', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+          Text(
+            '\$${(5.00 * 1.025).toStringAsFixed(2)}',
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF1A237E)),
+          ),
+        ],
+      ),
+    ],
+  ),
+),
+const SizedBox(height: 8),
+
+// Info note
+Container(
+  padding: const EdgeInsets.all(10),
+  decoration: BoxDecoration(
+    color: Colors.orange.shade50,
+    borderRadius: BorderRadius.circular(8),
+    border: Border.all(color: Colors.orange.shade200),
+  ),
+  child: const Row(
+    children: [
+      Icon(Icons.info_outline, color: Colors.orange, size: 16),
+      SizedBox(width: 8),
+      Expanded(
+        child: Text(
+          'A 2.5% PayNow processing fee is added at checkout. The amount shown on your phone will include this fee.',
+          style: TextStyle(fontSize: 11, color: Colors.orange),
+        ),
+      ),
+    ],
+  ),
+),
+const SizedBox(height: 20),
+
+// Pay button
+SizedBox(
+  width: double.infinity, height: 56,
+  child: ElevatedButton.icon(
+    onPressed: _isPaying ? null : _subscribe,
+    icon: const Icon(Icons.lock_open),
+    label: Text(
+      'Pay \$${(5.00 * 1.025).toStringAsFixed(2)} with EcoCash',
+      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+    ),
+    style: ElevatedButton.styleFrom(
+      backgroundColor: const Color(0xFFFFD700),
+      foregroundColor: const Color(0xFF1A237E),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+    ),
+  ),
+),
                 ],
               ],
             ),
@@ -431,29 +512,32 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
   }
 
   Widget _buildWaitingState() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(40),
-        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Container(
-            width: 80, height: 80,
-            decoration: BoxDecoration(color: const Color(0xFF1A237E).withOpacity(0.08), shape: BoxShape.circle),
-            child: const Icon(Icons.phone_android, size: 40, color: Color(0xFF1A237E)),
-          ),
-          const SizedBox(height: 24),
-          const Text('Check Your Phone! 📱', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1A237E))),
-          const SizedBox(height: 12),
-          const Text('A payment prompt has been sent to your EcoCash number.', textAlign: TextAlign.center, style: TextStyle(fontSize: 15, color: Colors.grey)),
-          const SizedBox(height: 32),
-          const CircularProgressIndicator(color: Color(0xFF1A237E)),
-          const SizedBox(height: 16),
-          const Text('Waiting for payment confirmation...', style: TextStyle(color: Colors.grey)),
-          const SizedBox(height: 8),
-          const Text('Amount: \$5.00', style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF1A237E))),
-        ]),
-      ),
-    );
-  }
+  return Center(
+    child: Padding(
+      padding: const EdgeInsets.all(40),
+      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        Container(
+          width: 80, height: 80,
+          decoration: BoxDecoration(color: const Color(0xFF1A237E).withOpacity(0.08), shape: BoxShape.circle),
+          child: const Icon(Icons.phone_android, size: 40, color: Color(0xFF1A237E)),
+        ),
+        const SizedBox(height: 24),
+        const Text('Check Your Phone! 📱', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1A237E))),
+        const SizedBox(height: 12),
+        const Text('A payment prompt has been sent to your EcoCash number.', textAlign: TextAlign.center, style: TextStyle(fontSize: 15, color: Colors.grey)),
+        const SizedBox(height: 32),
+        const CircularProgressIndicator(color: Color(0xFF1A237E)),
+        const SizedBox(height: 16),
+        const Text('Waiting for payment confirmation...', style: TextStyle(color: Colors.grey)),
+        const SizedBox(height: 8),
+        Text(
+          'Amount: \$${(5.00 * 1.025).toStringAsFixed(2)}',
+          style: const TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF1A237E)),
+        ),
+      ]),
+    ),
+  );
+}
 
   Widget _buildCompletedState() {
     return Center(

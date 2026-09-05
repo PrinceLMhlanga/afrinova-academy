@@ -87,55 +87,89 @@ class _QuestionBankEntryScreenState extends State<QuestionBankEntryScreen> {
     }
   }
   void _parseQuestions() {
-    String text = _textController.text.trim();
-    setState(() => _parseError = '');
+  String text = _textController.text.trim();
+  setState(() => _parseError = '');
 
-    if (text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Paste questions first'), backgroundColor: Colors.red),
-      );
-      return;
-    }
-
-    // Remove code block markers if present
-    text = _removeCodeBlockMarkers(text);
-
-    final parsed = QuestionParser.parseOutput(text);
-
-    if (parsed.isEmpty) {
-      setState(() => _parseError = 'No questions found. Check format: Q: ...\nA: ...\nB: ...\nC: ...\nD: ...\nAnswer: X');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: const Text('No questions parsed! Check format.'), backgroundColor: Colors.orange),
-
-      );
-      return;
-    }
-
-    // Check for questions without answers
-    final missingAnswers = parsed.where((q) => q.correctAnswer.isEmpty).toList();
-    if (missingAnswers.isNotEmpty) {
-      setState(() => _parseError = '${missingAnswers.length} question(s) missing "Answer:" line');
-    }
-
-    setState(() {
-      _parsedQuestions = parsed.map((q) => _ParsedQuestion(
-        question: q.question,
-        optionA: q.optionA,
-        optionB: q.optionB,
-        optionC: q.optionC,
-        optionD: q.optionD,
-        correctAnswer: q.correctAnswer,
-        difficulty: 'medium', // Default, will be overwritten per question
-      )).toList();
-    });
-
+  if (text.isEmpty) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('${_parsedQuestions.length} questions parsed! ${missingAnswers.isNotEmpty ? "⚠️ ${missingAnswers.length} missing answers" : "✅"}'),
-        backgroundColor: missingAnswers.isNotEmpty ? Colors.orange : const Color(0xFF4CAF50),
-      ),
+      const SnackBar(content: Text('Paste questions first'), backgroundColor: Colors.red),
     );
+    return;
   }
+
+  text = _removeCodeBlockMarkers(text);
+  final parsed = QuestionParser.parseOutput(text);
+
+  if (parsed.isEmpty) {
+    setState(() => _parseError = 'No questions found. Check format: Q: ...\nA: ...\nB: ...\nC: ...\nD: ...\nAnswer: X');
+    return;
+  }
+
+  // Build topic map for matching
+  final topicMap = <String, String>{};
+  for (final topic in _topics) {
+    final name = (topic['name'] as String? ?? '').toLowerCase();
+    topicMap[name] = topic['id'] as String;
+  }
+
+  final missingTopics = <String>[];
+
+  final parsedQuestions = parsed.map((q) {
+    String? topicId;
+    
+    // Match topic from text
+    if (q.topicName != null && q.topicName!.isNotEmpty) {
+      final topicNameLower = q.topicName!.toLowerCase();
+      
+      // Try exact match
+      if (topicMap.containsKey(topicNameLower)) {
+        topicId = topicMap[topicNameLower];
+      } else {
+        // Try partial match
+        for (final entry in topicMap.entries) {
+          if (entry.key.contains(topicNameLower) || topicNameLower.contains(entry.key)) {
+            topicId = entry.value;
+            break;
+          }
+        }
+      }
+      
+      // If still no match
+      if (topicId == null) {
+        missingTopics.add(q.topicName!);
+      }
+    }
+
+    return _ParsedQuestion(
+      question: q.question,
+      optionA: q.optionA,
+      optionB: q.optionB,
+      optionC: q.optionC,
+      optionD: q.optionD,
+      correctAnswer: q.correctAnswer,
+      difficulty: q.difficulty,
+      topicId: topicId, // ✅ Matched from text
+    );
+  }).toList();
+
+  // Show error for unmatched topics
+  if (missingTopics.isNotEmpty) {
+    setState(() {
+      _parseError = 'Topics not found: ${missingTopics.join(', ')}';
+    });
+  }
+
+  setState(() {
+    _parsedQuestions = parsedQuestions;
+  });
+
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text('${_parsedQuestions.length} questions parsed!'),
+      backgroundColor: missingTopics.isEmpty ? const Color(0xFF4CAF50) : Colors.orange,
+    ),
+  );
+}
 
   String _removeCodeBlockMarkers(String text) {
     // Remove ``` at start and end
@@ -447,7 +481,7 @@ Row(
                                 expands: true,
                                 textAlignVertical: TextAlignVertical.top,
                                 decoration: const InputDecoration(
-                                  hintText: 'Q: What is force?\nA: Push or pull\nB: Energy\nC: Power\nD: Work\nAnswer: A\n\nQ: Next question...',
+                                  hintText: 'Q: What is force?\nA: Push or pull\nB: Energy\nC: Power\nD: Work\nAnswer: A\nTopic: Mechanics\nDifficulty: easy\n\nQ: Next question...\nTopic: Electricity\nDifficulty: hard',
                                   border: InputBorder.none,
                                   contentPadding: EdgeInsets.all(14),
                                 ),
@@ -831,7 +865,6 @@ class QuestionParser {
       final trimmedBlock = block.trim();
       if (trimmedBlock.isEmpty) continue;
       
-      // Skip if it's just whitespace or doesn't start with Q
       if (!trimmedBlock.startsWith(RegExp(r'^Q:|^Question:', caseSensitive: false))) continue;
       
       final lines = trimmedBlock.split('\n');
@@ -841,12 +874,13 @@ class QuestionParser {
       String optionC = '';
       String optionD = '';
       String correctAnswer = '';
+      String? topicName;      // ✅ NEW: Topic name from text
+      String difficulty = 'medium'; // ✅ NEW: Default difficulty
       
       for (String line in lines) {
         final trimmed = line.trim();
         if (trimmed.isEmpty) continue;
         
-        // Remove any leading bullet points or numbering
         String cleanLine = trimmed.replaceFirst(RegExp(r'^[\d\s]+\.?\s*'), '');
         
         if (cleanLine.startsWith(RegExp(r'^Q:|^Question:', caseSensitive: false))) {
@@ -864,17 +898,24 @@ class QuestionParser {
               .replaceFirst(RegExp(r'^(Answer:|Correct:)\s*', caseSensitive: false), '')
               .trim()
               .toUpperCase()
-              .replaceFirst(RegExp(r'[.].*$'), ''); // Remove trailing period
+              .replaceFirst(RegExp(r'[.].*$'), '');
+        } else if (cleanLine.startsWith(RegExp(r'^(Topic:|Difficulty:)\s*', caseSensitive: false))) {
+          // ✅ NEW: Parse topic and difficulty
+          if (cleanLine.startsWith(RegExp(r'^Topic:', caseSensitive: false))) {
+            topicName = cleanLine.replaceFirst(RegExp(r'^Topic:\s*', caseSensitive: false), '').trim();
+          } else if (cleanLine.startsWith(RegExp(r'^Difficulty:', caseSensitive: false))) {
+            final diff = cleanLine.replaceFirst(RegExp(r'^Difficulty:\s*', caseSensitive: false), '').trim().toLowerCase();
+            if (['easy', 'medium', 'hard'].contains(diff)) {
+              difficulty = diff;
+            }
+          }
         } else if (question.isNotEmpty) {
-          // Append to question if it's a continuation line
           question += ' $trimmed';
         }
       }
       
-      // Clean up question (remove extra spaces)
       question = question.trim().replaceAll(RegExp(r'\s+'), ' ');
       
-      // Validate and add
       if (question.isNotEmpty && optionA.isNotEmpty) {
         entries.add(QuestionBankEntry(
           question: question,
@@ -883,6 +924,8 @@ class QuestionParser {
           optionC: optionC,
           optionD: optionD,
           correctAnswer: correctAnswer,
+          topicName: topicName,       // ✅ NEW
+          difficulty: difficulty,     // ✅ NEW
         ));
       }
     }
@@ -898,6 +941,8 @@ class QuestionBankEntry {
   final String optionC;
   final String optionD;
   final String correctAnswer;
+  final String? topicName;    // ✅ NEW
+  final String difficulty;    // ✅ NEW
   
   QuestionBankEntry({
     required this.question,
@@ -906,5 +951,8 @@ class QuestionBankEntry {
     required this.optionC,
     required this.optionD,
     required this.correctAnswer,
+    this.topicName,
+    this.difficulty = 'medium',
   });
 }
+

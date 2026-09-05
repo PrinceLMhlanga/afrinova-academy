@@ -595,15 +595,15 @@ _buildCategoryCard(
                         onTap: () {
                           Navigator.push(
                             context,
-                            MaterialPageRoute(builder: (_) => const WalletScreen()),
+                            MaterialPageRoute(builder: (_) => const TeacherWalletScreen()),
                           );
                         },
                       ),
                       _FeatureItem(
-      icon: Icons.price_change,           // ✅ New
-      label: 'My Pricing',                // ✅ New
-      color: const Color(0xFFFF9800),     // ✅ New
-      onTap: () {                         // ✅ New
+      icon: Icons.price_change,           
+      label: 'My Pricing',                
+      color: const Color(0xFFFF9800),     
+      onTap: () {                         
         Navigator.push(
           context,
           MaterialPageRoute(builder: (_) => const TeacherPricingScreen()),
