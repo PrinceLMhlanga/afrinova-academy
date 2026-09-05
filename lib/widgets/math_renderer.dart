@@ -109,15 +109,20 @@ class MathRenderer extends StatelessWidget {
     );
   }
 
-  List<TextSegment> _parseText(String text) {
+    List<TextSegment> _parseText(String text) {
     final segments = <TextSegment>[];
     final buffer = StringBuffer();
     int i = 0;
-    bool inMath = false;
-    bool inDisplayMath = false;
 
     while (i < text.length) {
-      // Check for display math $$...$$
+      // 1. New Check: If the dollar sign is escaped with a backslash (\$)
+      if (text[i] == '\\' && i + 1 < text.length && text[i + 1] == '\$') {
+        buffer.write('\$'); // Write a normal literal dollar sign to text
+        i += 2;             // Skip both the '\' and the '$'
+        continue;
+      }
+
+      // 2. Check for display math $$...$$
       if (i + 1 < text.length && text[i] == '\$' && text[i + 1] == '\$') {
         if (buffer.isNotEmpty) {
           segments.add(TextSegment(buffer.toString(), false, false));
@@ -135,14 +140,13 @@ class MathRenderer extends StatelessWidget {
           segments.add(TextSegment(mathContent, true, true));
           i = end + 2;
         } else {
-          // No closing $$ found, treat as normal text
           buffer.write(text.substring(i));
           break;
         }
         continue;
       }
 
-      // Check for inline math $...$
+      // 3. Check for inline math $...$
       if (text[i] == '\$') {
         if (buffer.isNotEmpty) {
           segments.add(TextSegment(buffer.toString(), false, false));
@@ -160,7 +164,6 @@ class MathRenderer extends StatelessWidget {
           segments.add(TextSegment(mathContent, true, false));
           i = end + 1;
         } else {
-          // No closing $ found, treat as normal text
           buffer.write(text.substring(i));
           break;
         }
@@ -177,6 +180,7 @@ class MathRenderer extends StatelessWidget {
 
     return segments;
   }
+
 }
 
 /// A widget that renders a list of content items (text + optional diagrams)
