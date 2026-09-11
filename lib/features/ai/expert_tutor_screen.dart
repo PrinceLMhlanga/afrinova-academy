@@ -215,7 +215,11 @@ Future<void> _generateTeachingContent() async {
   });
 
   try {
-    final stream = _streamTeachingContent(objectivesText);
+    // ✅ isFirstBatch = true
+    final stream = _streamTeachingContent(
+      objectivesText,
+      isFirstBatch: true,  // ✅ FIRST batch - GREET
+    );
     
     await for (final chunk in stream) {
       if (mounted) {
@@ -248,7 +252,7 @@ Future<void> _startNewTeachingBatch() async {
     _sessionPhase = 'teaching';
     _teachingContentReady = false;
   });
-  
+
   // Update session phase in DB
   if (_sessionId != null) {
     await _expertService.updateSessionPhase(
@@ -256,29 +260,19 @@ Future<void> _startNewTeachingBatch() async {
       phase: 'teaching',
     );
   }
-  
+
   // Start timer
   _startTeachingTimer();
-  
-  // Add system message
-  setState(() {
-    _messages.add({
-      'role': 'system',
-      'content': '📚 **Teaching Mode - Next Batch**\n\nRead and understand the next concepts. Click "START SESSION" when ready.',
-      'message_type': 'system',
-      'created_at': DateTime.now().toIso8601String(),
-    });
-  });
-  
-  // Generate teaching content for next 5 objectives
-  await _generateTeachingContentForNextBatch();
+
+  // ✅ NO system message — the AI already handled the transition
+  // Just generate teaching content for next batch
+  await _generateTeachingContentForNextBatch(isFirstBatch: false);
 }
 
 // ✅ Generate teaching for next batch
-Future<void> _generateTeachingContentForNextBatch() async {
+Future<void> _generateTeachingContentForNextBatch({required bool isFirstBatch}) async {
   if (_sessionId == null) return;
   
-  // Find next 5 non-mastered objectives
   final nextObjectives = _objectives
       .where((obj) => obj['is_mastered'] != true)
       .take(5)
@@ -290,7 +284,12 @@ Future<void> _generateTeachingContentForNextBatch() async {
       .map((obj) => '- ${obj['objective_text']}')
       .join('\n');
   
-  // Stream teaching content
+  // ✅ Get mastered objectives for continuity
+  final masteredText = _objectives
+      .where((obj) => obj['is_mastered'] == true)
+      .map((obj) => '- ${obj['objective_text']}')
+      .join('\n');
+  
   final streamingIndex = _messages.length;
   setState(() {
     _messages.add({
@@ -302,7 +301,12 @@ Future<void> _generateTeachingContentForNextBatch() async {
   });
   
   try {
-    final stream = _streamTeachingContent(objectivesText);
+    // ✅ isFirstBatch = false - NO greeting, just continuation
+    final stream = _streamTeachingContent(
+      objectivesText,
+      isFirstBatch: false,  // ✅ SUBSEQUENT batch - NO GREET
+      masteredText: masteredText,  // ✅ Pass mastered for context
+    );
     
     await for (final chunk in stream) {
       if (mounted) {
@@ -374,7 +378,7 @@ Future<void> _triggerTopicComplete() async {
 }
 
 // Stream teaching content
-Stream<String> _streamTeachingContent(String objectivesText) async* {
+Stream<String> _streamTeachingContent(String objectivesText, {bool isFirstBatch = false, String? masteredText}) async* {
   final client = http.Client();
 
   try {
@@ -396,6 +400,8 @@ Stream<String> _streamTeachingContent(String objectivesText) async* {
       'topicName': widget.topicName,
       'subjectName': widget.subjectName,
       'levelName': widget.levelName,
+      'isFirstBatch': isFirstBatch,  
+      'masteredText': masteredText,  
     });
 
     request.sink.add(utf8.encode(payload));
@@ -621,60 +627,107 @@ Let's start! I'll explain the concept, then we'll practice together.
       }
 
       // Get the full AI response
-      final finalText = _streamingText;
-      String cleanText = finalText;
+      // In _sendMessage after streaming:
 
-      // ✅ Check if the entire TOPIC is complete
-      if (finalText.contains('[TOPIC_COMPLETE]')) {
-        cleanText = cleanText.replaceAll('[TOPIC_COMPLETE]', '').trim();
-        _messages[streamingIndex]['content'] = cleanText;
-        
-        // Load 10 MCQs from question bank
-        await _loadTopicMCQs();
-      }
-      
-      // ✅ Check if current OBJECTIVE is mastered
-      else if (finalText.contains('[OBJECTIVE_MASTERED]')) {
-        cleanText = cleanText.replaceAll('[OBJECTIVE_MASTERED]', '').trim();
-        _messages[streamingIndex]['content'] = cleanText;
-        
-        // Save mastery to database
-        if (_currentObjective != null && _studentId.isNotEmpty) {
-          await _expertService.markObjectiveMastered(
-            studentId: _studentId,
-            objectiveId: _currentObjective!['id'] as String,
-          );
-        }
-        
-        // Move to next objective
-        _moveToNextObjective();
-      }
-      // ✅ Normal response (question, feedback, hint, etc.)
-      else {
-        // Save progress (correct/incorrect)
-        final isCorrect = _isAnswerCorrect(finalText);
-        final currentDifficulty = _getCurrentDifficulty();
-        
-        if (_currentObjective != null && _studentId.isNotEmpty) {
-          await _expertService.updateProgress(
-            studentId: _studentId,
-            objectiveId: _currentObjective!['id'] as String,
-            difficulty: currentDifficulty,
-            isCorrect: isCorrect,
-          );
-        }
-      }
+final finalText = _streamingText;
+String cleanText = finalText;
 
-      // Save AI response to database
-      if (_sessionId != null && cleanText.isNotEmpty) {
-        await _expertService.saveMessage(
-          sessionId: _sessionId!,
-          role: 'expert',
-          content: cleanText,
-          objectiveId: _currentObjective?['id'] as String?,
-        );
-      }
+// TOPIC COMPLETE
+if (finalText.contains('[TOPIC_COMPLETE]')) {
+  cleanText = cleanText
+      .replaceAll('[TOPIC_COMPLETE]', '')
+      .replaceAll('[OBJECTIVE_MASTERED]', '')
+      .replaceAll('[BATCH_COMPLETE]', '')
+      .trim();
+  _messages[streamingIndex]['content'] = cleanText;
 
+  if (_currentObjective != null && _studentId.isNotEmpty) {
+    await _expertService.markObjectiveMastered(
+      studentId: _studentId,
+      objectiveId: _currentObjective!['id'] as String,
+    );
+  }
+
+  await _loadTopicMCQs();
+}
+else if (finalText.contains('[BATCH_COMPLETE]')) {
+  cleanText = cleanText
+      .replaceAll('[BATCH_COMPLETE]', '')
+      .replaceAll('[OBJECTIVE_MASTERED]', '')
+      .trim();
+  _messages[streamingIndex]['content'] = cleanText;
+
+  // Mark current objective as mastered in DB
+  if (_currentObjective != null && _studentId.isNotEmpty) {
+    await _expertService.markObjectiveMastered(
+      studentId: _studentId,
+      objectiveId: _currentObjective!['id'] as String,
+    );
+  }
+
+  // Mark in local state
+  final currentIndex = _objectives
+      .indexWhere((o) => o['id'] == _currentObjective?['id']);
+  if (currentIndex != -1) {
+    _objectives[currentIndex]['is_mastered'] = true;
+  }
+
+  // ✅ CRITICAL FIX: Advance _currentObjective to the next non-mastered one
+  // before switching to teaching mode
+  Map<String, dynamic>? nextObjective;
+  for (int i = currentIndex + 1; i < _objectives.length; i++) {
+    if (_objectives[i]['is_mastered'] != true) {
+      nextObjective = _objectives[i];
+      break;
+    }
+  }
+  
+  if (nextObjective != null) {
+    _currentObjective = nextObjective;
+    debugPrint('✅ Advanced current objective to: ${nextObjective['objective_text']}');
+  }
+
+  // ✅ Switch to teaching mode for next batch
+  await _startNewTeachingBatch();
+}
+// OBJECTIVE MASTERED - Move to next objective
+else if (finalText.contains('[OBJECTIVE_MASTERED]')) {
+  cleanText = cleanText.replaceAll('[OBJECTIVE_MASTERED]', '').trim();
+  _messages[streamingIndex]['content'] = cleanText;
+
+  if (_currentObjective != null && _studentId.isNotEmpty) {
+    await _expertService.markObjectiveMastered(
+      studentId: _studentId,
+      objectiveId: _currentObjective!['id'] as String,
+    );
+  }
+
+  _moveToNextObjective();
+}
+// Normal response
+else {
+  final isCorrect = _isAnswerCorrect(finalText);
+  final currentDifficulty = _getCurrentDifficulty();
+
+  if (_currentObjective != null && _studentId.isNotEmpty) {
+    await _expertService.updateProgress(
+      studentId: _studentId,
+      objectiveId: _currentObjective!['id'] as String,
+      difficulty: currentDifficulty,
+      isCorrect: isCorrect,
+    );
+  }
+}
+
+// Save AI response
+if (_sessionId != null && cleanText.isNotEmpty) {
+  await _expertService.saveMessage(
+    sessionId: _sessionId!,
+    role: 'expert',
+    content: cleanText,
+    objectiveId: _currentObjective?['id'] as String?,
+  );
+}
       // Reload objectives to show updated mastery
       await _loadObjectives();
 
@@ -696,32 +749,46 @@ Let's start! I'll explain the concept, then we'll practice together.
   }
 
   void _moveToNextObjective() {
-  final currentIndex = _objectives.indexWhere((obj) => obj['id'] == _currentObjective?['id']);
-  
+  final currentIndex = _objectives.indexWhere(
+    (obj) => obj['id'] == _currentObjective?['id']
+  );
+
   if (currentIndex != -1) {
     _objectives[currentIndex]['is_mastered'] = true;
   }
 
-  final masteredCount = _objectives.where((o) => o['is_mastered'] == true).length;
-  final isEndOfBatch = masteredCount % 5 == 0 && masteredCount > 0;
+  // ✅ Skip already-mastered objectives
+  Map<String, dynamic>? nextObjective;
+  for (int i = currentIndex + 1; i < _objectives.length; i++) {
+    if (_objectives[i]['is_mastered'] != true) {
+      nextObjective = _objectives[i];
+      break;
+    }
+  }
 
-  if (currentIndex != -1 && currentIndex + 1 < _objectives.length) {
-    _currentObjective = _objectives[currentIndex + 1];
-    
+  if (nextObjective != null) {
+    _currentObjective = nextObjective;
+
+    // Check batch boundary
+    final masteredCount = _objectives
+        .where((o) => o['is_mastered'] == true)
+        .length;
+    final isEndOfBatch = masteredCount % 5 == 0 && masteredCount > 0;
+
     if (isEndOfBatch) {
-      // ✅ Only for batch transition, add teaching mode message
       _startNewTeachingBatch();
     }
-    // ✅ For normal objective transition, do NOTHING
-    // The AI already introduced the next objective in its response
+    // For normal transition: do nothing
+    // AI already introduced the next objective in its message
   } else {
+    // No more non-mastered objectives
     _messages.add({
       'role': 'expert',
       'content': '🎉 **Congratulations!** You have mastered all objectives for this topic!',
       'message_type': 'text',
       'created_at': DateTime.now().toIso8601String(),
     });
-    
+
     _triggerTopicComplete();
   }
 }

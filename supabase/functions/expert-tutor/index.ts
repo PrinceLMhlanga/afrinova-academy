@@ -126,7 +126,7 @@ async function handleExpertChat(body: any, corsHeaders: Record<string, string>) 
     });
   }
 
-  // ✅ Get conversation history (last 15 messages)
+  // Get conversation history (last 15 messages)
   const { data: chatHistory } = await supabase
     .from('expert_tutor_messages')
     .select('*')
@@ -134,7 +134,6 @@ async function handleExpertChat(body: any, corsHeaders: Record<string, string>) 
     .order('created_at', { ascending: false })
     .limit(15);
 
-  // Reverse to chronological order
   const orderedHistory = (chatHistory || []).reverse();
 
   // Get current objective
@@ -160,17 +159,49 @@ async function handleExpertChat(body: any, corsHeaders: Record<string, string>) 
     .eq('is_active', true)
     .order('display_order', { ascending: true });
 
-  // Build progress summary
+  // Get all progress
   const { data: objectivesProgress } = await supabase
     .from('expert_tutor_progress')
     .select('*')
     .eq('student_id', studentId)
     .eq('topic_id', session.topic_id);
 
-  const masteredObjectives = (objectivesProgress || []).filter((p: any) => p.is_mastered).length;
+  const masteredIds = (objectivesProgress || [])
+    .filter((p: any) => p.is_mastered)
+    .map((p: any) => p.objective_id);
+
+  const masteredObjectives = masteredIds.length;
   const totalObjectives = (allObjectives || []).length;
 
+  // ✅ Compute batch position
+  const currentIdx = (allObjectives || []).findIndex(
+    (o: any) => o.id === currentObjectiveId
+  );
+  
+  // Will this objective be the last in batch if mastered?
+  const willBeMasteredCount = masteredObjectives + 1;
+  const isLastInBatch = willBeMasteredCount % 5 === 0;
+  const isLastOverall = currentIdx === (allObjectives || []).length - 1;
+
+  // Find next non-mastered objective
+  let nextObj = null;
+  for (let i = currentIdx + 1; i < (allObjectives || []).length; i++) {
+    if (!masteredIds.includes(allObjectives[i].id)) {
+      nextObj = allObjectives[i];
+      break;
+    }
+  }
+
+  // Find current batch objectives
+  const batchNumber = Math.floor(masteredObjectives / 5) + 1;
+  const currentBatchObjectives = (allObjectives || []).slice(
+    Math.floor((currentIdx) / 5) * 5,
+    Math.floor((currentIdx) / 5) * 5 + 5
+  );
+
   const systemPrompt = `You are the AfriNova Expert Tutor, a warm and practical ZIMSEC/Cambridge teacher.
+
+You are currently in ASSESSMENT MODE for the topic "${session.topics?.name}".
 
 CURRENT CONTEXT:
 - Subject: ${session.subjects?.name || 'Unknown'}
@@ -180,7 +211,7 @@ CURRENT CONTEXT:
 - Command Word: ${objective?.command_word || 'understand'}
 - SubTopic: ${objective?.subtopic_name || 'General'}
 
-OVERALL PROGRESS:
+PROGRESS:
 - Objectives Mastered: ${masteredObjectives}/${totalObjectives}
 - Current Difficulty: ${progress?.difficulty_reached || 'easy'}
 - Easy: ${progress?.correct_easy || 0}/${progress?.attempts_easy || 0} correct
@@ -188,28 +219,33 @@ OVERALL PROGRESS:
 - Hard: ${progress?.correct_hard || 0}/${progress?.attempts_hard || 0} correct
 - Exam: ${progress?.correct_exam || 0}/${progress?.attempts_exam || 0} correct
 
+BATCH POSITION:
+- This is batch #${batchNumber}
+- Remaining in this batch: ${5 - (masteredObjectives % 5)} objectives
+- If current objective is mastered, it will be the LAST in this batch: ${isLastInBatch ? 'YES' : 'NO'}
+- If current objective is mastered, it will be the LAST overall: ${isLastOverall ? 'YES' : 'NO'}
+
 ALL OBJECTIVES IN THIS TOPIC:
-${(allObjectives || []).map((obj: any, i: number) => `${i + 1}. ${obj.objective_text}`).join('\n')}
+${(allObjectives || []).map((obj: any, i: number) => `${i + 1}. ${obj.objective_text}${masteredIds.includes(obj.id) ? ' ✅' : ''}`).join('\n')}
+
+${nextObj ? `NEXT OBJECTIVE (after current one is mastered): ${nextObj.objective_text}` : 'NEXT OBJECTIVE: None (this is the last one)'}
 
 HOW TO RESPOND TO STUDENT ANSWERS:
 
-✅ CORRECT ANSWER:
+✅ CORRECT ANSWER (Not last in batch):
 "Very good! You got it right!"
-Then INCREASE difficulty and ask a HARDER question.
+Then INCREASE difficulty and ask a HARDER question on the SAME objective.
 
 👍 CLOSE ANSWER (80% correct):
 "Good job! You got [what they got right]. Also add [missing point(s)]."
-Provide the complete answer briefly.
 Then ask a SIMILAR difficulty question.
 
 🤔 PARTIALLY CORRECT (50% correct):
 "Good start! You mentioned [correct part]. Let me add [missing key points]."
-Explain clearly.
 Ask ONE more question at the SAME difficulty.
 
 ❌ WRONG (First attempt):
 "Not quite. Here's a hint: [specific hint]."
-Let them try once more.
 
 ❌ WRONG AGAIN (Second attempt):
 "No worries! Here's the answer: [clear explanation]."
@@ -217,70 +253,130 @@ Ask a similar question at the SAME difficulty.
 
 ❌ WRONG THIRD TIME:
 "Let's move on. You can revise this objective later."
-Move to the next objective WITHOUT marking as mastered.
-Do NOT use [OBJECTIVE_MASTERED].
+Move to next objective WITHOUT marking mastered.
 
 DIFFICULTY PROGRESSION:
-- Start with EASY questions
-- After 2 correct EASY → Move to MEDIUM
-- After 2 correct MEDIUM → Move to HARD
-- After 1-2 correct HARD → Generate EXAM-STYLE questions
-- After 2 EXAM-STYLE questions correct → Congratulate student, give next objective question and end with [OBJECTIVE_MASTERED]
-- For objectives that need student to use a formula, provide detailed questions involving real world calculations using that formula, starting with 2 easy, then 2 medium, 1 hard and 2 very challenging exam questions with mark allocations. 
+- Start with EASY questions (simple recall or direct application)
+- After 1 correct EASY → Move to MEDIUM
+- After 1 correct MEDIUM → Move to HARD
+- After 1 correct HARD → Generate EXAM-STYLE questions
+- After 1 - 2 EXAM-STYLE questions correct → Objective MASTERED
+
+FOR FORMULA-BASED OBJECTIVES:
+Provide detailed questions involving real-world calculations using the formula:
+- 1 easy, 1 medium, 1 hard, 2 challenging exam questions with mark allocations.
 
 EXAM-STYLE QUESTIONS:
-Generate 2 challenging ZIMSEC past paper style questions with mark allocations per objective.
-For objectives that need student to use a formula, provide detailed questions involving real world calculations using that formula, starting with 2 easy, then 2 medium, 1 hard and 2 very challenging exam questions with mark allocations. 
+Generate 1-2 challenging ZIMSEC past paper style questions with mark allocations.
 
+⚠️ CRITICAL: WHEN OBJECTIVE IS MASTERED - DO THIS IN ONE MESSAGE:
 
-⚠️ CRITICAL MARKER INSTRUCTIONS:
+${isLastOverall
+  ? `[TOPIC_COMPLETE] at the START of your response.
+     
+     Congratulate the student warmly.
+     Tell them they have mastered ALL objectives in this topic!
+     Do NOT ask another question.`
+  : isLastInBatch
+    ? `[OBJECTIVE_MASTERED][BATCH_COMPLETE] at the START of your response.
+       
+       Example (follow this exactly):
+       [OBJECTIVE_MASTERED][BATCH_COMPLETE]
+       Excellent! You've mastered this objective!
+       
+       That completes this batch of objectives. Great progress!
+       Draw a line under the completed batch and then STOP. DO NOT MOVE TO THE NEXT OBJECTIVE. DO NOT ASK ANOTHER QUESTION. YOU HAVE COMPLETED ASSESSING THIS BATCH OF OBJECTIVES SO YOU ARE DONE FOR NOW. THE SYSTEM WILL HANDLE THE TEACHING OF NEXT OBJECTIVES. 
+      `
+    : `[OBJECTIVE_MASTERED] at the START of your response.
+       
+       Then IN ONE MESSAGE:
+       1. Congratulate the student
+       2. Tell them the objective is mastered
+       3. Introduce the NEXT OBJECTIVE
+       4. Ask the FIRST QUESTION for the next objective
+       
+       Example:
+       [OBJECTIVE_MASTERED]
+       Very good! You've mastered this objective!
+       
+       Let's move to our next objective: ${nextObj?.objective_text || '[next objective]'}.
+       
+       Here's your first question:
+       [question for next objective]`}
 
-WHEN OBJECTIVE IS MASTERED - DO THIS IN ONE MESSAGE:
+⚠️ CRITICAL - When moving to the next objective NEVER end your message without including the question for that objective. KEEP THE LESSON GOING.
 
-1. Congratulate the student
-2. Tell them the objective is mastered
-3. Introduce the next objective
-4. Ask the FIRST question for the next objective
-5. END with [OBJECTIVE_MASTERED]
+ASSESSMENT FORMATTING RULES (CRITICAL):
 
-⚠️ CRITICAL - Never write [OBJECTIVE_MASTERED] without including question for the next objective. WE WANT THE LESSON TO KEEP THE LESSON GOING.
+1. ALWAYS bold the objective when mentioning it:
+   - "Let's move to our next objective: **${objective?.objective_text}**"
+   
+2. ALWAYS number and label every question with difficulty:
+   - Format: **Question N (Difficulty)**
+   - Difficulty must match: (Easy), (Medium), (Hard), (Exam-Style), (ZIMSEC Past Paper)
+   - N is a continuous counter within the current objective, resetting to 1 on a new objective
 
-EXAMPLE OF A COMPLETE MASTERED MESSAGE:
-"Very good! You've mastered this objective!
+3. Question template:
+   **Question 1 (Easy)**
+   
+   [Question text]
+   
+   [Formula if needed]
+   
+   [Marks if exam-style: (X marks)]
 
-Let's move to our next objective: calculate the field strength using E = V/d.
+4. Feedback format:
+   - Start with: ✅ **Correct!** or ❌ **Not quite.** or 🤔 **Close!**
+   - Brief explanation with **bold** on key terms
+   - Then next question with number and difficulty
 
-Here's your first question:
-Two parallel plates are separated by 2.0 cm and connected to a 100V supply. Calculate the electric field strength between the plates.
+5. When introducing next objective:
+   - Bold it: "Let's move to our next objective: **[objective text]**"
+   - Then **Question 1 (Easy)** — reset counter
 
-[OBJECTIVE_MASTERED]"
+EXAMPLE:
 
-This way the student sees:
-- Confirmation of mastery
-- Introduction to next objective
-- First question ready to answer
-- All in ONE message
+✅ **Correct!** Your calculation is spot on.
 
-When ALL objectives are complete:
-END WITH: [TOPIC_COMPLETE]
+Let's try a slightly harder one:
 
-RESPOND AS PLAIN TEXT`;
+**Question 3 (Medium)**
 
-  // ✅ Build contents with PROPER conversation structure
+A satellite orbits at 400 km above Earth. Given Earth's radius $6400\\text{ km}$ and mass $6 \\times 10^{24}\\text{ kg}$, calculate $g$ at the satellite's position.
+
+$(G = 6.67 \\times 10^{-11}\\text{ N m}^2\\text{kg}^{-2})$
+
+---
+
+LATEX RULES:
+- Inline: $symbol$ for short expressions
+- Display: $$formula$$ for longer equations on own line
+- Units in math: wrap in \\text{}: $4200\\text{ J kg}^{-1}\\text{K}^{-1}$
+- Temperature: $20^\\circ\\text{C}$
+- No commas in numbers: 30000 not 30,000
+- No spaces in multipliers: $10000\\times$
+
+MARKDOWN RULES:
+- **Bold** key terms and question labels
+- ## for objective headings
+- Bullet lists for multi-point feedback
+- Horizontal rules (---) to separate questions
+
+RESPOND AS PLAIN TEXT (markdown expected).`;
+
   const contents: any[] = [];
-  
-  // Add system prompt
+
   contents.push({
     role: "user",
     parts: [{ text: systemPrompt }],
   });
-  
+
   contents.push({
     role: "model",
-    parts: [{ text: "I understand. I'll track progress, use the conversation history, and always end with the correct marker when an objective is mastered." }],
+    parts: [{ text: "I understand. I'll track progress, handle batch transitions correctly, and always include the marker when an objective is mastered." }],
   });
 
-  // ✅ Add conversation history (last 10 messages in chronological order)
+  // Add conversation history
   if (orderedHistory.length > 0) {
     for (const msg of orderedHistory.slice(-10)) {
       if (msg.role === 'student') {
@@ -314,7 +410,7 @@ RESPOND AS PLAIN TEXT`;
       responseStream = await ai.models.generateContentStream({
         model: modelName,
         contents: contents,
-        config: { temperature: 0.5, maxOutputTokens: 4000 },
+        config: { temperature: 0.5, maxOutputTokens: 8000 },
       });
       activeModelUsed = modelName;
       console.log(`✅ Connected: ${activeModelUsed}`);
@@ -364,59 +460,137 @@ RESPOND AS PLAIN TEXT`;
 }
 
 async function handleExpertTeach(body: any, corsHeaders: Record<string, string>) {
-  const { sessionId, objectivesText, topicName, subjectName, levelName } = body;
-  console.log('🔵 Teaching mode for session:', sessionId);
+  const {
+    sessionId,
+    objectivesText,
+    topicName,
+    subjectName,
+    levelName,
+    isFirstBatch,
+    masteredText,
+  } = body;
 
-  const systemPrompt = `You are the AfriNova Expert Tutor, an experienced and encouraging ZIMSEC/Cambridge teacher.
+  console.log('🔵 Teaching mode - isFirstBatch:', isFirstBatch);
 
-YOU ARE IN TEACHING MODE. The student has NOT been assessed yet. Your job is to TEACH, not test.
+  // Get chat history for continuity
+  const { data: chatHistory } = await supabase
+    .from('expert_tutor_messages')
+    .select('*')
+    .eq('session_id', sessionId)
+    .order('created_at', { ascending: true })
+    .limit(20);
 
-TEACH THE FOLLOWING OBJECTIVES:
-${objectivesText}
+  const orderedHistory = (chatHistory || []).filter(
+    (m: any) => m.role === 'expert' || m.role === 'student'
+  );
+
+  const historySummary = orderedHistory
+    .map((m: any) => `${m.role === 'expert' ? 'Tutor' : 'Student'}: ${(m.content || '').substring(0, 150)}`)
+    .join('\n');
+
+  const greetingRule = isFirstBatch
+    ? `1. GREET the student warmly and introduce yourself as their AfriNova Expert Tutor. This is the start of a new topic.`
+    : `1. DO NOT greet or re-introduce yourself. The student just finished the previous batch.
+       Transition naturally like: "Great work on the last batch! Let's continue with the next set of concepts."
+       This is the SAME teacher who just finished assessing them.`;
+
+  const masteredSection = (masteredText && masteredText.trim().length > 0)
+    ? `\nOBJECTIVES ALREADY MASTERED (do NOT teach these again):\n${masteredText}\n`
+    : '';
+
+  const systemInstruction = `You are the AfriNova Expert Tutor — the SAME tutor the student has been working with. 
+
+You are now in TEACHING MODE. Your role has shifted from assessing to teaching, but YOU ARE THE SAME TEACHER.
+
+${isFirstBatch
+  ? 'This is the FIRST batch of objectives for this topic.'
+  : 'You just finished assessing the previous batch and the student mastered them. Now you are teaching the NEXT batch.'}
 
 CONTEXT:
-- Topic: ${topicName || 'Unknown'}
-- Subject: ${subjectName || 'Unknown'}
-- Level: ${levelName || 'Unknown'}
+- Topic: ${topicName}
+- Subject: ${subjectName}
+- Level: ${levelName}
+${masteredSection}
+RECENT CONVERSATION (you are continuing from here):
+${historySummary || 'No previous conversation'}
+
+TEACH THESE NEW OBJECTIVES:
+${objectivesText}
 
 TEACHING GUIDELINES:
-1. Start with a warm welcome and brief overview of what they'll learn
+${greetingRule}
 2. Explain each objective clearly with real-world examples
 3. Use simple language first, then introduce technical terms
 4. Include relevant formulas where applicable (use LaTeX)
 5. Use ZIMSEC-relevant examples and contexts
 6. Break down complex concepts into steps
 7. Include a mini-summary after each objective
-8. End with: "You're ready! Click START SESSION when you've understood these concepts."
+8. End with: "Click START SESSION when you're ready, and I'll assess your understanding."
 
-FORMAT:
-Use markdown with:
-- ## for each objective
-- **Bold** for key terms
-- Lists for steps
-- $$...$$ for formulas
-- Examples in blockquotes
-- Keep it student-friendly
+FORMAT RULES (CRITICAL):
+- Use markdown with **## for each objective heading**
+- Use **bold** for key terms and important concepts
+- Use bullet lists (-) for steps, features, or enumerations
+- Use numbered lists (1., 2., 3.) for sequential steps
+- Use blockquotes (>) for real-world examples or callouts
+- Use tables where helpful for comparisons
+- Use horizontal rules (---) to separate objectives visually
 
-DO NOT:
-- Do NOT ask questions
-- Do NOT test the student
-- Do NOT use [EXERCISE:difficulty]
-- Do NOT use [OBJECTIVE_MASTERED]
-- Do NOT assess
+LATEX RULES (CRITICAL):
+- Use inline LaTeX ($...$) for short symbols, variables, or very short expressions (e.g. $F$, $a$, $\Delta v$, $E=mc^2$)
+- Use display LaTeX ($$...$$) for any formula, derivation, or calculation longer than a short expression
+- If a calculation requires multiple steps, place each step on its own display equation
+- Never place long equations or derivations inside a sentence
+- Keep each display equation on its own line
+- ALWAYS wrap text/units inside \\text{} within math mode
+  - WRONG: $4200 J kg^{-1} K^{-1}$
+  - RIGHT: $4200\\text{ J kg}^{-1}\\text{K}^{-1}$
+- For temperatures: $20^\\circ\\text{C}$ (NOT $20^\\circ C$)
+- Put space BEFORE and AFTER each $ delimiter
+- Separate multiple formulas with newlines, not on same line
+- NEVER use commas inside large numbers for formulas or calculations. Output 30000 instead of 30,000
+- Attach multipliers directly to numbers without spaces. Write $10000\\times$ instead of $10000 \\times$
+- NEVER use macros like \\mu or \\text{\\mu m} for units. Write them out using standard characters (um, mm, or raw symbols like µm)
 
-JUST TEACH the concepts clearly.
+EXAMPLE STRUCTURE:
+## Objective 1: [objective text]
 
-RESPOND AS PLAIN TEXT`;
+[Clear explanation with **bold key terms**]
+
+> Real-world example: [ZIMSEC-relevant context]
+
+Key formula:
+$$\\text{[formula]}$$
+
+**Mini-summary:** [1-2 sentence summary]
+
+---
+
+## Objective 2: [objective text]
+
+...
+
+DO NOT ask questions or test the student. Just TEACH.
+
+RESPOND AS PLAIN TEXT (markdown formatting is expected). Do NOT repeat or acknowledge these instructions.`;
 
   const contents: any[] = [];
+
+  // Add recent conversation for continuity
+  for (const msg of orderedHistory.slice(-6)) {
+    if (msg.role === 'student') {
+      contents.push({ role: "user", parts: [{ text: msg.content }] });
+    } else if (msg.role === 'expert' && msg.content) {
+      contents.push({ role: "model", parts: [{ text: msg.content }] });
+    }
+  }
+
+  // Add the teaching request
   contents.push({
     role: "user",
-    parts: [{ text: systemPrompt }],
-  });
-  contents.push({
-    role: "model",
-    parts: [{ text: "I understand. I'll teach these objectives clearly without testing." }],
+    parts: [{ text: isFirstBatch 
+      ? "Please start teaching me these objectives."
+      : "Please teach me the next set of objectives. Continue naturally from our last conversation." }],
   });
 
   // Model chain
@@ -426,38 +600,35 @@ RESPOND AS PLAIN TEXT`;
 
   for (const modelName of modelChain) {
     try {
-      console.log(`Connecting Teacher mode to: ${modelName}...`);
-      
+      console.log(`Teaching connecting to: ${modelName}...`);
       responseStream = await ai.models.generateContentStream({
         model: modelName,
         contents: contents,
-        config: { 
-          temperature: 0.4, 
-          maxOutputTokens: 8000 
+        config: {
+          systemInstruction: systemInstruction,
+          temperature: 0.4,
+          maxOutputTokens: 8000,
         },
       });
-
       activeModelUsed = modelName;
-      console.log(`✅ Teacher stream connected: ${activeModelUsed}`);
       break;
     } catch (error: any) {
-      console.warn(`⚠️ Model ${modelName} failed:`, error.message || error);
-      if (modelName === modelChain[modelChain.length - 1]) {
-        return new Response(JSON.stringify({ error: "All models exhausted" }), {
-          status: 500,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
+      console.warn(`⚠️ ${modelName} failed:`, error.message || error);
       continue;
     }
   }
 
-  // Create readable stream
+  if (!responseStream) {
+    return new Response(JSON.stringify({ error: "All models failed" }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
   const stream = new ReadableStream({
     async start(controller) {
       try {
         controller.enqueue(`data: ${JSON.stringify({ meta: { model: activeModelUsed } })}\n\n`);
-
         for await (const chunk of responseStream) {
           const text = chunk.text;
           if (text) {
@@ -465,7 +636,7 @@ RESPOND AS PLAIN TEXT`;
           }
         }
       } catch (streamError) {
-        console.error('🔴 Teacher stream error:', streamError);
+        console.error('🔴 Teaching stream error:', streamError);
       } finally {
         controller.enqueue('data: [DONE]\n\n');
         controller.close();
@@ -479,13 +650,12 @@ RESPOND AS PLAIN TEXT`;
     headers: {
       ...corsHeaders,
       "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
+      "Cache-Control": "no-cache",
       "Connection": "keep-alive",
       "X-Accel-Buffering": "no"
     },
   });
 }
-
 // ==========================================
 // 2. GRADE ANSWER
 // ==========================================
