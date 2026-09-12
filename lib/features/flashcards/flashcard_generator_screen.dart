@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/auth_service.dart';
 import '../../core/ai_service.dart';
+import '../../core/trial_usage_service.dart';
+import '../../widgets/trial_limit_dialog.dart';
 import 'flashcard_study_screen.dart';
+import '../premium/ai_subscription_screen.dart';
 
 class FlashcardGeneratorScreen extends StatefulWidget {
   const FlashcardGeneratorScreen({super.key});
@@ -24,12 +27,66 @@ class _FlashcardGeneratorScreenState extends State<FlashcardGeneratorScreen> {
   int _cardCount = 10;
   bool _isGenerating = false;
   bool _isLoading = true;
+  
+  // ✅ Track trial usage
+  // Change from hardcoded 10 to safe default (will be replaced on load)
+int _trialRemaining = 0;
+int _trialLimit = 0;
+  bool _isUnlimited = false;
 
   @override
   void initState() {
     super.initState();
     _loadData();
+    _loadTrialInfo();
   }
+
+  Future<void> _loadTrialInfo() async {
+  try {
+    // ✅ Load limits from cache
+    await TrialLimitsCache.load();
+    final flashcardsLimit = TrialLimitsCache.flashcards();
+    
+    final check = await TrialUsageService().canUseFeature('flashcards_generated');
+    
+    debugPrint('🔍 Trial: used=${check.used}, remaining=${check.remaining}, limit=${check.limit}, unlimited=${check.unlimited}');
+    
+    if (!mounted) return;
+    
+    setState(() {
+      _isUnlimited = check.unlimited;
+      
+      // ✅ Use DB-driven limit
+      _trialLimit = flashcardsLimit;
+      
+      if (check.unlimited) {
+        _trialRemaining = 999999;
+      } else if (check.remaining != null) {
+        _trialRemaining = check.remaining!;
+      } else if (check.used != null) {
+        final calc = flashcardsLimit - check.used!;
+        _trialRemaining = calc < 0 ? 0 : (calc > flashcardsLimit ? flashcardsLimit : calc);
+      } else {
+        _trialRemaining = flashcardsLimit;
+      }
+      
+      // Safe clamp
+      if (!_isUnlimited) {
+        if (_trialRemaining <= 0) {
+          _cardCount = 0;
+        } else if (_trialRemaining < 5) {
+          _cardCount = _trialRemaining;
+        } else {
+          if (_cardCount < 5) _cardCount = 5;
+          if (_cardCount > _trialRemaining) _cardCount = _trialRemaining;
+          if (_cardCount > 20) _cardCount = 20;
+        }
+      }
+    });
+  } catch (e) {
+    debugPrint('❌ Error loading trial info: $e');
+  }
+}
 
   Future<void> _loadData() async {
     try {
@@ -82,47 +139,175 @@ class _FlashcardGeneratorScreenState extends State<FlashcardGeneratorScreen> {
       return;
     }
 
+    // ✅ CHECK TRIAL LIMIT
+    final trialCheck = await TrialUsageService().canUseFeature('flashcards_generated');
+    if (!trialCheck.allowed) {
+      if (mounted) {
+        await TrialLimitDialog.show(
+          context,
+          featureName: 'AI Flashcards',
+          customMessage: trialCheck.message ??
+            'You have reached your free trial limit for AI Flashcards. Subscribe for unlimited access.',
+        );
+      }
+      return;
+    }
+
+    // ✅ Check if enough remaining for the requested count
+    if (!trialCheck.unlimited) {
+      final remaining = trialCheck.remaining ?? 0;
+      if (remaining < _cardCount) {
+        if (remaining == 0) {
+          if (mounted) {
+            final subscribed = await TrialLimitDialog.show(
+  context,
+  featureName: 'AI Flashcards',
+  customMessage: trialCheck.message,
+);
+
+if (subscribed == true && mounted) {
+  await _loadTrialInfo();  // ✅ Refresh slider + banner
+}
+return;
+          }
+          return;
+        }
+        
+        // Show dialog asking if they want to use remaining
+        final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Text('Limited Trial'),
+            content: Text(
+              'You only have $remaining flashcards left in your free trial. '
+              'Would you like to generate $remaining flashcards now?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF1A237E),
+                  foregroundColor: Colors.white,
+                ),
+                child: Text('Generate $remaining'),
+              ),
+            ],
+          ),
+        );
+        
+        if (confirmed != true) return;
+        
+        setState(() => _cardCount = remaining);
+      }
+    }
+
     setState(() => _isGenerating = true);
 
     final subjectName = _subjects.firstWhere((s) => s['id'] == _selectedSubjectId)['name'] ?? '';
     final topicName = _topics.firstWhere((t) => t['id'] == _selectedTopicId)['name'] ?? '';
 
-    final cards = await _aiService.generateFlashcards(
-      topic: topicName,
-      subject: subjectName,
-      level: _studentLevelName ?? 'Form 4',
-      count: _cardCount,
-    );
-
-    if (cards.isNotEmpty && mounted) {
-      // Save to database
-      final userId = _authService.currentUserId;
-      for (final card in cards) {
-        await Supabase.instance.client.from('ai_flashcards').insert({
-          'student_id': userId,
-          'subject_id': _selectedSubjectId,
-          'topic_id': _selectedTopicId,
-          'question': card['question'],
-          'answer': card['answer'],
-        });
-      }
-
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => FlashcardStudyScreen(
-            cards: cards,
-            topicName: topicName,
-          ),
-        ),
+    try {
+      final cards = await _aiService.generateFlashcards(
+        topic: topicName,
+        subject: subjectName,
+        level: _studentLevelName ?? 'Form 4',
+        count: _cardCount,
       );
-    }
 
-    if (mounted) setState(() => _isGenerating = false);
+      if (cards.isNotEmpty && mounted) {
+        // Save to database
+        final userId = _authService.currentUserId;
+        for (final card in cards) {
+          await Supabase.instance.client.from('ai_flashcards').insert({
+            'student_id': userId,
+            'subject_id': _selectedSubjectId,
+            'topic_id': _selectedTopicId,
+            'question': card['question'],
+            'answer': card['answer'],
+          });
+        }
+
+        // ✅ INCREMENT TRIAL USAGE
+        await TrialUsageService().incrementUsage(
+          'flashcards_generated',
+          amount: cards.length,
+        );
+
+        // Refresh trial info
+        await _loadTrialInfo();
+
+        if (mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => FlashcardStudyScreen(
+                cards: cards,
+                topicName: topicName,
+              ),
+            ),
+          );
+        }
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to generate flashcards. Please try again.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isGenerating = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    // ✅ Compute bounds safely ONCE at the top of build
+    final int minCards;
+    final int maxCards;
+    
+    if (_isUnlimited) {
+      minCards = 5;
+      maxCards = 20;
+    } else if (_trialRemaining <= 0) {
+      minCards = 1;
+      maxCards = 1;
+    } else if (_trialRemaining < 5) {
+      minCards = 1;
+      maxCards = _trialRemaining;
+    } else {
+      minCards = 5;
+      maxCards = _trialRemaining > 20 ? 20 : _trialRemaining;
+    }
+    
+    // Ensure maxCards >= minCards (safety)
+    final safeMax = maxCards < minCards ? minCards : maxCards;
+    
+    // Compute effective card count safely
+    final effectiveCardCount = _cardCount < minCards 
+        ? minCards 
+        : (_cardCount > safeMax ? safeMax : _cardCount);
+    
+    // Is the slider usable?
+    final isSliderDisabled = _trialRemaining <= 0 && !_isUnlimited;
+    
+    // Can we generate?
+    final canGenerate = _isUnlimited || _trialRemaining >= 1;
+    
     return Scaffold(
       backgroundColor: const Color(0xFFF5F5F5),
       appBar: AppBar(
@@ -159,7 +344,57 @@ class _FlashcardGeneratorScreenState extends State<FlashcardGeneratorScreen> {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 16),
+
+                  // ✅ TRIAL USAGE BANNER
+                  if (!_isUnlimited)
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: _trialRemaining <= 3
+                            ? Colors.orange.withOpacity(0.1)
+                            : const Color(0xFF1A237E).withOpacity(0.05),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: _trialRemaining <= 3
+                              ? Colors.orange.withOpacity(0.3)
+                              : const Color(0xFF1A237E).withOpacity(0.1),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            _trialRemaining <= 3 ? Icons.warning_amber_rounded : Icons.info_outline,
+                            color: _trialRemaining <= 3 ? Colors.orange : const Color(0xFF1A237E),
+                            size: 20,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Free Trial: $_trialRemaining of $_trialLimit flashcards remaining',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: _trialRemaining <= 3 ? Colors.orange : const Color(0xFF1A237E),
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  _trialRemaining <= 3
+                                      ? 'Subscribe for unlimited flashcards!'
+                                      : 'Trial flashcards never reset',
+                                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  const SizedBox(height: 20),
 
                   // Subject
                   const Text('Subject', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
@@ -192,8 +427,26 @@ class _FlashcardGeneratorScreenState extends State<FlashcardGeneratorScreen> {
                   ),
                   const SizedBox(height: 16),
 
-                  // Card count
-                  const Text('Number of Cards', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                  // Number of Cards section
+                  Row(
+                    children: [
+                      const Text('Number of Cards', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                      if (!_isUnlimited) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            'Max $safeMax (trial)',
+                            style: const TextStyle(fontSize: 10, color: Colors.orange, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                   const SizedBox(height: 8),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -204,37 +457,91 @@ class _FlashcardGeneratorScreenState extends State<FlashcardGeneratorScreen> {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Text('5', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                        Text('$_cardCount cards', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF1A237E))),
-                        const Text('20', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                        Text('$minCards', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                        Text(
+                          isSliderDisabled ? 'No cards left' : '$effectiveCardCount cards',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold, 
+                            fontSize: 16, 
+                            color: isSliderDisabled ? Colors.red : const Color(0xFF1A237E),
+                          ),
+                        ),
+                        Text('$safeMax', style: const TextStyle(fontSize: 12, color: Colors.grey)),
                       ],
                     ),
                   ),
-                  Slider(
-                    value: _cardCount.toDouble(),
-                    min: 5, max: 20, divisions: 3,
-                    activeColor: const Color(0xFF1A237E),
-                    onChanged: (v) => setState(() => _cardCount = v.round()),
-                  ),
+                  const SizedBox(height: 4),
+                  // ✅ Slider with strict bounds
+                  if (isSliderDisabled)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      child: Center(
+                        child: Text(
+                          'Subscribe to generate more flashcards',
+                          style: TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                      ),
+                    )
+                  else
+                    Slider(
+                      value: effectiveCardCount.toDouble(),
+                      min: minCards.toDouble(),
+                      max: safeMax.toDouble(),
+                      divisions: (safeMax - minCards) > 0 
+                          ? ((safeMax - minCards) ~/ 1).clamp(1, 20) 
+                          : null,
+                      activeColor: const Color(0xFF1A237E),
+                      onChanged: (v) => setState(() => _cardCount = v.round()),
+                    ),
                   const SizedBox(height: 24),
 
                   // Generate button
                   SizedBox(
-                    width: double.infinity, height: 56,
+                    width: double.infinity, 
+                    height: 56,
                     child: ElevatedButton.icon(
-                      onPressed: _isGenerating ? null : _generateFlashcards,
+                      onPressed: (_isGenerating || !canGenerate) ? null : _generateFlashcards,
                       icon: _isGenerating
                           ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                          : const Icon(Icons.auto_awesome),
-                      label: Text(_isGenerating ? 'Generating...' : 'Generate $_cardCount Flashcards'),
+                          : Icon(!canGenerate ? Icons.lock : Icons.auto_awesome),
+                      label: Text(
+                        _isGenerating
+                            ? 'Generating...'
+                            : !canGenerate
+                                ? 'Trial Limit Reached'
+                                : 'Generate $effectiveCardCount Flashcards',
+                      ),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.purple,
+                        backgroundColor: canGenerate ? Colors.purple : Colors.grey,
                         foregroundColor: Colors.white,
+                        disabledBackgroundColor: Colors.grey.shade300,
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                         textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                       ),
                     ),
                   ),
+
+                  // ✅ Subscribe CTA when running low
+                  if (!_isUnlimited && _trialRemaining <= 3) ...[
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 48,
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          // Navigate to subscription
+                          Navigator.push(context, MaterialPageRoute(builder: (_) => const AISubscriptionScreen()));
+                        },
+                        icon: const Icon(Icons.diamond),
+                        label: const Text('Subscribe for Unlimited Flashcards'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.orange,
+                          side: const BorderSide(color: Colors.orange),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),

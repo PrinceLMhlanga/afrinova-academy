@@ -3,6 +3,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/auth_service.dart';
 import '../../core/ai_service.dart';
 import 'summary_viewer_screen.dart';
+import '../../core/trial_usage_service.dart';
+import '../../widgets/trial_limit_dialog.dart';
+import '../premium/ai_subscription_screen.dart';
 
 class SummaryGeneratorScreen extends StatefulWidget {
   const SummaryGeneratorScreen({super.key});
@@ -25,11 +28,45 @@ class _SummaryGeneratorScreenState extends State<SummaryGeneratorScreen> {
   bool _isGenerating = false;
   bool _isLoading = true;
 
+  // ✅ Trial usage tracking
+int _trialRemaining = 0;
+int _trialLimit = 0;
+bool _isUnlimited = false;
+
   @override
-  void initState() {
-    super.initState();
-    _loadData();
+void initState() {
+  super.initState();
+  _loadData();
+  _loadTrialInfo();  // ✅ Add this
+}
+
+Future<void> _loadTrialInfo() async {
+  try {
+    await TrialLimitsCache.load();
+    final summariesLimit = TrialLimitsCache.summaries();
+    
+    final check = await TrialUsageService().canUseFeature('summaries_generated');
+    
+    if (!mounted) return;
+    
+    setState(() {
+      _isUnlimited = check.unlimited;
+      _trialLimit = summariesLimit;
+      
+      if (check.unlimited) {
+        _trialRemaining = 999999;
+      } else if (check.remaining != null) {
+        _trialRemaining = check.remaining!;
+      } else if (check.used != null) {
+        _trialRemaining = (summariesLimit - check.used!).clamp(0, summariesLimit);
+      } else {
+        _trialRemaining = summariesLimit;
+      }
+    });
+  } catch (e) {
+    debugPrint('Error loading trial info: $e');
   }
+}
 
   Future<void> _loadData() async {
     try {
@@ -87,19 +124,38 @@ class _SummaryGeneratorScreenState extends State<SummaryGeneratorScreen> {
   }
 
   Future<void> _generateSummary() async {
-    if (_selectedSubjectId == null || _selectedTopicId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Select subject and topic'), backgroundColor: Colors.red),
-      );
-      return;
+  if (_selectedSubjectId == null || _selectedTopicId == null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Select subject and topic'), backgroundColor: Colors.red),
+    );
+    return;
+  }
+
+  // ✅ CHECK TRIAL LIMIT
+  final trialCheck = await TrialUsageService().canUseFeature('summaries_generated');
+  if (!trialCheck.allowed) {
+    if (mounted) {
+      final subscribed = await TrialLimitDialog.show(
+  context,
+  featureName: 'AI Summaries',
+  customMessage: trialCheck.message,
+);
+
+if (subscribed == true && mounted) {
+  await _loadTrialInfo();  // ✅ Refresh banner
+}
+return;
     }
+    return;
+  }
 
-    setState(() => _isGenerating = true);
+  setState(() => _isGenerating = true);
 
-    final subjectName = _subjects.firstWhere((s) => s['id'] == _selectedSubjectId)['name'] ?? '';
-    final topicName = _topics.firstWhere((t) => t['id'] == _selectedTopicId)['name'] ?? '';
-    final title = '$topicName - $subjectName';
+  final subjectName = _subjects.firstWhere((s) => s['id'] == _selectedSubjectId)['name'] ?? '';
+  final topicName = _topics.firstWhere((t) => t['id'] == _selectedTopicId)['name'] ?? '';
+  final title = '$topicName - $subjectName';
 
+  try {
     final summary = await _aiService.generateSummary(
       topic: topicName,
       subject: subjectName,
@@ -118,20 +174,42 @@ class _SummaryGeneratorScreenState extends State<SummaryGeneratorScreen> {
         'content': summary,
       });
 
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => SummaryViewerScreen(
-            title: title,
-            content: summary,
+      // ✅ INCREMENT TRIAL USAGE
+      await TrialUsageService().incrementUsage('summaries_generated');
+      await _loadTrialInfo();  // Refresh trial display
+
+      if (mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => SummaryViewerScreen(
+              title: title,
+              content: summary,
+            ),
           ),
+        );
+      }
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Failed to generate summary. Please try again.'),
+          backgroundColor: Colors.red,
         ),
       );
     }
-
+  } catch (e) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  } finally {
     if (mounted) setState(() => _isGenerating = false);
   }
-
+}
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -149,27 +227,79 @@ class _SummaryGeneratorScreenState extends State<SummaryGeneratorScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // Header
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [Colors.teal.shade600, Colors.green.shade600],
-                      ),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Column(
-                      children: [
-                        const Icon(Icons.summarize_rounded, color: Colors.white, size: 48),
-                        const SizedBox(height: 12),
-                        const Text('AI Study Summary',
-                            style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 4),
-                        Text(_studentLevelName ?? 'Select level',
-                            style: const TextStyle(color: Colors.white70, fontSize: 14)),
-                      ],
-                    ),
-                  ),
+             
+Container(
+  width: double.infinity,
+  padding: const EdgeInsets.all(24),
+  decoration: BoxDecoration(
+    gradient: LinearGradient(
+      colors: [Colors.teal.shade600, Colors.green.shade600],
+    ),
+    borderRadius: BorderRadius.circular(20),
+  ),
+  child: Column(
+    children: [
+      const Icon(Icons.summarize_rounded, color: Colors.white, size: 48),
+      const SizedBox(height: 12),
+      const Text('AI Study Summary',
+          style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+      const SizedBox(height: 4),
+      Text(_studentLevelName ?? 'Select level',
+          style: const TextStyle(color: Colors.white70, fontSize: 14)),
+    ],
+  ),
+),
+const SizedBox(height: 16),
+
+// ✅ TRIAL USAGE BANNER
+if (!_isUnlimited)
+  Container(
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: _trialRemaining <= 1
+          ? Colors.orange.withOpacity(0.1)
+          : Colors.teal.withOpacity(0.05),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(
+        color: _trialRemaining <= 1
+            ? Colors.orange.withOpacity(0.3)
+            : Colors.teal.withOpacity(0.2),
+      ),
+    ),
+    child: Row(
+      children: [
+        Icon(
+          _trialRemaining <= 1 ? Icons.warning_amber_rounded : Icons.info_outline,
+          color: _trialRemaining <= 1 ? Colors.orange : Colors.teal,
+          size: 20,
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Free Trial: $_trialRemaining of $_trialLimit summaries remaining',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: _trialRemaining <= 1 ? Colors.orange : Colors.teal,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                _trialRemaining <= 1
+                    ? 'Subscribe for unlimited summaries!'
+                    : 'Trial summary credits never reset',
+                style: const TextStyle(fontSize: 11, color: Colors.grey),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  ),
+
                   const SizedBox(height: 24),
 
                   // Subject
@@ -246,21 +376,43 @@ class _SummaryGeneratorScreenState extends State<SummaryGeneratorScreen> {
 
                   // Generate button
                   SizedBox(
-                    width: double.infinity, height: 56,
-                    child: ElevatedButton.icon(
-                      onPressed: _isGenerating ? null : _generateSummary,
-                      icon: _isGenerating
-                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                          : const Icon(Icons.auto_awesome),
-                      label: Text(_isGenerating ? 'Generating...' : 'Generate Summary'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.teal,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                        textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  ),
+  width: double.infinity, height: 56,
+  child: ElevatedButton.icon(
+    onPressed: _isGenerating ? null : _generateSummary,
+    icon: _isGenerating
+        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+        : const Icon(Icons.auto_awesome),
+    label: Text(_isGenerating ? 'Generating...' : 'Generate Summary'),
+    style: ElevatedButton.styleFrom(
+      backgroundColor: Colors.teal,
+      foregroundColor: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+    ),
+  ),
+),
+
+// ✅ Subscribe CTA when trial is exhausted
+if (!_isUnlimited && _trialRemaining <= 0) ...[
+  const SizedBox(height: 12),
+  SizedBox(
+    width: double.infinity,
+    height: 48,
+    child: OutlinedButton.icon(
+      onPressed: () {
+        // Navigate to subscription screen
+        Navigator.push(context, MaterialPageRoute(builder: (_) => const AISubscriptionScreen()));
+      },
+      icon: const Icon(Icons.diamond),
+      label: const Text('Subscribe for Unlimited Summaries'),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: Colors.orange,
+        side: const BorderSide(color: Colors.orange),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    ),
+  ),
+],
                 ],
               ),
             ),

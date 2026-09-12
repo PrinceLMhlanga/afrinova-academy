@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/auth_service.dart';
 import '../../core/expert_tutor_service.dart';
 import 'expert_tutor_screen.dart';
+import '../../core/trial_usage_service.dart';
+import '../../widgets/trial_limit_dialog.dart';
 
 class ExpertTutorSelectionScreen extends StatefulWidget {
   const ExpertTutorSelectionScreen({super.key});
@@ -27,11 +30,15 @@ class _ExpertTutorSelectionScreenState extends State<ExpertTutorSelectionScreen>
   bool _isLoading = true;
   bool _isLoadingTopics = false;
 
+  // Add these to _ExpertTutorScreenState:
+
   @override
   void initState() {
     super.initState();
     _loadInitialData();
   }
+
+  
 
   Future<void> _loadInitialData() async {
     try {
@@ -115,9 +122,11 @@ class _ExpertTutorSelectionScreenState extends State<ExpertTutorSelectionScreen>
   }
 
   // ✅ Start or resume session
-  void _startOrResumeSession(Map<String, dynamic> topic, Map<String, dynamic> subject) {
-    final existingSession = _getActiveSessionForTopic(topic['id'] as String);
-    
+  void _startOrResumeSession(Map<String, dynamic> topic, Map<String, dynamic> subject) async {
+  final existingSession = _getActiveSessionForTopic(topic['id'] as String);
+  
+  // ✅ If resuming an existing session, always allow (they already started this topic)
+  if (existingSession != null) {
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -128,14 +137,46 @@ class _ExpertTutorSelectionScreenState extends State<ExpertTutorSelectionScreen>
           subjectName: subject['name'] as String,
           levelId: _studentLevelId,
           levelName: _studentLevelName,
-          sessionId: existingSession?['id'] as String?, // ✅ Pass existing session if any
+          sessionId: existingSession['id'] as String?,
         ),
       ),
     ).then((_) {
-      // Reload sessions when returning
       _loadInitialData();
     });
+    return;
   }
+
+  // ✅ New topic - check trial limit
+  final trialCheck = await TrialUsageService().canStartExpertTopic(topic['id'] as String);
+  if (!trialCheck.allowed) {
+    if (mounted) {
+      await TrialLimitDialog.show(
+        context,
+        featureName: 'Expert Tutor',
+        customMessage: trialCheck.message ?? 
+          'You can only try 1 topic with the Expert Tutor during your trial. Subscribe for unlimited topics.',
+      );
+    }
+    return;
+  }
+
+  // Existing navigation code
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => ExpertTutorScreen(
+        topicId: topic['id'] as String,
+        topicName: topic['name'] as String,
+        subjectId: subject['id'] as String,
+        subjectName: subject['name'] as String,
+        levelId: _studentLevelId,
+        levelName: _studentLevelName,
+      ),
+    ),
+  ).then((_) {
+    _loadInitialData();
+  });
+}
 
   @override
   Widget build(BuildContext context) {

@@ -7,6 +7,8 @@ import '../../core/auth_service.dart';
 import '../../core/expert_tutor_service.dart';
 import '../../core/supabase_config.dart';
 import 'package:http/http.dart' as http;
+import '../../core/trial_usage_service.dart';
+import '../../widgets/trial_limit_dialog.dart';
 
 class ExpertTutorScreen extends StatefulWidget {
   final String? topicId;
@@ -563,190 +565,211 @@ Let's start! I'll explain the concept, then we'll practice together.
 ''';
   }
 
-  // Send student message with streaming
-  Future<void> _sendMessage() async {
-    // Don't allow sending in teaching mode
-    if (_isTeachingMode) return;
-    
-    final text = _inputController.text.trim();
-    if (text.isEmpty || _isSending) return;
+ // Send student message with streaming
+Future<void> _sendMessage() async {
+  // Don't allow sending in teaching mode
+  if (_isTeachingMode) return;
+  
+  final text = _inputController.text.trim();
+  if (text.isEmpty || _isSending) return;
 
-    _inputController.clear();
-    
-    // Add student message to chat
-    setState(() {
-      _messages.add({
-        'role': 'student',
-        'content': text,
-        'message_type': 'text',
-        'created_at': DateTime.now().toIso8601String(),
-      });
-      _isSending = true;
-      _isStreaming = true;
-      _streamingText = '';
-    });
-
-    // Save student message to database
-    if (_sessionId != null) {
-      await _expertService.saveMessage(
-        sessionId: _sessionId!,
-        role: 'student',
-        content: text,
+  // ✅ CHECK TRIAL LIMIT BEFORE PROCESSING
+  final trialCheck = await TrialUsageService().canUseFeature('expert_tutor_messages');
+  if (!trialCheck.allowed) {
+    if (mounted) {
+      await TrialLimitDialog.show(
+        context,
+        featureName: 'Expert Tutor',
+        customMessage: trialCheck.message ?? 
+          'You have used your free trial messages for the Expert Tutor. Subscribe to continue learning this topic.',
       );
     }
+    return;
+  }
 
-    // Add a placeholder for AI response (will stream into this)
-    final streamingIndex = _messages.length;
-    setState(() {
-      _messages.add({
-        'role': 'expert',
-        'content': '',
-        'message_type': 'streaming',
-        'created_at': DateTime.now().toIso8601String(),
-      });
+  _inputController.clear();
+  
+  // Add student message to chat
+  setState(() {
+    _messages.add({
+      'role': 'student',
+      'content': text,
+      'message_type': 'text',
+      'created_at': DateTime.now().toIso8601String(),
     });
+    _isSending = true;
+    _isStreaming = true;
+    _streamingText = '';
+  });
 
-    _scrollToBottom();
+  // Save student message to database
+  if (_sessionId != null) {
+    await _expertService.saveMessage(
+      sessionId: _sessionId!,
+      role: 'student',
+      content: text,
+    );
+  }
 
-    try {
-      // Stream AI response
-      final stream = _streamExpertResponse(
-        sessionId: _sessionId!,
-        message: text,
-        currentObjectiveId: _currentObjective?['id'] as String?,
-      );
+  // Add a placeholder for AI response (will stream into this)
+  final streamingIndex = _messages.length;
+  setState(() {
+    _messages.add({
+      'role': 'expert',
+      'content': '',
+      'message_type': 'streaming',
+      'created_at': DateTime.now().toIso8601String(),
+    });
+  });
 
-      await for (final chunk in stream) {
-        if (mounted) {
-          setState(() {
-            _streamingText += chunk;
-            _messages[streamingIndex]['content'] = _streamingText;
-          });
-          _scrollToBottom();
+  _scrollToBottom();
+
+  try {
+    // Stream AI response
+    final stream = _streamExpertResponse(
+      sessionId: _sessionId!,
+      message: text,
+      currentObjectiveId: _currentObjective?['id'] as String?,
+    );
+
+    await for (final chunk in stream) {
+      if (mounted) {
+        setState(() {
+          _streamingText += chunk;
+          _messages[streamingIndex]['content'] = _streamingText;
+        });
+        _scrollToBottom();
+      }
+    }
+
+    // Get the full AI response
+    final finalText = _streamingText;
+    String cleanText = finalText;
+
+    // TOPIC COMPLETE
+    if (finalText.contains('[TOPIC_COMPLETE]')) {
+      cleanText = cleanText
+          .replaceAll('[TOPIC_COMPLETE]', '')
+          .replaceAll('[OBJECTIVE_MASTERED]', '')
+          .replaceAll('[BATCH_COMPLETE]', '')
+          .trim();
+      _messages[streamingIndex]['content'] = cleanText;
+
+      if (_currentObjective != null && _studentId.isNotEmpty) {
+        await _expertService.markObjectiveMastered(
+          studentId: _studentId,
+          objectiveId: _currentObjective!['id'] as String,
+        );
+      }
+
+      await _loadTopicMCQs();
+    }
+    // BATCH COMPLETE
+    else if (finalText.contains('[BATCH_COMPLETE]')) {
+      cleanText = cleanText
+          .replaceAll('[BATCH_COMPLETE]', '')
+          .replaceAll('[OBJECTIVE_MASTERED]', '')
+          .trim();
+      _messages[streamingIndex]['content'] = cleanText;
+
+      // Mark current objective as mastered in DB
+      if (_currentObjective != null && _studentId.isNotEmpty) {
+        await _expertService.markObjectiveMastered(
+          studentId: _studentId,
+          objectiveId: _currentObjective!['id'] as String,
+        );
+      }
+
+      // Mark in local state
+      final currentIndex = _objectives
+          .indexWhere((o) => o['id'] == _currentObjective?['id']);
+      if (currentIndex != -1) {
+        _objectives[currentIndex]['is_mastered'] = true;
+      }
+
+      // ✅ CRITICAL FIX: Advance _currentObjective to the next non-mastered one
+      Map<String, dynamic>? nextObjective;
+      for (int i = currentIndex + 1; i < _objectives.length; i++) {
+        if (_objectives[i]['is_mastered'] != true) {
+          nextObjective = _objectives[i];
+          break;
         }
       }
-
-      // Get the full AI response
-      // In _sendMessage after streaming:
-
-final finalText = _streamingText;
-String cleanText = finalText;
-
-// TOPIC COMPLETE
-if (finalText.contains('[TOPIC_COMPLETE]')) {
-  cleanText = cleanText
-      .replaceAll('[TOPIC_COMPLETE]', '')
-      .replaceAll('[OBJECTIVE_MASTERED]', '')
-      .replaceAll('[BATCH_COMPLETE]', '')
-      .trim();
-  _messages[streamingIndex]['content'] = cleanText;
-
-  if (_currentObjective != null && _studentId.isNotEmpty) {
-    await _expertService.markObjectiveMastered(
-      studentId: _studentId,
-      objectiveId: _currentObjective!['id'] as String,
-    );
-  }
-
-  await _loadTopicMCQs();
-}
-else if (finalText.contains('[BATCH_COMPLETE]')) {
-  cleanText = cleanText
-      .replaceAll('[BATCH_COMPLETE]', '')
-      .replaceAll('[OBJECTIVE_MASTERED]', '')
-      .trim();
-  _messages[streamingIndex]['content'] = cleanText;
-
-  // Mark current objective as mastered in DB
-  if (_currentObjective != null && _studentId.isNotEmpty) {
-    await _expertService.markObjectiveMastered(
-      studentId: _studentId,
-      objectiveId: _currentObjective!['id'] as String,
-    );
-  }
-
-  // Mark in local state
-  final currentIndex = _objectives
-      .indexWhere((o) => o['id'] == _currentObjective?['id']);
-  if (currentIndex != -1) {
-    _objectives[currentIndex]['is_mastered'] = true;
-  }
-
-  // ✅ CRITICAL FIX: Advance _currentObjective to the next non-mastered one
-  // before switching to teaching mode
-  Map<String, dynamic>? nextObjective;
-  for (int i = currentIndex + 1; i < _objectives.length; i++) {
-    if (_objectives[i]['is_mastered'] != true) {
-      nextObjective = _objectives[i];
-      break;
-    }
-  }
-  
-  if (nextObjective != null) {
-    _currentObjective = nextObjective;
-    debugPrint('✅ Advanced current objective to: ${nextObjective['objective_text']}');
-  }
-
-  // ✅ Switch to teaching mode for next batch
-  await _startNewTeachingBatch();
-}
-// OBJECTIVE MASTERED - Move to next objective
-else if (finalText.contains('[OBJECTIVE_MASTERED]')) {
-  cleanText = cleanText.replaceAll('[OBJECTIVE_MASTERED]', '').trim();
-  _messages[streamingIndex]['content'] = cleanText;
-
-  if (_currentObjective != null && _studentId.isNotEmpty) {
-    await _expertService.markObjectiveMastered(
-      studentId: _studentId,
-      objectiveId: _currentObjective!['id'] as String,
-    );
-  }
-
-  _moveToNextObjective();
-}
-// Normal response
-else {
-  final isCorrect = _isAnswerCorrect(finalText);
-  final currentDifficulty = _getCurrentDifficulty();
-
-  if (_currentObjective != null && _studentId.isNotEmpty) {
-    await _expertService.updateProgress(
-      studentId: _studentId,
-      objectiveId: _currentObjective!['id'] as String,
-      difficulty: currentDifficulty,
-      isCorrect: isCorrect,
-    );
-  }
-}
-
-// Save AI response
-if (_sessionId != null && cleanText.isNotEmpty) {
-  await _expertService.saveMessage(
-    sessionId: _sessionId!,
-    role: 'expert',
-    content: cleanText,
-    objectiveId: _currentObjective?['id'] as String?,
-  );
-}
-      // Reload objectives to show updated mastery
-      await _loadObjectives();
-
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _messages[streamingIndex]['content'] = 'Sorry, an error occurred. Please try again.';
-        });
+      
+      if (nextObjective != null) {
+        _currentObjective = nextObjective;
+        debugPrint('✅ Advanced current objective to: ${nextObjective['objective_text']}');
       }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isSending = false;
-          _isStreaming = false;
-          _streamingText = '';
-        });
+
+      // ✅ Switch to teaching mode for next batch
+      await _startNewTeachingBatch();
+    }
+    // OBJECTIVE MASTERED - Move to next objective
+    else if (finalText.contains('[OBJECTIVE_MASTERED]')) {
+      cleanText = cleanText.replaceAll('[OBJECTIVE_MASTERED]', '').trim();
+      _messages[streamingIndex]['content'] = cleanText;
+
+      if (_currentObjective != null && _studentId.isNotEmpty) {
+        await _expertService.markObjectiveMastered(
+          studentId: _studentId,
+          objectiveId: _currentObjective!['id'] as String,
+        );
+      }
+
+      _moveToNextObjective();
+    }
+    // Normal response
+    else {
+      final isCorrect = _isAnswerCorrect(finalText);
+      final currentDifficulty = _getCurrentDifficulty();
+
+      if (_currentObjective != null && _studentId.isNotEmpty) {
+        await _expertService.updateProgress(
+          studentId: _studentId,
+          objectiveId: _currentObjective!['id'] as String,
+          difficulty: currentDifficulty,
+          isCorrect: isCorrect,
+        );
       }
     }
+
+    // Save AI response
+    if (_sessionId != null && cleanText.isNotEmpty) {
+      await _expertService.saveMessage(
+        sessionId: _sessionId!,
+        role: 'expert',
+        content: cleanText,
+        objectiveId: _currentObjective?['id'] as String?,
+      );
+    }
+
+    // Reload objectives to show updated mastery
+    await _loadObjectives();
+
+    // ✅ INCREMENT TRIAL USAGE AFTER SUCCESSFUL RESPONSE
+    // Only count if we got a real response (not an error)
+    if (cleanText.isNotEmpty && 
+        !cleanText.contains('Sorry, an error occurred')) {
+      await TrialUsageService().incrementUsage('expert_tutor_messages');
+      debugPrint('✅ Trial usage incremented for expert_tutor_messages');
+    }
+
+  } catch (e) {
+    if (mounted) {
+      setState(() {
+        _messages[streamingIndex]['content'] = 'Sorry, an error occurred. Please try again.';
+      });
+    }
+  } finally {
+    if (mounted) {
+      setState(() {
+        _isSending = false;
+        _isStreaming = false;
+        _streamingText = '';
+      });
+    }
   }
+}
 
   void _moveToNextObjective() {
   final currentIndex = _objectives.indexWhere(

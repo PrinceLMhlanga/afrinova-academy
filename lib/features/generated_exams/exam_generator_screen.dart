@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/auth_service.dart';
 import 'student_exam_taker_screen.dart';
+import '../../core/trial_usage_service.dart';
+import '../../widgets/trial_limit_dialog.dart';
+import '../premium/ai_subscription_screen.dart';
 
 class ExamGeneratorScreen extends StatefulWidget {
   const ExamGeneratorScreen({super.key});
@@ -25,11 +28,46 @@ class _ExamGeneratorScreenState extends State<ExamGeneratorScreen> {
   bool _isLoading = true;
   bool _isGenerating = false;
 
+  // ✅ Trial usage tracking
+int _trialRemaining = 0;
+int _trialLimit = 0;
+bool _isUnlimited = false;
+
   @override
-  void initState() {
-    super.initState();
-    _loadData();
+void initState() {
+  super.initState();
+  _loadData();
+  _loadTrialInfo();  // ✅ Add this
+}
+
+// ✅ Add this method
+Future<void> _loadTrialInfo() async {
+  try {
+    await TrialLimitsCache.load();
+    final examsLimit = TrialLimitsCache.exams();
+    
+    final check = await TrialUsageService().canUseFeature('exams_generated');
+    
+    if (!mounted) return;
+    
+    setState(() {
+      _isUnlimited = check.unlimited;
+      _trialLimit = examsLimit;
+      
+      if (check.unlimited) {
+        _trialRemaining = 999999;
+      } else if (check.remaining != null) {
+        _trialRemaining = check.remaining!;
+      } else if (check.used != null) {
+        _trialRemaining = (examsLimit - check.used!).clamp(0, examsLimit);
+      } else {
+        _trialRemaining = examsLimit;
+      }
+    });
+  } catch (e) {
+    debugPrint('Error loading trial info: $e');
   }
+}
 
   Future<void> _loadData() async {
     try {
@@ -84,6 +122,24 @@ class _ExamGeneratorScreenState extends State<ExamGeneratorScreen> {
 
   Future<void> _generateExam() async {
   if (_selectedSubjectId == null || _studentLevelId == null) return;
+
+  // ✅ CHECK TRIAL LIMIT
+  final trialCheck = await TrialUsageService().canUseFeature('exams_generated');
+  if (!trialCheck.allowed) {
+    if (mounted) {
+      final subscribed = await TrialLimitDialog.show(
+  context,
+  featureName: 'Exam Generator',
+  customMessage: trialCheck.message,
+);
+
+if (subscribed == true && mounted) {
+  await _loadTrialInfo();  // ✅ Refresh banner
+}
+return;
+    }
+    return;
+  }
 
   setState(() => _isGenerating = true);
 
@@ -235,19 +291,25 @@ class _ExamGeneratorScreenState extends State<ExamGeneratorScreen> {
 
     selectedQuestions.shuffle(Random());
 
-    if (mounted) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => StudentExamTakerScreen(
-            questions: selectedQuestions,
-            subjectName: _subjects.firstWhere((s) => s['id'] == _selectedSubjectId)['name'] ?? 'Exam',
-            totalQuestions: selectedQuestions.length,
-            timeMinutes: (selectedQuestions.length * 1.5).ceil(),
-          ),
-        ),
-      );
-    }
+// ✅ INCREMENT TRIAL USAGE (only if we actually have questions to show)
+if (selectedQuestions.isNotEmpty) {
+  await TrialUsageService().incrementUsage('exams_generated');
+  await _loadTrialInfo();  // Refresh trial display
+}
+
+if (mounted) {
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => StudentExamTakerScreen(
+        questions: selectedQuestions,
+        subjectName: _subjects.firstWhere((s) => s['id'] == _selectedSubjectId)['name'] ?? 'Exam',
+        totalQuestions: selectedQuestions.length,
+        timeMinutes: (selectedQuestions.length * 1.5).ceil(),
+      ),
+    ),
+  );
+}
   } catch (e) {
     debugPrint('Generation Error: $e');
   } finally {
@@ -304,30 +366,81 @@ void _pickQuestions(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // Header
-                  Container(
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [const Color(0xFF1A237E), const Color(0xFF1A237E).withOpacity(0.8)],
-                      ),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Column(
-                      children: [
-                        const Icon(Icons.auto_awesome, color: Colors.white, size: 40),
-                        const SizedBox(height: 12),
-                        const Text('Practice Exam Generator',
-                            style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 4),
-                        Text(
-                          _studentLevelName != null 
-                              ? 'Generating questions for $_studentLevelName'
-                              : 'Set your class level in My Account',
-                          style: const TextStyle(color: Colors.white70, fontSize: 13),
-                        ),
-                      ],
-                    ),
-                  ),
+Container(
+  padding: const EdgeInsets.all(20),
+  decoration: BoxDecoration(
+    gradient: LinearGradient(
+      colors: [const Color(0xFF1A237E), const Color(0xFF1A237E).withOpacity(0.8)],
+    ),
+    borderRadius: BorderRadius.circular(16),
+  ),
+  child: Column(
+    children: [
+      const Icon(Icons.auto_awesome, color: Colors.white, size: 40),
+      const SizedBox(height: 12),
+      const Text('Practice Exam Generator',
+          style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+      const SizedBox(height: 4),
+      Text(
+        _studentLevelName != null 
+            ? 'Generating questions for $_studentLevelName'
+            : 'Set your class level in My Account',
+        style: const TextStyle(color: Colors.white70, fontSize: 13),
+      ),
+    ],
+  ),
+),
+const SizedBox(height: 16),
+
+// ✅ TRIAL USAGE BANNER
+if (!_isUnlimited)
+  Container(
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: _trialRemaining <= 1
+          ? Colors.orange.withOpacity(0.1)
+          : const Color(0xFF1A237E).withOpacity(0.05),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(
+        color: _trialRemaining <= 1
+            ? Colors.orange.withOpacity(0.3)
+            : const Color(0xFF1A237E).withOpacity(0.1),
+      ),
+    ),
+    child: Row(
+      children: [
+        Icon(
+          _trialRemaining <= 1 ? Icons.warning_amber_rounded : Icons.info_outline,
+          color: _trialRemaining <= 1 ? Colors.orange : const Color(0xFF1A237E),
+          size: 20,
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Free Trial: $_trialRemaining of $_trialLimit exams remaining',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: _trialRemaining <= 1 ? Colors.orange : const Color(0xFF1A237E),
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                _trialRemaining <= 1
+                    ? 'Subscribe for unlimited practice exams!'
+                    : 'Trial exam credits never reset',
+                style: const TextStyle(fontSize: 11, color: Colors.grey),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  ),
+
                   const SizedBox(height: 24),
 
                   // Level (read-only)
@@ -433,23 +546,55 @@ void _pickQuestions(
 
                   // Generate button
                   SizedBox(
-                    width: double.infinity,
-                    height: 56,
-                    child: ElevatedButton.icon(
-                      onPressed: (_isGenerating || _studentLevelId == null) ? null : _generateExam,
-                      icon: _isGenerating
-                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                          : const Icon(Icons.auto_awesome),
-                      label: Text(_isGenerating ? 'Generating...' : 'Generate $_questionCount Questions'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF1A237E),
-                        foregroundColor: Colors.white,
-                        disabledBackgroundColor: Colors.grey.shade300,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                        textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  ),
+  width: double.infinity,
+  height: 56,
+  child: ElevatedButton.icon(
+    onPressed: (_isGenerating || _studentLevelId == null) ? null : _generateExam,
+    icon: _isGenerating
+        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+        : const Icon(Icons.auto_awesome),
+    label: Text(
+      _isGenerating 
+          ? 'Generating...' 
+          : 'Generate $_questionCount Questions',
+    ),
+    style: ElevatedButton.styleFrom(
+      backgroundColor: const Color(0xFF1A237E),
+      foregroundColor: Colors.white,
+      disabledBackgroundColor: Colors.grey.shade300,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+    ),
+  ),
+),
+
+// ✅ Subscribe CTA when trial is exhausted
+if (!_isUnlimited && _trialRemaining <= 0) ...[
+  const SizedBox(height: 12),
+  SizedBox(
+    width: double.infinity,
+    height: 48,
+    child: OutlinedButton.icon(
+      onPressed: () async {
+  final subscribed = await Navigator.push<bool>(
+    context,
+    MaterialPageRoute(builder: (_) => const AISubscriptionScreen()),
+  );
+  
+  if (subscribed == true && mounted) {
+    await _loadTrialInfo();  // Refresh
+  }
+},
+      icon: const Icon(Icons.diamond),
+      label: const Text('Subscribe for Unlimited Exams'),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: Colors.orange,
+        side: const BorderSide(color: Colors.orange),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    ),
+  ),
+],
 
                   const SizedBox(height: 8),
                   Center(

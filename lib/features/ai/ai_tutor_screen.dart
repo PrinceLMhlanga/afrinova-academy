@@ -11,6 +11,8 @@ import 'chat_sidebar.dart';
 import 'package:flutter_highlighter/flutter_highlighter.dart';
 import 'package:flutter_highlighter/themes/atom-one-dark.dart';
 import 'package:flutter/services.dart';
+import '../../core/trial_usage_service.dart';
+import '../../widgets/trial_limit_dialog.dart';
 
 class AITutorScreen extends StatefulWidget {
   final String? subjectName;
@@ -133,23 +135,42 @@ class _AITutorScreenState extends State<AITutorScreen>
   ));
 }
 
-  Future<void> _sendMessage() async {
+Future<void> _sendMessage() async {
   final text = _inputController.text.trim();
   if (text.isEmpty || _isLoading) return;
+
+  // ✅ CHECK TRIAL LIMIT BEFORE PROCESSING
+  final trialCheck = await TrialUsageService().canUseFeature('general_tutor_messages');
+  if (!trialCheck.allowed) {
+    if (mounted) {
+      final subscribed = await TrialLimitDialog.show(
+  context,
+  featureName: 'AI Tutor',
+  customMessage: trialCheck.message,
+);
+
+if (subscribed == true && mounted) {
+  // Optional: show confirmation snackbar
+  ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(content: Text('✅ Unlimited access activated!')),
+  );
+}
+return;
+    }
+    return;
+  }
 
   _inputController.clear();
   
   final streamController = ChatStreamController();
   
-  // 1. Create mutable reference index safely
   int? streamingIndex;
 
   setState(() {
     _messages.add(_ChatMessage(text: text, isUser: true));
     
-    // Create the loading placeholder bubble
     final placeholder = _ChatMessage(
-      text: 'Thinking...', // Non-empty initial text prevents layout collapse
+      text: 'Thinking...',
       isUser: false,
       isStreaming: true,
       streamController: streamController,
@@ -176,7 +197,6 @@ class _AITutorScreenState extends State<AITutorScreen>
       .map((m) => {'sender': m.isUser ? 'student' : 'ai', 'message': m.text})
       .toList();
 
-  // Limit history slice smoothly to avoid bloated payloads
   final trimmedHistory = history.length > 10 
       ? history.sublist(history.length - 10) 
       : history;
@@ -190,8 +210,6 @@ class _AITutorScreenState extends State<AITutorScreen>
 
     await for (final chunk in stream) {
       streamController.addChunk(chunk);
-      
-      // 2. Force the list view to accommodate changing text height
       if (mounted) {
         _scrollToBottom(); 
       }
@@ -218,7 +236,6 @@ class _AITutorScreenState extends State<AITutorScreen>
     
     streamController.closeStream();
     
-    // 3. Re-locate index safely and replace entirely to dodge immutability issues
     if (mounted) {
       final targetIndex = _messages.indexWhere((m) => m.streamController == streamController);
       if (targetIndex != -1) {
@@ -232,6 +249,14 @@ class _AITutorScreenState extends State<AITutorScreen>
         });
       }
       _scrollToBottom();
+    }
+
+    // ✅ INCREMENT TRIAL USAGE AFTER SUCCESSFUL RESPONSE
+    // Only increment if we got a real response (not an error)
+    if (streamController.fullText.isNotEmpty && 
+        !finalAiText.contains('Error generating response')) {
+      await TrialUsageService().incrementUsage('general_tutor_messages');
+      debugPrint('✅ Trial usage incremented for general_tutor_messages');
     }
   }
 }
