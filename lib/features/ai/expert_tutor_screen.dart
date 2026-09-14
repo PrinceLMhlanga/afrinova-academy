@@ -9,6 +9,8 @@ import '../../core/supabase_config.dart';
 import 'package:http/http.dart' as http;
 import '../../core/trial_usage_service.dart';
 import '../../widgets/trial_limit_dialog.dart';
+import 'package:image_picker/image_picker.dart';
+import 'dart:typed_data';
 
 class ExpertTutorScreen extends StatefulWidget {
   final String? topicId;
@@ -46,6 +48,13 @@ class _ExpertTutorScreenState extends State<ExpertTutorScreen> {
   List<Map<String, dynamic>> _messages = [];
   Map<String, dynamic>? _currentObjective;
   String _studentId = '';
+
+  // ✅ Pending image attachment
+String? _pendingImageUrl;      // public URL after upload
+bool _pendingImageUploading = false;
+double _pendingImageProgress = 0.0;
+String? _pendingImageLocalPath; // for preview
+bool _isSubmitting = false;     // lock for the send button
 
   // UI state
   bool _isLoading = true;
@@ -379,6 +388,109 @@ Future<void> _triggerTopicComplete() async {
   }
 }
 
+Future<void> _pickAttachment({required ImageSource source}) async {
+  if (_isSending || _isTeachingMode || _isSubmitting) return;
+  
+  try {
+    final picker = ImagePicker();
+    final XFile? image = await picker.pickImage(
+      source: source,
+      imageQuality: 75,
+      maxWidth: 1600,
+      maxHeight: 1600,
+    );
+    
+    if (image == null) return;
+    
+    // Show pending state in the input bar
+    setState(() {
+      _pendingImageLocalPath = image.path;
+      _pendingImageUploading = true;
+      _pendingImageProgress = 0.0;
+    });
+    
+    // Trial check
+    final trialCheck = await TrialUsageService().canUseFeature('expert_tutor_messages');
+    if (!trialCheck.allowed) {
+      if (mounted) {
+        setState(() {
+          _pendingImageLocalPath = null;
+          _pendingImageUploading = false;
+        });
+        final subscribed = await TrialLimitDialog.show(
+          context,
+          featureName: 'Expert Tutor',
+          customMessage: trialCheck.message ?? 'Trial limit reached.',
+        );
+        if (subscribed == true && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('✅ Unlimited access activated!'),
+              backgroundColor: Color(0xFF4CAF50),
+            ),
+          );
+        }
+      }
+      return;
+    }
+    
+    // Upload to Supabase Storage
+    final bytes = await image.readAsBytes();
+    final fileName = '${DateTime.now().millisecondsSinceEpoch}.jpg';
+    final path = '$_studentId/$_sessionId/$fileName';
+    
+    // Simulate progress since Supabase doesn't expose it directly
+    // For large files, we can fake progress with a timer
+    _simulateUploadProgress();
+    
+    await Supabase.instance.client.storage
+        .from('expert-tutor-answers')
+        .uploadBinary(path, bytes, fileOptions: const FileOptions(
+          contentType: 'image/jpeg',
+          upsert: false,
+        ));
+    
+    final imageUrl = Supabase.instance.client.storage
+        .from('expert-tutor-answers')
+        .getPublicUrl(path);
+    
+    if (mounted) {
+      setState(() {
+        _pendingImageUrl = imageUrl;
+        _pendingImageUploading = false;
+        _pendingImageProgress = 1.0;
+      });
+    }
+  } catch (e) {
+    debugPrint('❌ Error picking image: $e');
+    if (mounted) {
+      setState(() {
+        _pendingImageUrl = null;
+        _pendingImageLocalPath = null;
+        _pendingImageUploading = false;
+        _pendingImageProgress = 0.0;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+}
+
+// Simple fake progress simulation for UI feedback
+void _simulateUploadProgress() {
+  _pendingImageProgress = 0.0;
+  Timer.periodic(const Duration(milliseconds: 100), (timer) {
+    if (!mounted || !_pendingImageUploading) {
+      timer.cancel();
+      return;
+    }
+    setState(() {
+      _pendingImageProgress = (_pendingImageProgress + 0.1).clamp(0.0, 0.95);
+    });
+  });
+}
+
 // Stream teaching content
 Stream<String> _streamTeachingContent(String objectivesText, {bool isFirstBatch = false, String? masteredText}) async* {
   final client = http.Client();
@@ -565,53 +677,225 @@ Let's start! I'll explain the concept, then we'll practice together.
 ''';
   }
 
- // Send student message with streaming
-Future<void> _sendMessage() async {
-  // Don't allow sending in teaching mode
-  if (_isTeachingMode) return;
-  
-  final text = _inputController.text.trim();
-  if (text.isEmpty || _isSending) return;
+ // ✅ Shared logic — called after ANY stream (text or image) completes
+Future<void> _processAIResponse(int streamingIndex) async {
+  final finalText = _streamingText;
+  String cleanText = finalText;
+  bool alreadySaved = false;
 
-  // ✅ CHECK TRIAL LIMIT BEFORE PROCESSING
+  // TOPIC COMPLETE
+  if (finalText.contains('[TOPIC_COMPLETE]')) {
+    cleanText = cleanText
+        .replaceAll('[TOPIC_COMPLETE]', '')
+        .replaceAll('[OBJECTIVE_MASTERED]', '')
+        .replaceAll('[BATCH_COMPLETE]', '')
+        .trim();
+    _messages[streamingIndex]['content'] = cleanText;
+
+    if (_currentObjective != null && _studentId.isNotEmpty) {
+      await _expertService.markObjectiveMastered(
+        studentId: _studentId,
+        objectiveId: _currentObjective!['id'] as String,
+      );
+    }
+
+    final currentIndex = _objectives.indexWhere((o) => o['id'] == _currentObjective?['id']);
+    if (currentIndex != -1) {
+      _objectives[currentIndex]['is_mastered'] = true;
+    }
+
+    if (_sessionId != null && cleanText.isNotEmpty) {
+      await _expertService.saveMessage(
+        sessionId: _sessionId!,
+        role: 'expert',
+        content: cleanText,
+        objectiveId: _currentObjective?['id'] as String?,
+      );
+      alreadySaved = true;
+    }
+
+    await _loadTopicMCQs();
+  }
+  // BATCH COMPLETE
+  else if (finalText.contains('[BATCH_COMPLETE]')) {
+    cleanText = cleanText
+        .replaceAll('[BATCH_COMPLETE]', '')
+        .replaceAll('[OBJECTIVE_MASTERED]', '')
+        .trim();
+    _messages[streamingIndex]['content'] = cleanText;
+
+    if (_currentObjective != null && _studentId.isNotEmpty) {
+      await _expertService.markObjectiveMastered(
+        studentId: _studentId,
+        objectiveId: _currentObjective!['id'] as String,
+      );
+    }
+
+    final currentIndex = _objectives.indexWhere((o) => o['id'] == _currentObjective?['id']);
+    if (currentIndex != -1) {
+      _objectives[currentIndex]['is_mastered'] = true;
+    }
+
+    // ✅ Save assessor message BEFORE teaching starts
+    if (_sessionId != null && cleanText.isNotEmpty) {
+      await _expertService.saveMessage(
+        sessionId: _sessionId!,
+        role: 'expert',
+        content: cleanText,
+        objectiveId: _currentObjective?['id'] as String?,
+      );
+      alreadySaved = true;
+    }
+
+    // Advance objective
+    Map<String, dynamic>? nextObjective;
+    for (int i = currentIndex + 1; i < _objectives.length; i++) {
+      if (_objectives[i]['is_mastered'] != true) {
+        nextObjective = _objectives[i];
+        break;
+      }
+    }
+    if (nextObjective != null) _currentObjective = nextObjective;
+
+    await _startNewTeachingBatch();
+  }
+  // OBJECTIVE MASTERED
+  else if (finalText.contains('[OBJECTIVE_MASTERED]')) {
+    cleanText = cleanText.replaceAll('[OBJECTIVE_MASTERED]', '').trim();
+    _messages[streamingIndex]['content'] = cleanText;
+
+    if (_currentObjective != null && _studentId.isNotEmpty) {
+      await _expertService.markObjectiveMastered(
+        studentId: _studentId,
+        objectiveId: _currentObjective!['id'] as String,
+      );
+    }
+
+    if (_sessionId != null && cleanText.isNotEmpty) {
+      await _expertService.saveMessage(
+        sessionId: _sessionId!,
+        role: 'expert',
+        content: cleanText,
+        objectiveId: _currentObjective?['id'] as String?,
+      );
+      alreadySaved = true;
+    }
+
+    _moveToNextObjective();
+  }
+  // NORMAL RESPONSE
+  else {
+    final isCorrect = _isAnswerCorrect(finalText);
+    final currentDifficulty = _getCurrentDifficulty();
+
+    if (_currentObjective != null && _studentId.isNotEmpty) {
+      await _expertService.updateProgress(
+        studentId: _studentId,
+        objectiveId: _currentObjective!['id'] as String,
+        difficulty: currentDifficulty,
+        isCorrect: isCorrect,
+      );
+    }
+
+    if (_sessionId != null && cleanText.isNotEmpty) {
+      await _expertService.saveMessage(
+        sessionId: _sessionId!,
+        role: 'expert',
+        content: cleanText,
+        objectiveId: _currentObjective?['id'] as String?,
+      );
+      alreadySaved = true;
+    }
+
+    // Increment trial usage
+    if (cleanText.isNotEmpty && !cleanText.contains('Sorry, an error occurred')) {
+      await TrialUsageService().incrementUsage('expert_tutor_messages');
+    }
+  }
+
+  // Fallback save
+  if (!alreadySaved && _sessionId != null && cleanText.isNotEmpty) {
+    await _expertService.saveMessage(
+      sessionId: _sessionId!,
+      role: 'expert',
+      content: cleanText,
+      objectiveId: _currentObjective?['id'] as String?,
+    );
+  }
+
+  await _loadObjectives();
+}
+Future<void> _submitMessage() async {
+  if (_isTeachingMode) return;
+  if (_isSubmitting || _isSending) return;
+  if (_pendingImageUploading) return; // Wait for upload
+
+  final text = _inputController.text.trim();
+  final hasImage = _pendingImageUrl != null;
+  
+  // Need at least text or image
+  if (text.isEmpty && !hasImage) return;
+
+  // ✅ Lock immediately to prevent double-send
+  setState(() => _isSubmitting = true);
+
+  // Trial check (only if sending content)
   final trialCheck = await TrialUsageService().canUseFeature('expert_tutor_messages');
   if (!trialCheck.allowed) {
     if (mounted) {
-      await TrialLimitDialog.show(
+      setState(() => _isSubmitting = false);
+      final subscribed = await TrialLimitDialog.show(
         context,
         featureName: 'Expert Tutor',
-        customMessage: trialCheck.message ?? 
-          'You have used your free trial messages for the Expert Tutor. Subscribe to continue learning this topic.',
+        customMessage: trialCheck.message ?? 'Trial limit reached.',
       );
+      if (subscribed == true && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ Unlimited access activated!'),
+            backgroundColor: Color(0xFF4CAF50),
+          ),
+        );
+      }
     }
     return;
   }
 
+  // Capture values before clearing
+  final imageUrlToSend = _pendingImageUrl;
+  final textToSend = text;
+
+  // Clear input + pending attachment
   _inputController.clear();
   
-  // Add student message to chat
   setState(() {
     _messages.add({
       'role': 'student',
-      'content': text,
-      'message_type': 'text',
+      'content': textToSend.isNotEmpty ? textToSend : '[Handwritten answer]',
+      'message_type': hasImage ? 'image' : 'text',
+      'image_url': imageUrlToSend,
       'created_at': DateTime.now().toIso8601String(),
     });
+    _pendingImageUrl = null;
+    _pendingImageLocalPath = null;
+    _pendingImageProgress = 0.0;
     _isSending = true;
     _isStreaming = true;
     _streamingText = '';
   });
 
-  // Save student message to database
+  // Save student message to DB
   if (_sessionId != null) {
     await _expertService.saveMessage(
       sessionId: _sessionId!,
       role: 'student',
-      content: text,
+      content: textToSend.isNotEmpty ? textToSend : '[Handwritten answer]',
+      messageType: hasImage ? 'image' : 'text',
+      imageUrl: imageUrlToSend,
     );
   }
 
-  // Add a placeholder for AI response (will stream into this)
+  // Add streaming placeholder for AI response
   final streamingIndex = _messages.length;
   setState(() {
     _messages.add({
@@ -625,12 +909,18 @@ Future<void> _sendMessage() async {
   _scrollToBottom();
 
   try {
-    // Stream AI response
-    final stream = _streamExpertResponse(
-      sessionId: _sessionId!,
-      message: text,
-      currentObjectiveId: _currentObjective?['id'] as String?,
-    );
+    // Stream response — image or text
+    final stream = hasImage
+        ? _streamExpertResponseWithImage(
+            sessionId: _sessionId!,
+            imageUrl: imageUrlToSend!,
+            currentObjectiveId: _currentObjective?['id'] as String?,
+          )
+        : _streamExpertResponse(
+            sessionId: _sessionId!,
+            message: textToSend,
+            currentObjectiveId: _currentObjective?['id'] as String?,
+          );
 
     await for (final chunk in stream) {
       if (mounted) {
@@ -642,129 +932,20 @@ Future<void> _sendMessage() async {
       }
     }
 
-    // Get the full AI response
-    final finalText = _streamingText;
-    String cleanText = finalText;
-
-    // TOPIC COMPLETE
-    if (finalText.contains('[TOPIC_COMPLETE]')) {
-      cleanText = cleanText
-          .replaceAll('[TOPIC_COMPLETE]', '')
-          .replaceAll('[OBJECTIVE_MASTERED]', '')
-          .replaceAll('[BATCH_COMPLETE]', '')
-          .trim();
-      _messages[streamingIndex]['content'] = cleanText;
-
-      if (_currentObjective != null && _studentId.isNotEmpty) {
-        await _expertService.markObjectiveMastered(
-          studentId: _studentId,
-          objectiveId: _currentObjective!['id'] as String,
-        );
-      }
-
-      await _loadTopicMCQs();
-    }
-    // BATCH COMPLETE
-    else if (finalText.contains('[BATCH_COMPLETE]')) {
-      cleanText = cleanText
-          .replaceAll('[BATCH_COMPLETE]', '')
-          .replaceAll('[OBJECTIVE_MASTERED]', '')
-          .trim();
-      _messages[streamingIndex]['content'] = cleanText;
-
-      // Mark current objective as mastered in DB
-      if (_currentObjective != null && _studentId.isNotEmpty) {
-        await _expertService.markObjectiveMastered(
-          studentId: _studentId,
-          objectiveId: _currentObjective!['id'] as String,
-        );
-      }
-
-      // Mark in local state
-      final currentIndex = _objectives
-          .indexWhere((o) => o['id'] == _currentObjective?['id']);
-      if (currentIndex != -1) {
-        _objectives[currentIndex]['is_mastered'] = true;
-      }
-
-      // ✅ CRITICAL FIX: Advance _currentObjective to the next non-mastered one
-      Map<String, dynamic>? nextObjective;
-      for (int i = currentIndex + 1; i < _objectives.length; i++) {
-        if (_objectives[i]['is_mastered'] != true) {
-          nextObjective = _objectives[i];
-          break;
-        }
-      }
-      
-      if (nextObjective != null) {
-        _currentObjective = nextObjective;
-        debugPrint('✅ Advanced current objective to: ${nextObjective['objective_text']}');
-      }
-
-      // ✅ Switch to teaching mode for next batch
-      await _startNewTeachingBatch();
-    }
-    // OBJECTIVE MASTERED - Move to next objective
-    else if (finalText.contains('[OBJECTIVE_MASTERED]')) {
-      cleanText = cleanText.replaceAll('[OBJECTIVE_MASTERED]', '').trim();
-      _messages[streamingIndex]['content'] = cleanText;
-
-      if (_currentObjective != null && _studentId.isNotEmpty) {
-        await _expertService.markObjectiveMastered(
-          studentId: _studentId,
-          objectiveId: _currentObjective!['id'] as String,
-        );
-      }
-
-      _moveToNextObjective();
-    }
-    // Normal response
-    else {
-      final isCorrect = _isAnswerCorrect(finalText);
-      final currentDifficulty = _getCurrentDifficulty();
-
-      if (_currentObjective != null && _studentId.isNotEmpty) {
-        await _expertService.updateProgress(
-          studentId: _studentId,
-          objectiveId: _currentObjective!['id'] as String,
-          difficulty: currentDifficulty,
-          isCorrect: isCorrect,
-        );
-      }
-    }
-
-    // Save AI response
-    if (_sessionId != null && cleanText.isNotEmpty) {
-      await _expertService.saveMessage(
-        sessionId: _sessionId!,
-        role: 'expert',
-        content: cleanText,
-        objectiveId: _currentObjective?['id'] as String?,
-      );
-    }
-
-    // Reload objectives to show updated mastery
-    await _loadObjectives();
-
-    // ✅ INCREMENT TRIAL USAGE AFTER SUCCESSFUL RESPONSE
-    // Only count if we got a real response (not an error)
-    if (cleanText.isNotEmpty && 
-        !cleanText.contains('Sorry, an error occurred')) {
-      await TrialUsageService().incrementUsage('expert_tutor_messages');
-      debugPrint('✅ Trial usage incremented for expert_tutor_messages');
-    }
-
+    await _processAIResponse(streamingIndex);
   } catch (e) {
     if (mounted) {
       setState(() {
-        _messages[streamingIndex]['content'] = 'Sorry, an error occurred. Please try again.';
+        _messages[streamingIndex]['content'] = 'Sorry, an error occurred.';
       });
     }
+    debugPrint('❌ Error: $e');
   } finally {
     if (mounted) {
       setState(() {
         _isSending = false;
         _isStreaming = false;
+        _isSubmitting = false;
         _streamingText = '';
       });
     }
@@ -1024,6 +1205,204 @@ Future<void> _sendMessage() async {
     }
   }
 
+  Stream<String> _streamExpertResponseWithImage({
+  required String sessionId,
+  required String imageUrl,
+  String? currentObjectiveId,
+}) async* {
+  final client = http.Client();
+
+  try {
+    final request = http.StreamedRequest(
+      'POST',
+      Uri.parse('${SupabaseConfig.url}/functions/v1/expert-tutor'),
+    );
+    
+    request.headers.addAll({
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ${SupabaseConfig.anonKey}',
+      'Accept': 'text/event-stream',
+    });
+
+    final payload = jsonEncode({
+      'action': 'expert_chat',
+      'sessionId': sessionId,
+      'message': '[Handwritten answer uploaded]',
+      'image_url': imageUrl,
+      'has_image': true,
+      'currentObjectiveId': currentObjectiveId,
+      'studentId': _studentId,
+    });
+
+    request.sink.add(utf8.encode(payload));
+    request.sink.close();
+
+    final response = await client.send(request);
+    if (response.statusCode != 200) {
+      yield 'Error: Failed to connect';
+      return;
+    }
+
+    final stream = response.stream
+        .transform(utf8.decoder)
+        .transform(const LineSplitter());
+
+    await for (final line in stream) {
+      final trimmedLine = line.trim();
+      if (trimmedLine.isEmpty) continue;
+
+      if (trimmedLine.startsWith('data: ')) {
+        final rawData = trimmedLine.substring(6).trim();
+        if (rawData == '[DONE]') break;
+
+        try {
+          final parsed = jsonDecode(rawData);
+          if (parsed is Map && parsed.containsKey('meta')) continue;
+          if (parsed is Map && parsed.containsKey('text')) {
+            final text = parsed['text'] as String;
+            if (text.isNotEmpty) yield text;
+          }
+        } catch (_) {}
+      }
+    }
+  } catch (e) {
+    debugPrint('Image stream error: $e');
+    yield 'Connection error.';
+  } finally {
+    client.close();
+  }
+}
+
+// ✅ Show attachment options (Camera / Gallery)
+Future<void> _showAttachmentSheet() async {
+  final choice = await showModalBottomSheet<String>(
+    context: context,
+    backgroundColor: Colors.white,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    ),
+    builder: (ctx) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Handle bar
+            Container(
+              width: 40,
+              height: 4,
+              margin: const EdgeInsets.only(bottom: 16),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            
+            const Text(
+              'Add a photo of your answer',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF1A237E),
+              ),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Show your working — the tutor will grade your handwriting',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 20),
+
+            // Camera option
+            ListTile(
+              leading: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1A237E).withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(
+                  Icons.camera_alt_rounded,
+                  color: Color(0xFF1A237E),
+                  size: 24,
+                ),
+              ),
+              title: const Text(
+                'Take a photo',
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+              ),
+              subtitle: const Text(
+                'Opens your camera',
+                style: TextStyle(fontSize: 12),
+              ),
+              onTap: () => Navigator.pop(ctx, 'camera'),
+            ),
+
+            // Gallery option
+            ListTile(
+              leading: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.purple.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(
+                  Icons.photo_library_rounded,
+                  color: Colors.purple,
+                  size: 24,
+                ),
+              ),
+              title: const Text(
+                'Choose from gallery',
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+              ),
+              subtitle: const Text(
+                'Pick an existing photo',
+                style: TextStyle(fontSize: 12),
+              ),
+              onTap: () => Navigator.pop(ctx, 'gallery'),
+            ),
+
+            const SizedBox(height: 8),
+
+            // Cancel button
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  style: TextButton.styleFrom(
+                    backgroundColor: Colors.grey.shade100,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text(
+                    'Cancel',
+                    style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  // Handle the choice
+  if (choice == 'camera') {
+  await _pickAttachment(source: ImageSource.camera);
+} else if (choice == 'gallery') {
+  await _pickAttachment(source: ImageSource.gallery);
+}
+}
+
+
+
   // When objective is mastered
  void _onObjectiveMastered() {
   final currentIndex = _objectives.indexWhere((obj) => obj['id'] == _currentObjective?['id']);
@@ -1227,66 +1606,195 @@ Widget build(BuildContext context) {
     );
   }
 
-  Widget _buildInputBar() {
-    if (_isTeachingMode) {
+Widget _buildInputBar() {
+  if (_isTeachingMode) {
     return const SizedBox.shrink();
   }
-    final hasText = _inputController.text.trim().isNotEmpty;
+  
+  final hasText = _inputController.text.trim().isNotEmpty;
+  final hasImage = _pendingImageUrl != null || _pendingImageLocalPath != null;
+  final canSend = (hasText || hasImage) 
+      && !_isSending 
+      && !_isSubmitting 
+      && !_pendingImageUploading;
 
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border(top: BorderSide(color: Colors.grey.shade100)),
-      ),
-      child: SafeArea(
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Expanded(
-              child: Container(
-                constraints: const BoxConstraints(maxHeight: 120),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade50,
-                  borderRadius: BorderRadius.circular(28),
-                  border: Border.all(color: Colors.grey.shade200),
-                ),
-                child: TextField(
-                  controller: _inputController,
-                  maxLines: 5,
-                  minLines: 1,
-                  decoration: const InputDecoration(
-                    hintText: 'Type your answer...',
-                    border: InputBorder.none,
-                    contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+  return Container(
+    padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      border: Border(top: BorderSide(color: Colors.grey.shade100)),
+    ),
+    child: SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ✅ Image preview ABOVE the input bar
+          if (hasImage) _buildImagePreview(),
+          
+          // The pill-shaped input bar
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(color: Colors.grey.shade200),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                // Plus button
+                MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: IconButton(
+                    onPressed: (_isSending || _isSubmitting || _pendingImageUploading) 
+                        ? null 
+                        : _showAttachmentSheet,
+                    icon: Icon(
+                      Icons.add_rounded,
+                      color: (_isSending || _isSubmitting || _pendingImageUploading) 
+                          ? Colors.grey.shade400 
+                          : Colors.black87,
+                      size: 24,
+                    ),
+                    splashRadius: 20,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                    tooltip: 'Attach',
                   ),
-                  onChanged: (_) => setState(() {}),
                 ),
-              ),
-            ),
-            const SizedBox(width: 10),
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              width: 46,
-              height: 46,
-              decoration: BoxDecoration(
-                color: hasText ? const Color(0xFF1A237E) : Colors.grey.shade300,
-                shape: BoxShape.circle,
-              ),
-              child: IconButton(
-                onPressed: hasText && !_isSending ? _sendMessage : null,
-                icon: Icon(
-                  Icons.arrow_upward_rounded,
-                  color: hasText ? Colors.white : Colors.grey,
-                  size: 22,
+                
+                // Text input
+                Expanded(
+                  child: TextField(
+                    controller: _inputController,
+                    maxLines: 5,
+                    minLines: 1,
+                    enabled: !_isSending && !_isSubmitting,
+                    style: const TextStyle(fontSize: 15, color: Colors.black87),
+                    decoration: const InputDecoration(
+                      hintText: 'Ask anything',
+                      hintStyle: TextStyle(color: Colors.grey, fontSize: 15),
+                      border: InputBorder.none,
+                      contentPadding: EdgeInsets.symmetric(vertical: 12),
+                      isDense: true,
+                    ),
+                    onChanged: (_) => setState(() {}),
+                  ),
                 ),
-              ),
+                
+                // Send button with loading state
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: canSend ? const Color(0xFF1A237E) : Colors.grey.shade300,
+                    shape: BoxShape.circle,
+                  ),
+                  child: _isSubmitting || _isSending
+                      // ✅ Loading spinner during send
+                      ? Padding(
+                          padding: const EdgeInsets.all(10),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.5,
+                            valueColor: const AlwaysStoppedAnimation(Colors.white),
+                          ),
+                        )
+                      : IconButton(
+                          onPressed: canSend ? _submitMessage : null,
+                          padding: EdgeInsets.zero,
+                          icon: Icon(
+                            Icons.arrow_upward_rounded,
+                            color: canSend ? Colors.white : Colors.grey.shade500,
+                            size: 20,
+                          ),
+                        ),
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
-    );
-  }
+    ),
+  );
+}
+
+Widget _buildImagePreview() {
+  return Container(
+    margin: const EdgeInsets.only(bottom: 8),
+    alignment: Alignment.centerLeft,
+    child: Stack(
+      children: [
+        // Thumbnail
+        Container(
+          width: 80,
+          height: 80,
+          decoration: BoxDecoration(
+            color: Colors.grey.shade200,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.grey.shade300),
+            image: _pendingImageUrl != null
+                ? DecorationImage(
+                    image: NetworkImage(_pendingImageUrl!),
+                    fit: BoxFit.cover,
+                  )
+                : null,
+          ),
+          child: _pendingImageUploading
+              // ✅ Loading overlay while uploading
+              ? Container(
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.4),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Center(
+                    child: SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.5,
+                        value: _pendingImageProgress > 0 ? _pendingImageProgress : null,
+                        valueColor: const AlwaysStoppedAnimation(Colors.white),
+                      ),
+                    ),
+                  ),
+                )
+              : null,
+        ),
+        
+        // Remove (X) button
+        Positioned(
+          top: -6,
+          right: -6,
+          child: GestureDetector(
+            onTap: () {
+              setState(() {
+                _pendingImageUrl = null;
+                _pendingImageLocalPath = null;
+                _pendingImageUploading = false;
+                _pendingImageProgress = 0.0;
+              });
+            },
+            child: Container(
+              width: 22,
+              height: 22,
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.8),
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 2),
+              ),
+              child: const Icon(
+                Icons.close,
+                size: 12,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
 }
 
 // Expert message bubble
@@ -1299,6 +1807,11 @@ class _ExpertMessageBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final isExpert = message['role'] == 'expert';
     final content = message['content'] as String? ?? '';
+    final imageUrl = message['image_url'] as String?;
+    
+    // Don't show the placeholder text if there's an image
+    final showText = content.isNotEmpty 
+        && content != '[Handwritten answer]';
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
@@ -1308,8 +1821,7 @@ class _ExpertMessageBubble extends StatelessWidget {
         children: [
           if (isExpert) ...[
             Container(
-              width: 34,
-              height: 34,
+              width: 34, height: 34,
               decoration: BoxDecoration(
                 gradient: const LinearGradient(
                   colors: [Color(0xFF1A237E), Color(0xFFFF9800)],
@@ -1327,21 +1839,54 @@ class _ExpertMessageBubble extends StatelessWidget {
                 color: isExpert ? Colors.grey.shade50 : const Color(0xFF1A237E),
                 borderRadius: BorderRadius.circular(16),
               ),
-              child: content.isEmpty && isExpert
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Image preview
+                  if (imageUrl != null && imageUrl.isNotEmpty) ...[
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.network(
+                        imageUrl,
+                        width: 220,
+                        fit: BoxFit.cover,
+                        loadingBuilder: (context, child, progress) {
+                          if (progress == null) return child;
+                          return Container(
+                            width: 220, height: 150,
+                            color: Colors.grey.shade200,
+                            child: const Center(
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          );
+                        },
+                        errorBuilder: (c, e, s) => Container(
+                          width: 220, height: 100,
+                          color: Colors.grey.shade200,
+                          child: const Icon(Icons.broken_image, color: Colors.grey),
+                        ),
+                      ),
+                    ),
+                    if (showText) const SizedBox(height: 8),
+                  ],
+                  
+                  // Text content (or loading)
+                  if (content.isEmpty && isExpert)
+                    const SizedBox(
+                      width: 20, height: 20,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
-                  : GptMarkdown(
+                  else if (showText)
+                    GptMarkdown(
                       content,
                       useDollarSignsForLatex: true,
                       style: TextStyle(
-                        fontSize: 15,
-                        height: 1.6,
+                        fontSize: 15, height: 1.6,
                         color: isExpert ? const Color(0xFF1E1E1E) : Colors.white,
                       ),
                     ),
+                ],
+              ),
             ),
           ),
         ],

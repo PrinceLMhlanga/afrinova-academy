@@ -248,22 +248,24 @@ Future<void> markObjectiveMastered({
   }
 
   Future<void> saveMessage({
-    required String sessionId,
-    required String role,
-    required String content,
-    String? messageType,
-    String? objectiveId,
-    String? questionId,
-  }) async {
-    await _client.from('expert_tutor_messages').insert({
-      'session_id': sessionId,
-      'role': role,
-      'content': content,
-      'message_type': messageType ?? 'text',
-      'objective_id': objectiveId,
-      'question_id': questionId,
-    });
-  }
+  required String sessionId,
+  required String role,
+  required String content,
+  String? messageType,
+  String? objectiveId,
+  String? questionId,
+  String? imageUrl,  // ✅ new
+}) async {
+  await _client.from('expert_tutor_messages').insert({
+    'session_id': sessionId,
+    'role': role,
+    'content': content,
+    'message_type': messageType ?? 'text',
+    'objective_id': objectiveId,
+    'question_id': questionId,
+    'image_url': imageUrl,  // ✅ new
+  });
+}
 
   // ==========================================
   // EXERCISES (existing)

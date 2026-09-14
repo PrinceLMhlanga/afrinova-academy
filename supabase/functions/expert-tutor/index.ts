@@ -109,8 +109,8 @@ Deno.serve(async (req) => {
 // 1. EXPERT CHAT
 // ==========================================
 async function handleExpertChat(body: any, corsHeaders: Record<string, string>) {
-  const { sessionId, message, currentObjectiveId, studentId } = body;
-  console.log(`🔵 Expert chat stream request for session: ${sessionId}`);
+  const { sessionId, message, currentObjectiveId, studentId, image_url, has_image } = body;
+  console.log(`🔵 Expert chat stream request for session: ${sessionId}, has_image: ${has_image}`);
 
   // Get session details
   const { data: session } = await supabase
@@ -199,9 +199,57 @@ async function handleExpertChat(body: any, corsHeaders: Record<string, string>) 
     Math.floor((currentIdx) / 5) * 5 + 5
   );
 
+  // ✅ Pre-fetch image and convert to base64
+let base64Image = "";
+if (has_image && image_url) {
+  try {
+    console.log('📸 Fetching image from Supabase Storage:', image_url);
+    const imageResponse = await fetch(image_url);
+    
+    if (!imageResponse.ok) {
+      throw new Error(`HTTP ${imageResponse.status}: Could not download image`);
+    }
+    
+    const arrayBuffer = await imageResponse.arrayBuffer();
+    const imageBytes = new Uint8Array(arrayBuffer);
+    console.log('📸 Image downloaded. Size:', imageBytes.length, 'bytes');
+    
+    // Convert to base64 (chunked to avoid stack overflow on large images)
+    let binary = '';
+    const chunkSize = 8192;
+    for (let i = 0; i < imageBytes.length; i += chunkSize) {
+      const chunk = imageBytes.subarray(i, i + chunkSize);
+      binary += String.fromCharCode.apply(null, Array.from(chunk));
+    }
+    base64Image = btoa(binary);
+    
+    console.log('📸 Base64 encoded. Length:', base64Image.length);
+  } catch (fetchErr: any) {
+    console.error("🔴 Error fetching image for Gemini:", fetchErr.message);
+    return new Response(
+      JSON.stringify({ error: `Image processing failed: ${fetchErr.message}` }),
+      {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      }
+    );
+  }
+}
+
   const systemPrompt = `You are the AfriNova Expert Tutor, a warm and practical ZIMSEC/Cambridge teacher.
 
 You are currently in ASSESSMENT MODE for the topic "${session.topics?.name}".
+
+${has_image ? `⚠️ IMAGE SUBMITTED: The student has uploaded a photo of their handwritten answer. You MUST:
+1. Carefully read the handwriting in the image
+2. Transcribe what they wrote (mentally, for your grading)
+3. Grade the answer against the question requirements
+4. Give specific feedback referencing what they actually wrote
+5. Identify mistakes, missing steps, or incorrect working
+6. If the answer is correct, follow the standard mastery flow
+7. If incorrect, give a specific hint about what went wrong
+
+DO NOT IGNORE THE IMAGE. Grade based on what is actually shown.` : ''}
 
 CURRENT CONTEXT:
 - Subject: ${session.subjects?.name || 'Unknown'}
@@ -366,41 +414,61 @@ RESPOND AS PLAIN TEXT (markdown expected).`;
 
   const contents: any[] = [];
 
-  contents.push({
-    role: "user",
-    parts: [{ text: systemPrompt }],
-  });
+// System prompt
+contents.push({
+  role: "user",
+  parts: [{ text: systemPrompt }],
+});
 
-  contents.push({
-    role: "model",
-    parts: [{ text: "I understand. I'll track progress, handle batch transitions correctly, and always include the marker when an objective is mastered." }],
-  });
+contents.push({
+  role: "model",
+  parts: [{ text: "I understand." }],
+});
 
-  // Add conversation history
-  if (orderedHistory.length > 0) {
-    for (const msg of orderedHistory.slice(-10)) {
-      if (msg.role === 'student') {
-        contents.push({
-          role: "user",
-          parts: [{ text: msg.content }],
-        });
-      } else if (msg.role === 'expert' && msg.content) {
-        contents.push({
-          role: "model",
-          parts: [{ text: msg.content }],
-        });
-      }
+// Conversation history
+if (orderedHistory.length > 0) {
+  for (const msg of orderedHistory.slice(-10)) {
+    if (msg.role === 'student') {
+      contents.push({
+        role: "user",
+        parts: [{ text: msg.content }],
+      });
+    } else if (msg.role === 'expert' && msg.content) {
+      contents.push({
+        role: "model",
+        parts: [{ text: msg.content }],
+      });
     }
   }
+}
 
-  // Add current student message
+// ✅ Current message — with image if present
+// ✅ Current message — with image if present
+if (has_image && base64Image) {
+  contents.push({
+    role: "user",
+    parts: [
+      { text: "Here is my handwritten answer. Please read the handwriting carefully and grade it." },
+      { 
+        inlineData: { 
+          data: base64Image,
+          mimeType: 'image/jpeg',
+        } 
+      },
+    ],
+  });
+} else {
   contents.push({
     role: "user",
     parts: [{ text: `Student's answer: ${message}` }],
   });
+}
 
   // Model chain
-  const modelChain = ["gemini-2.5-flash", "gemini-3.5-flash-lite", "gemini-3.6-flash"];
+ // ✅ When image present, prioritize vision-strong models
+const modelChain = has_image 
+  ? ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-3.5-flash"]
+  : ["gemini-2.5-flash", "gemini-3.5-flash-lite", "gemini-3.6-flash"];
   let responseStream: any = null;
   let activeModelUsed = "";
 
