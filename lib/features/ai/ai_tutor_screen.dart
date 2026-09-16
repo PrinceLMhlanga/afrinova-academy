@@ -13,6 +13,7 @@ import 'package:flutter_highlighter/themes/atom-one-dark.dart';
 import 'package:flutter/services.dart';
 import '../../core/trial_usage_service.dart';
 import '../../widgets/trial_limit_dialog.dart';
+import '../../widgets/ai_markdown.dart';
 
 class AITutorScreen extends StatefulWidget {
   final String? subjectName;
@@ -877,104 +878,21 @@ class _MessageBubble extends StatelessWidget {
                 )
               // AI message - left aligned within max-width, large font
               : message.isStreaming && message.streamController != null
-    ? StreamBuilder<String>(
-        stream: message.streamController!.textStream,
-        initialData: message.text, // Starts with 'Thinking...' baseline placeholder
-        builder: (context, snapshot) {
-          final text = snapshot.data ?? '';
-          
-          if (text == 'Thinking...' || text.isEmpty) {
-            return const PremiumTypingIndicator();
-          }
-
-          return // Apply this signature fix to BOTH GptMarkdown instances:
-GptMarkdown(
-  text,
-  useDollarSignsForLatex: true,
-  style: const TextStyle(fontSize: 17, height: 1.7, color: Color(0xFF1E1E1E)),
-  
-  codeBuilder: (context, name, code, closed) {
-    return _buildSyntaxHighlighter(name, code);
+    ? // Streaming case:
+StreamBuilder<String>(
+  stream: message.streamController!.textStream,
+  initialData: message.text,
+  builder: (context, snapshot) {
+    final text = snapshot.data ?? '';
+    if (text == 'Thinking...' || text.isEmpty) {
+      return const PremiumTypingIndicator();
+    }
+    return AiMarkdown(text: text);  // ✅ Single line!
   },
+)
 
-  // Apply this update to BOTH GptMarkdown instances:
-latexBuilder: (context, texString, textStyle, isInline) {
-  // ✅ FIX: Instead of returning null, return a simple inline GptMarkdown widget
-  if (isInline) {
-    return GptMarkdown(
-      '\$$texString\$',
-      useDollarSignsForLatex: true,
-      style: textStyle ?? const TextStyle(fontSize: 17, color: Color(0xFF1E1E1E)),
-    );
-  }
-
-  // If it's a big block equation ($$ ... $$), wrap it in a side-scrollable canvas box
-  return Container(
-    width: double.infinity,
-    margin: const EdgeInsets.symmetric(vertical: 12.0),
-    padding: const EdgeInsets.symmetric(vertical: 14.0, horizontal: 12.0),
-    decoration: BoxDecoration(
-      color: const Color(0xFFF8F9FA), 
-      borderRadius: BorderRadius.circular(8),
-      border: Border.all(color: const Color(0xFFE0E0E0)),
-    ),
-    child: SingleChildScrollView(
-      scrollDirection: Axis.horizontal, // Enables horizontal scrolling for mobile devices
-      physics: const BouncingScrollPhysics(),
-      child: GptMarkdown(
-        '\$\$${texString}\$\$', 
-        useDollarSignsForLatex: true,
-        style: textStyle ?? const TextStyle(fontSize: 17, color: Color(0xFF1E1E1E)),
-      ),
-    ),
-  );
-},
-
-);
-
-        },
-      )
-    : GptMarkdown(
-        message.text,
-        useDollarSignsForLatex: true,
-        style: const TextStyle(fontSize: 17, height: 1.7, color: Color(0xFF1E1E1E)),
-        codeBuilder: (context, name, code, closed) {
-          return _buildSyntaxHighlighter(name, code);
-        },
-        // Apply this update to BOTH GptMarkdown instances:
-latexBuilder: (context, texString, textStyle, isInline) {
-  // ✅ FIX: Instead of returning null, return a simple inline GptMarkdown widget
-  if (isInline) {
-    return GptMarkdown(
-      '\$$texString\$',
-      useDollarSignsForLatex: true,
-      style: textStyle ?? const TextStyle(fontSize: 17, color: Color(0xFF1E1E1E)),
-    );
-  }
-
-  // If it's a big block equation ($$ ... $$), wrap it in a side-scrollable canvas box
-  return Container(
-    width: double.infinity,
-    margin: const EdgeInsets.symmetric(vertical: 12.0),
-    padding: const EdgeInsets.symmetric(vertical: 14.0, horizontal: 12.0),
-    decoration: BoxDecoration(
-      color: const Color(0xFFF8F9FA), 
-      borderRadius: BorderRadius.circular(8),
-      border: Border.all(color: const Color(0xFFE0E0E0)),
-    ),
-    child: SingleChildScrollView(
-      scrollDirection: Axis.horizontal, // Enables horizontal scrolling for mobile devices
-      physics: const BouncingScrollPhysics(),
-      child: GptMarkdown(
-        '\$\$${texString}\$\$', 
-        useDollarSignsForLatex: true,
-        style: textStyle ?? const TextStyle(fontSize: 17, color: Color(0xFF1E1E1E)),
-      ),
-    ),
-  );
-},
-
-      ),
+// Non-streaming case:
+: AiMarkdown(text: message.text),  // ✅ Single line!
 
         ),
       ),

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:gpt_markdown/gpt_markdown.dart';
+import '../../widgets/ai_markdown.dart';
 import '../../core/auth_service.dart';
 import '../../widgets/math_renderer.dart';
 
@@ -237,11 +237,10 @@ class _ExamReviewScreenState extends State<ExamReviewScreen> {
                                     ],
                                   ),
                                   const SizedBox(height: 6),
-                                  GptMarkdown(
-                                    aiExplanation,
-                                    useDollarSignsForLatex: true,
-                                    style: const TextStyle(fontSize: 13, height: 1.5, color: Colors.black87),
-                                  ),
+                                  AiMarkdown(
+  text: aiExplanation,
+  style: const TextStyle(fontSize: 13, height: 1.5, color: Colors.black87),
+),
                                 ],
                               ),
                             ),

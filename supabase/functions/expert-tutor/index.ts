@@ -396,6 +396,8 @@ $(G = 6.67 \\times 10^{-11}\\text{ N m}^2\\text{kg}^{-2})$
 
 ---
 
+
+
 LATEX RULES:
 - Inline: $symbol$ for short expressions
 - Display: $$formula$$ for longer equations on own line
@@ -604,8 +606,68 @@ FORMAT RULES (CRITICAL):
 - Use tables where helpful for comparisons
 - Use horizontal rules (---) to separate objectives visually
 
+DIAGRAM GENERATION (CRITICAL):
+
+You are encouraged to include MULTIPLE SVG diagrams in a single response when they genuinely help understanding.
+
+HOW MANY DIAGRAMS:
+- You may include 0, 1, 2, 3, or up to 4 diagrams in one response.
+- Add a diagram for EACH objective where a visual would teach better than text.
+- Skip diagrams for abstract/theoretical objectives where text works fine.
+- Do NOT force a diagram into every objective.
+
+WHEN TO ADD A DIAGRAM:
+- Explaining processes (photosynthesis, water cycle, digestion)
+- Showing structures (cell, atom, heart, plant)
+- Illustrating cycles (nitrogen cycle, carbon cycle)
+- Physics setups (apparatus, circuits, force diagrams)
+- Geometry (shapes, angles, constructions)
+- Graphs with labels (motion graphs, wave diagrams)
+- Timelines (stages of mitosis, historical events)
+
+WHEN TO SKIP:
+- Pure formula/equation objectives — just show the formula
+- Definitions or terminology objectives
+- Simple list-based objectives
+
+FORMAT FOR DIAGRAMS:
+Wrap each SVG in an \`\`\`xml code block. Place the diagram IMMEDIATELY AFTER the explanation of the objective it illustrates.
+
+SVG RULES (STRICT):
+1. Use valid XML syntax
+2. Always include: xmlns="http://www.w3.org/2000/svg" and viewBox="0 0 400 400"
+3. Use clean labels with font-family="Arial" and text-anchor="middle"
+4. High-contrast colors on white background
+5. Suggested palette:
+   - Primary shape: #1A237E (dark blue)
+   - Secondary shape: #FF9800 (orange)
+   - Accent: #4CAF50 (green)
+   - Text: #1E1E1E (near-black)
+   - Background: #FFFFFF (white)
+6. TEXT LABELS: Never use LaTeX or backslashes inside <text>. Use Unicode: H₂O, CO₂, E = mc², Δv/Δt, 25°C, 10⁻¹¹, m/s², π, α, β, Δ, Ω, ×, ÷, ±, →, ←.
+7. Do NOT reference external images, fonts, or URLs
+8. Do NOT use CSS classes — inline all styles
+9. Keep diagrams under 400x400 for compactness
+10. For arrows, define a marker inside <defs> and reference it via marker-end
+
+EXAMPLE SVG:
+\`\`\`xml
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 200" width="100%" height="100%">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#1E1E1E"/>
+    </marker>
+  </defs>
+  <rect x="50" y="70" width="120" height="60" rx="8" fill="#1A237E"/>
+  <text x="110" y="105" font-family="Arial" font-size="16" fill="white" text-anchor="middle" font-weight="bold">Reactants</text>
+  <line x1="170" y1="100" x2="230" y2="100" stroke="#1E1E1E" stroke-width="3" marker-end="url(#arrow)"/>
+  <rect x="230" y="70" width="120" height="60" rx="8" fill="#FF9800"/>
+  <text x="290" y="105" font-family="Arial" font-size="16" fill="white" text-anchor="middle" font-weight="bold">Products</text>
+</svg>
+\`\`\`
+
 LATEX RULES (CRITICAL):
-- Use inline LaTeX ($...$) for short symbols, variables, or very short expressions (e.g. $F$, $a$, $\Delta v$, $E=mc^2$)
+- Use inline LaTeX ($...$) for short symbols, variables, or very short expressions (e.g. $F$, $a$, $\\Delta v$, $E=mc^2$)
 - Use display LaTeX ($$...$$) for any formula, derivation, or calculation longer than a short expression
 - If a calculation requires multiple steps, place each step on its own display equation
 - Never place long equations or derivations inside a sentence
@@ -627,6 +689,8 @@ EXAMPLE STRUCTURE:
 
 > Real-world example: [ZIMSEC-relevant context]
 
+[A diagram here if the objective is visual — SVG inside xml code block]
+
 Key formula:
 $$\\text{[formula]}$$
 
@@ -636,7 +700,15 @@ $$\\text{[formula]}$$
 
 ## Objective 2: [objective text]
 
-...
+[Explanation]
+
+[A diagram here if helpful]
+
+**Mini-summary:** ...
+
+---
+
+(Continue for all objectives)
 
 DO NOT ask questions or test the student. Just TEACH.
 
@@ -662,7 +734,7 @@ RESPOND AS PLAIN TEXT (markdown formatting is expected). Do NOT repeat or acknow
   });
 
   // Model chain
-  const modelChain = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.1-flash-lite"];
+  const modelChain = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-3.1-flash-lite"];
   let responseStream: any = null;
   let activeModelUsed = "";
 

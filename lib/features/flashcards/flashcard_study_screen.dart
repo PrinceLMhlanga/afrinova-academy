@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:gpt_markdown/gpt_markdown.dart';
+
 import 'package:flutter_highlighter/flutter_highlighter.dart';
 import 'package:flutter_highlighter/themes/atom-one-dark.dart';
 import 'package:flutter/services.dart';
 import 'dart:math' as math;
+import '../../widgets/ai_markdown.dart';
 
 
  enum _SlideDirection { left, right }
@@ -873,69 +874,23 @@ Widget _buildSwipeableCard(Map<String, String> card) {
                     
                     // Content
                     Expanded(
-                      child: SingleChildScrollView(
-                        physics: const BouncingScrollPhysics(),
-                        child: GptMarkdown(
-                          content,
-                          useDollarSignsForLatex: true,
-                          style: TextStyle(
-                            fontSize: 17,
-                            height: 1.6,
-                            color: isQuestion
-                                ? const Color(0xFF1A237E)
-                                : const Color(0xFF4A148C),
-                            fontWeight: isQuestion
-                                ? FontWeight.w600
-                                : FontWeight.normal,
-                          ),
-                          codeBuilder: (context, name, code, closed) {
-                            return _buildSyntaxHighlighter(name, code);
-                          },
-                          latexBuilder: (context, texString, textStyle, isInline) {
-                            if (isInline) {
-                              return GptMarkdown(
-                                '\$$texString\$',
-                                useDollarSignsForLatex: true,
-                                style: textStyle ?? TextStyle(
-                                  fontSize: 17,
-                                  color: isQuestion
-                                      ? const Color(0xFF1A237E)
-                                      : const Color(0xFF4A148C),
-                                ),
-                              );
-                            }
-
-                            return Container(
-                              width: double.infinity,
-                              margin: const EdgeInsets.symmetric(vertical: 12),
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.7),
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
-                                  color: isQuestion
-                                      ? Colors.blue.shade100
-                                      : Colors.purple.shade100,
-                                ),
-                              ),
-                              child: SingleChildScrollView(
-                                scrollDirection: Axis.horizontal,
-                                child: GptMarkdown(
-                                  '\$\$${texString}\$\$',
-                                  useDollarSignsForLatex: true,
-                                  style: textStyle ?? TextStyle(
-                                    fontSize: 17,
-                                    color: isQuestion
-                                        ? const Color(0xFF1A237E)
-                                        : const Color(0xFF4A148C),
-                                  ),
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                    ),
+  child: SingleChildScrollView(
+    physics: const BouncingScrollPhysics(),
+    child: AiMarkdown(
+      text: content,
+      style: TextStyle(
+        fontSize: 17,
+        height: 1.6,
+        color: isQuestion
+            ? const Color(0xFF1A237E)
+            : const Color(0xFF4A148C),
+        fontWeight: isQuestion
+            ? FontWeight.w600
+            : FontWeight.normal,
+      ),
+    ),
+  ),
+),
                     
                     const SizedBox(height: 16),
                     

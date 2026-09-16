@@ -10,7 +10,7 @@ import 'package:http/http.dart' as http;
 import '../../core/trial_usage_service.dart';
 import '../../widgets/trial_limit_dialog.dart';
 import 'package:image_picker/image_picker.dart';
-import 'dart:typed_data';
+import '../../widgets/ai_markdown.dart';
 
 class ExpertTutorScreen extends StatefulWidget {
   final String? topicId;
@@ -1877,10 +1877,9 @@ class _ExpertMessageBubble extends StatelessWidget {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   else if (showText)
-                    GptMarkdown(
-                      content,
-                      useDollarSignsForLatex: true,
-                      style: TextStyle(
+                    AiMarkdown(
+                        text: content,
+                        style: TextStyle(
                         fontSize: 15, height: 1.6,
                         color: isExpert ? const Color(0xFF1E1E1E) : Colors.white,
                       ),

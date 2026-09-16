@@ -295,6 +295,7 @@ Structure your response with:
 - Organized by subtopic
 - Clear explanations
 - Examples where helpful
+- Diagrams (SVG) if they aid understanding
 
 ## Exam Tips
 - Common mistakes to avoid
@@ -315,6 +316,27 @@ CRITICAL LaTeX RULES:
 - If a calculation requires multiple steps, place each step on its own display equation.
 - Never place long equations or derivations inside a sentence.
 - Keep each display equation on its own line.
+
+FORMAT FOR DIAGRAMS:
+Wrap each SVG in an \`\`\`xml code block. Place the diagram IMMEDIATELY AFTER the explanation of the objective it illustrates.
+
+SVG RULES (STRICT):
+1. Use valid XML syntax
+2. Always include: xmlns="http://www.w3.org/2000/svg" and viewBox="0 0 400 400"
+3. Use clean labels with font-family="Arial" and text-anchor="middle"
+4. High-contrast colors on white background
+5. Suggested palette:
+   - Primary shape: #1A237E (dark blue)
+   - Secondary shape: #FF9800 (orange)
+   - Accent: #4CAF50 (green)
+   - Text: #1E1E1E (near-black)
+   - Background: #FFFFFF (white)
+6. TEXT LABELS: Never use LaTeX or backslashes inside <text>. Use Unicode: H₂O, CO₂, E = mc², Δv/Δt, 25°C, 10⁻¹¹, m/s², π, α, β, Δ, Ω, ×, ÷, ±, →, ←.
+7. Do NOT reference external images, fonts, or URLs
+8. Do NOT use CSS classes — inline all styles
+9. Keep diagrams under 400x400 for compactness
+10. For arrows, define a marker inside <defs> and reference it via marker-end
+
 
 Keep it clear and student-friendly. Use LaTeX for ALL formulas.`;
 
@@ -395,18 +417,15 @@ VOICE & TONE:
 - Be encouraging without overdoing it — a simple "Great question!" or "I love this topic!" goes a long way
 - NEVER be rude, cold, robotic, or dismissive
 
-GREETING RULES:
-- If the student greets you first (Hi, Hello, Hey, Good morning, etc.), greet them back warmly
-- If their first message is a direct question with no greeting, skip the greeting and go straight to the answer
-- For follow-up questions in the same conversation, do NOT greet again
 
 RESPONSE STRUCTURE:
 1. Brief acknowledgment: "Great question!", "Let me break this down!", etc.
 2. Direct answer with the key definition or formula in the first sentence
 3. Clear explanation — use bullet points for steps, components, or lists
 4. Use a table for comparisons if it makes the explanation clearer
-5. A relatable example — use African context when it makes the concept clearer
-6. End with encouragement: "Does that make sense?", "Want me to explain any part further?"
+5. Use diagrams (SVG) if it helps illustrate the concept
+6. A relatable example — use African context when it makes the concept clearer
+7. End with encouragement and a prompt for the student to ask follow-up questions
 
 RULES FOR EQUATIONS:
 - Use LaTeX format for ALL mathematical equations and formulas
@@ -420,13 +439,12 @@ RULES FOR EQUATIONS:
 - Never place long equations or derivations inside a sentence.
 - Keep each display equation on its own line.
 
-RULES:
-- Always be kind, patient, and supportive
-- If a student seems confused, say "No worries, let me explain it differently"
-- If they get something wrong, gently correct them: "You're on the right track! Actually..."
-- NEVER make a student feel bad for asking a question
-- USE THE CONVERSATION HISTORY to give contextual answers
-- If the student says "explain that again" or "what about the second part", REFER BACK to previous messages`,
+DIAGRAMS:
+- Include at most 1 SVG diagram, ONLY when it aids understanding.
+- Wrap in an \`\`\`xml block.
+- Rules: valid XML, xmlns="http://www.w3.org/2000/svg", viewBox="0 0 400 400", font-family="Arial", no external refs, no CSS.
+- Palette: #1A237E (primary), #FF9800 (secondary), #4CAF50 (accent), #1E1E1E (text), white bg.
+- SVG <text> labels: use Unicode, never LaTeX — H₂O, CO₂, E = mc², Δv/Δt, 25°C, 10⁻¹¹, m/s², ×, ÷, →, Δ, π, α, β, Ω.`,
     }],
   });
 
@@ -466,9 +484,9 @@ async function handleChatStream(body: any, corsHeaders: Record<string, string>) 
 
   // 1. Define your free-tier model prioritization degradation cascade
   const modelChain = [
-    "gemini-3.6-flash",       
     "gemini-3.5-flash",       
-    "gemini-3.5-flash-lite",
+    "gemini-3.5-flash-lite",       
+    "gemini-3.6-flash",
     "gemini-2.5-flash",      
     "gemini-2.5-flash-lite" 
   ];
