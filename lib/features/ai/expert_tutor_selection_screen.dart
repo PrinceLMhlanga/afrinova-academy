@@ -6,12 +6,20 @@ import '../../core/expert_tutor_service.dart';
 import 'expert_tutor_screen.dart';
 import '../../core/trial_usage_service.dart';
 import '../../widgets/trial_limit_dialog.dart';
+import '../../core/shell/panel_scaffold.dart';
 
 class ExpertTutorSelectionScreen extends StatefulWidget {
-  const ExpertTutorSelectionScreen({super.key});
+  /// When true, this screen is hosted inside [AppShell] as a panel.
+  final bool embedded;
+
+  const ExpertTutorSelectionScreen({
+    super.key,
+    this.embedded = false,
+  });
 
   @override
-  State<ExpertTutorSelectionScreen> createState() => _ExpertTutorSelectionScreenState();
+  State<ExpertTutorSelectionScreen> createState() =>
+      _ExpertTutorSelectionScreenState();
 }
 
 class _ExpertTutorSelectionScreenState extends State<ExpertTutorSelectionScreen> {
@@ -179,22 +187,15 @@ class _ExpertTutorSelectionScreenState extends State<ExpertTutorSelectionScreen>
 }
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA),
-      appBar: AppBar(
-        title: const Text('Expert Tutor'),
-        backgroundColor: const Color(0xFF1A237E),
-        foregroundColor: Colors.white,
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Header card
+Widget build(BuildContext context) {
+  final Widget body = _isLoading
+      ? const Center(child: CircularProgressIndicator())
+      : SingleChildScrollView(
+          padding: EdgeInsets.zero,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header card
                   Container(
                     padding: const EdgeInsets.all(20),
                     decoration: BoxDecoration(
@@ -478,11 +479,24 @@ class _ExpertTutorSelectionScreenState extends State<ExpertTutorSelectionScreen>
                         ],
                       ),
                     ),
-                ],
-              ),
-            ),
-    );
+            ],
+          ),
+        );
+
+  if (widget.embedded) {
+    return PanelScaffold(child: body);
   }
+
+  return Scaffold(
+    backgroundColor: const Color(0xFFF5F7FA),
+    appBar: AppBar(
+      title: const Text('Expert Tutor'),
+      backgroundColor: const Color(0xFF1A237E),
+      foregroundColor: Colors.white,
+    ),
+    body: body,
+  );
+}
 
   // Helper: Count objectives in syllabus outline
   int _countObjectives(String? syllabusOutline) {

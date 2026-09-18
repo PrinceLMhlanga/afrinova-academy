@@ -2,9 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/auth_service.dart';
 import 'exam_review_screen.dart';
+import '../../core/shell/panel_scaffold.dart';
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/app_spacing.dart';
+import '../../core/theme/app_text_styles.dart';
 
 class ExamHistoryScreen extends StatefulWidget {
-  const ExamHistoryScreen({super.key});
+  /// When true, this screen is hosted inside [AppShell] as a panel.
+  /// Renders without its own AppBar — the shell provides the chrome.
+  final bool embedded;
+
+  const ExamHistoryScreen({super.key, this.embedded = false});
 
   @override
   State<ExamHistoryScreen> createState() => _ExamHistoryScreenState();
@@ -107,8 +115,28 @@ class _ExamHistoryScreenState extends State<ExamHistoryScreen> {
     }
   }
 
-  @override
+    @override
   Widget build(BuildContext context) {
+    final Widget body = _isLoading
+        ? const Center(
+            child: CircularProgressIndicator(color: Color(0xFF1A237E)),
+          )
+        : _sessionsGrouped.isEmpty
+            ? _buildEmptyState()
+            : RefreshIndicator(
+                onRefresh: _loadHistory,
+                child: ListView(
+                  padding: EdgeInsets.zero,
+                  children: _sessionsGrouped.entries.map((entry) {
+                    return _buildMonthGroup(entry.key, entry.value);
+                  }).toList(),
+                ),
+              );
+
+    if (widget.embedded) {
+      return PanelScaffold(child: body);
+    }
+
     return Scaffold(
       backgroundColor: const Color(0xFFF5F5F5),
       appBar: AppBar(
@@ -116,44 +144,47 @@ class _ExamHistoryScreenState extends State<ExamHistoryScreen> {
         backgroundColor: const Color(0xFF1A237E),
         foregroundColor: Colors.white,
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFF1A237E)))
-          : _sessionsGrouped.isEmpty
-              ? _buildEmptyState()
-              : RefreshIndicator(
-                  onRefresh: _loadHistory,
-                  child: ListView(
-                    padding: const EdgeInsets.all(16),
-                    children: _sessionsGrouped.entries.map((entry) {
-                      return _buildMonthGroup(entry.key, entry.value);
-                    }).toList(),
-                  ),
-                ),
+      body: body,
     );
   }
 
-  Widget _buildEmptyState() {
+    Widget _buildEmptyState() {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Container(
-            width: 100, height: 100,
+            width: 56,
+            height: 56,
+            alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: const Color(0xFF1A237E).withOpacity(0.08),
-              shape: BoxShape.circle,
+              color: AppColors.surfaceSubtle,
+              borderRadius: BorderRadius.circular(AppSpacing.radiusButton),
+              border: Border.all(color: AppColors.border),
             ),
-            child: const Icon(Icons.history, size: 48, color: Color(0xFF1A237E)),
+            child: const Icon(
+              Icons.history_rounded,
+              size: 26,
+              color: AppColors.textTertiary,
+            ),
           ),
-          const SizedBox(height: 24),
-          const Text('No Exam History', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF1A237E))),
-          const SizedBox(height: 8),
-          const Text('Complete practice exams to see\nyour history here', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey, fontSize: 14)),
+          const SizedBox(height: AppSpacing.lg),
+          Text(
+            'No Exam History',
+            style: AppTextStyles.headingMd.copyWith(
+              color: AppColors.textSecondary,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Complete practice exams to see\nyour history here',
+            textAlign: TextAlign.center,
+            style: AppTextStyles.captionXs,
+          ),
         ],
       ),
     );
   }
-
   Widget _buildMonthGroup(String monthName, List<Map<String, dynamic>> sessions) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,

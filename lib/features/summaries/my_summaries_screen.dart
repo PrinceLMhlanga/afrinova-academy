@@ -3,9 +3,14 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/auth_service.dart';
 import 'summary_generator_screen.dart';
 import 'summary_viewer_screen.dart';
+import '../../core/shell/panel_scaffold.dart';
 
 class MySummariesScreen extends StatefulWidget {
-  const MySummariesScreen({super.key});
+  /// When true, this screen is hosted inside [AppShell] as a panel.
+  /// Renders without its own AppBar — the shell provides the chrome.
+  final bool embedded;
+
+  const MySummariesScreen({super.key, this.embedded = false});
 
   @override
   State<MySummariesScreen> createState() => _MySummariesScreenState();
@@ -48,8 +53,46 @@ class _MySummariesScreenState extends State<MySummariesScreen> {
     }
   }
 
-  @override
+    void _openGenerator() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const SummaryGeneratorScreen()),
+    ).then((_) => _loadSummaries());
+  }
+
+   @override
   Widget build(BuildContext context) {
+    final Widget body = _isLoading
+        ? const Center(child: CircularProgressIndicator())
+        : _groupedBySubject.isEmpty
+            ? _buildEmptyState()
+            : RefreshIndicator(
+                onRefresh: _loadSummaries,
+                child: ListView(
+                  padding: EdgeInsets.only(
+                    bottom: widget.embedded ? 96 : 0,
+                  ),
+                  children: _groupedBySubject.entries.map((entry) {
+                    return _buildSubjectGroup(entry.key, entry.value);
+                  }).toList(),
+                ),
+              );
+
+    if (widget.embedded) {
+      return Scaffold(
+        backgroundColor: Colors.transparent,
+        body: PanelScaffold(child: body),
+        floatingActionButton: FloatingActionButton.extended(
+  heroTag: null,
+  onPressed: _openGenerator,
+  backgroundColor: Colors.teal.shade600,
+  foregroundColor: Colors.white,
+  icon: const Icon(Icons.add_rounded),
+  label: const Text('Generate'),
+),
+      );
+    }
+
     return Scaffold(
       backgroundColor: const Color(0xFFF5F5F5),
       appBar: AppBar(
@@ -59,26 +102,11 @@ class _MySummariesScreenState extends State<MySummariesScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.add),
-            onPressed: () {
-              Navigator.push(context, MaterialPageRoute(builder: (_) => const SummaryGeneratorScreen()))
-                  .then((_) => _loadSummaries());
-            },
+            onPressed: _openGenerator,
           ),
         ],
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _groupedBySubject.isEmpty
-              ? _buildEmptyState()
-              : RefreshIndicator(
-                  onRefresh: _loadSummaries,
-                  child: ListView(
-                    padding: const EdgeInsets.all(16),
-                    children: _groupedBySubject.entries.map((entry) {
-                      return _buildSubjectGroup(entry.key, entry.value);
-                    }).toList(),
-                  ),
-                ),
+      body: body,
     );
   }
 
@@ -96,8 +124,7 @@ class _MySummariesScreenState extends State<MySummariesScreen> {
           const SizedBox(height: 24),
           ElevatedButton.icon(
             onPressed: () {
-              Navigator.push(context, MaterialPageRoute(builder: (_) => const SummaryGeneratorScreen()))
-                  .then((_) => _loadSummaries());
+              _openGenerator();
             },
             icon: const Icon(Icons.auto_awesome),
             label: const Text('Generate Summary'),

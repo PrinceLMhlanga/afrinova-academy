@@ -6,9 +6,14 @@ import 'student_exam_taker_screen.dart';
 import '../../core/trial_usage_service.dart';
 import '../../widgets/trial_limit_dialog.dart';
 import '../premium/ai_subscription_screen.dart';
+import '../../core/shell/panel_scaffold.dart';
 
 class ExamGeneratorScreen extends StatefulWidget {
-  const ExamGeneratorScreen({super.key});
+  /// When true, this screen is hosted inside [AppShell] as a panel.
+  /// Renders without its own AppBar — the shell provides the chrome.
+  final bool embedded;
+
+  const ExamGeneratorScreen({super.key, this.embedded = false});
 
   @override
   State<ExamGeneratorScreen> createState() => _ExamGeneratorScreenState();
@@ -350,22 +355,19 @@ void _pickQuestions(
     }
   }
 }
-  @override
+    @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Practice Exam'),
-        backgroundColor: const Color(0xFF1A237E),
-        foregroundColor: Colors.white,
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFF1A237E)))
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Header
+    // Body is identical in both modes — only the outer chrome differs.
+    final Widget body = _isLoading
+        ? const Center(
+            child: CircularProgressIndicator(color: Color(0xFF1A237E)),
+          )
+        : SingleChildScrollView(
+            padding: EdgeInsets.all(widget.embedded ? 0 : 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Header
 Container(
   padding: const EdgeInsets.all(20),
   decoration: BoxDecoration(
@@ -603,9 +605,21 @@ if (!_isUnlimited && _trialRemaining <= 0) ...[
                       style: const TextStyle(fontSize: 12, color: Colors.grey),
                     ),
                   ),
-                ],
-              ),
+              ],
             ),
+          );
+
+        if (widget.embedded) {
+      return PanelScaffold(child: body);
+    }
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Practice Exam'),
+        backgroundColor: const Color(0xFF1A237E),
+        foregroundColor: Colors.white,
+      ),
+      body: body,
     );
   }
 }

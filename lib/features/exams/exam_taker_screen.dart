@@ -350,7 +350,8 @@ Widget _buildGraph(String? graphData) {
                     enabled: true,
                     handleBuiltInTouches: true,
                     touchTooltipData: LineTouchTooltipData(
-                      tooltipRoundedRadius: 8,
+                      getTooltipColor: (_) => Colors.black87,   // or whatever bg you had
+                      tooltipBorderRadius: BorderRadius.circular(8),
                       tooltipPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                       tooltipMargin: 8,
                       getTooltipItems: (touchedSpots) {

@@ -130,7 +130,7 @@ class _GraphPlotterState extends State<GraphPlotter> {
                           enabled: true,
                           handleBuiltInTouches: true,
                           touchTooltipData: LineTouchTooltipData(
-                            tooltipRoundedRadius: 8,
+                            tooltipBorderRadius: BorderRadius.circular(8),
                             tooltipPadding: const EdgeInsets.symmetric(
                               horizontal: 10,
                               vertical: 6,

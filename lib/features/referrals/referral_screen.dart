@@ -3,9 +3,11 @@ import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/auth_service.dart';
 import '../../core/referral_service.dart';
+import '../../core/shell/panel_scaffold.dart';
 
 class ReferralScreen extends StatefulWidget {
-  const ReferralScreen({super.key});
+  final bool embedded;
+  const ReferralScreen({super.key, this.embedded = false});
 
   @override
   State<ReferralScreen> createState() => _ReferralScreenState();
@@ -146,28 +148,25 @@ String _getSubtitleMessage() {
 @override
 Widget build(BuildContext context) {
   final isTeacher = _userRole == 'teacher' || _userRole == 'admin';
-  // ✅ Check if stats is null first
-  final successfulReferrals = int.tryParse(_stats?['successful_referrals']?.toString() ?? '0') ?? 0;
-  final rewardsEarned = int.tryParse(_stats?['rewards_earned']?.toString() ?? '0') ?? 0;
+  final successfulReferrals =
+      int.tryParse(_stats?['successful_referrals']?.toString() ?? '0') ?? 0;
+  final rewardsEarned =
+      int.tryParse(_stats?['rewards_earned']?.toString() ?? '0') ?? 0;
   final progressToNext = (successfulReferrals % 5) / 5;
 
-  return Scaffold(
-    appBar: AppBar(
-      title: const Text('Refer & Earn'),
-      backgroundColor: const Color(0xFF1A237E),
-      foregroundColor: Colors.white,
-    ),
-    body: _isLoading
-        ? const Center(child: CircularProgressIndicator(color: Color(0xFF1A237E)))
-        : RefreshIndicator(
-            onRefresh: _loadReferralData,
-            color: const Color(0xFF1A237E),
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Header card
+  final Widget body = _isLoading
+      ? const Center(
+          child: CircularProgressIndicator(color: Color(0xFF1A237E)),
+        )
+      : RefreshIndicator(
+          onRefresh: _loadReferralData,
+          color: const Color(0xFF1A237E),
+          child: SingleChildScrollView(
+            padding: EdgeInsets.zero,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                   // Header card
                  Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -384,10 +383,20 @@ Widget build(BuildContext context) {
                     ),
                     ]
                   ],
-                ],
-              ),
+              ],
             ),
           ),
+        );
+
+  if (widget.embedded) {
+    return PanelScaffold(child: body);
+  }
+
+  return Scaffold(
+    appBar: AppBar(
+      title: const Text('Refer & Earn'),
+    ),
+    body: body,
   );
 }
 

@@ -14,12 +14,22 @@ import 'package:flutter/services.dart';
 import '../../core/trial_usage_service.dart';
 import '../../widgets/trial_limit_dialog.dart';
 import '../../widgets/ai_markdown.dart';
+import '../../core/shell/panel_scaffold.dart';
 
 class AITutorScreen extends StatefulWidget {
   final String? subjectName;
   final String? sessionId;
 
-  const AITutorScreen({super.key, this.subjectName, this.sessionId});
+  /// When true, this screen is hosted inside [AppShell] as a panel.
+  /// Renders without its own AppBar or drawer.
+  final bool embedded;
+
+  const AITutorScreen({
+    super.key,
+    this.subjectName,
+    this.sessionId,
+    this.embedded = false,
+  });
 
   @override
   State<AITutorScreen> createState() => _AITutorScreenState();
@@ -55,7 +65,7 @@ class _AITutorScreenState extends State<AITutorScreen>
   void initState() {
     super.initState();
     _initChat();
-    
+    _sidebarOpen = !widget.embedded;
     _welcomeAnimationController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 800),
@@ -134,6 +144,31 @@ class _AITutorScreenState extends State<AITutorScreen>
         : "👋 Hello! I'm your AfriNova AI tutor. I'm here to help you learn. What would you like to explore?",
     isUser: false,
   ));
+}
+
+Future<void> _loadSession(String sessionId) async {
+  setState(() {
+    _isInitializing = true;
+    _messages.clear();
+    _sessionId = sessionId;
+  });
+
+  final history = await _chatService.getMessages(sessionId);
+  if (!mounted) return;
+
+  setState(() {
+    if (history.isEmpty) {
+      _addWelcomeMessage();
+    } else {
+      for (final msg in history) {
+        _messages.add(_ChatMessage(
+          text: msg['message'] as String,
+          isUser: msg['sender'] == 'student',
+        ));
+      }
+    }
+    _isInitializing = false;
+  });
 }
 
 Future<void> _sendMessage() async {
@@ -262,6 +297,24 @@ return;
   }
 }
 
+Future<void> _startNewChat() async {
+  if (widget.embedded) {
+    setState(() {
+      _messages.clear();
+      _sessionId = null;
+      _streamingText = '';
+      _isInitializing = true;
+    });
+    await _initChat();
+    return;
+  }
+  Navigator.pushReplacement(
+    context,
+    MaterialPageRoute(
+      builder: (_) => AITutorScreen(subjectName: widget.subjectName),
+    ),
+  );
+}
 
   
 
@@ -277,30 +330,42 @@ return;
     });
   }
 
-  void _startNewChat() {
-  Navigator.pushReplacement(
-    context,
-    MaterialPageRoute(
-      builder: (_) => AITutorScreen(subjectName: widget.subjectName),
-    ),
-  );
-}
+  
 
  @override
 Widget build(BuildContext context) {
-  if (_isInitializing) {
+    if (_isInitializing) {
+    final body = const Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          CircularProgressIndicator(color: Color(0xFF1A237E)),
+          SizedBox(height: 16),
+          Text('Loading your AI tutor...', style: TextStyle(color: Colors.grey)),
+        ],
+      ),
+    );
+
+    if (widget.embedded) {
+      return PanelScaffold(child: body);
+    }
+
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        backgroundColor: Colors.white, elevation: 0,
-        title: const Text('AI Tutor', style: TextStyle(color: Colors.black87, fontSize: 16, fontWeight: FontWeight.w600)),
+        backgroundColor: Colors.white,
+        elevation: 0,
+        title: const Text(
+          'AI Tutor',
+          style: TextStyle(
+            color: Colors.black87,
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
         centerTitle: true,
       ),
-      body: const Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-        CircularProgressIndicator(color: Color(0xFF1A237E)),
-        SizedBox(height: 16),
-        Text('Loading your AI tutor...', style: TextStyle(color: Colors.grey)),
-      ])),
+      body: body,
     );
   }
 
@@ -310,59 +375,77 @@ Widget build(BuildContext context) {
  
 
 
-if (isWideScreen) {
-  return Scaffold(
-    backgroundColor: const Color(0xFFFAFAFA),
-    body: Stack(
-      children: [
-        Row(
-          children: [
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              width: _sidebarOpen ? 280 : 0,
-              child: _sidebarOpen
-                  ? ClipRect(
-                      child: ChatSidebarContent(
-                        currentSessionId: _sessionId,
-                        currentSubject: widget.subjectName,
-                        onSessionSelected: (sessionId, subject) {
-                          Navigator.pushReplacement(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => AITutorScreen(sessionId: sessionId, subjectName: subject),
-                            ),
-                          );
-                        },
-                        onNewChat: _startNewChat,
-                        // ✅ Pass the toggle button to the sidebar header
-                        sidebarToggle: SidebarToggleButton(
-                          icon: Icons.chevron_left,
-                          onPressed: () => setState(() => _sidebarOpen = false),
-                        ),
-                      ),
-                    )
-                  : null,
-            ),
-            if (!_sidebarOpen)
-              const SizedBox(width: 48), // Space for toggle button
-            Expanded(child: _buildChatContent()),
-          ],
-        ),
-        // ✅ When sidebar is closed, show toggle at top left of screen
-        if (!_sidebarOpen)
-          Positioned(
-            top: 8,
-            left: 8,
-            child: SidebarToggleButton(
-              icon: Icons.chevron_right,
-              onPressed: () => setState(() => _sidebarOpen = true),
-            ),
-          ),
-      ],
+if (isWideScreen || widget.embedded) {
+  // When embedded, always use the "wide" layout — but the shell
+  // already provides the outer chrome, so we don't add another
+  // Scaffold.
+  final layout = Stack(
+    children: [
+      Row(
+        children: [
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: _sidebarOpen ? 280 : 0,
+            child: _sidebarOpen
+                ? ClipRect(
+                    child: ChatSidebarContent(
+                      currentSessionId: _sessionId,
+                      currentSubject: widget.subjectName,
+                      onSessionSelected: (sessionId, subject) {
+  if (sessionId == null) return;
+  if (widget.embedded) {
+    _loadSession(sessionId);
+    return;
+  }
+  Navigator.pushReplacement(
+    context,
+    MaterialPageRoute(
+      builder: (_) => AITutorScreen(
+        sessionId: sessionId,
+        subjectName: subject,
+        embedded: widget.embedded,
+      ),
     ),
   );
-}
+},
+                      onNewChat: _startNewChat,
+                      sidebarToggle: SidebarToggleButton(
+                        icon: Icons.chevron_left,
+                        onPressed: () => setState(() => _sidebarOpen = false),
+                      ),
+                    ),
+                  )
+                : null,
+          ),
+          if (!_sidebarOpen) const SizedBox(width: 48),
+          Expanded(child: _buildChatContent()),
+        ],
+      ),
+      if (!_sidebarOpen)
+        Positioned(
+          top: 8,
+          left: 8,
+          child: SidebarToggleButton(
+            icon: Icons.chevron_right,
+            onPressed: () => setState(() => _sidebarOpen = true),
+          ),
+        ),
+    ],
+  );
 
+    if (widget.embedded) {
+    // Chat is edge-to-edge. No PanelScaffold, no outer padding.
+    return Material(
+      color: const Color(0xFFFAFAFA),
+      child: layout,
+    );
+  }
+
+  return Scaffold(
+    backgroundColor: const Color(0xFFFAFAFA),
+    body: layout,
+  );
+}
   // ✅ Narrow screen - drawer (your original working code)
   return Scaffold(
     backgroundColor: const Color(0xFFFAFAFA),

@@ -2,12 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/auth_service.dart';
 import 'leaderboard_screen.dart';
+import '../../core/shell/panel_scaffold.dart';
 
 class SubjectLeaderboardScreen extends StatefulWidget {
-  const SubjectLeaderboardScreen({super.key});
+  final bool embedded;
+  const SubjectLeaderboardScreen({super.key, this.embedded = false});
 
   @override
-  State<SubjectLeaderboardScreen> createState() => _SubjectLeaderboardScreenState();
+  State<SubjectLeaderboardScreen> createState() =>
+      _SubjectLeaderboardScreenState();
 }
 
 class _SubjectLeaderboardScreenState extends State<SubjectLeaderboardScreen> {
@@ -167,158 +170,186 @@ class _SubjectLeaderboardScreenState extends State<SubjectLeaderboardScreen> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Color(0xFFF5F7FA), Color(0xFFE8ECF1)],
+@override
+Widget build(BuildContext context) {
+  final Widget content = Column(
+    children: [
+      // Level badge (kept — useful context)
+      if (_studentLevelName != null)
+        Container(
+          width: double.infinity,
+          margin: EdgeInsets.only(
+            top: widget.embedded ? 0 : 16,
+            bottom: 8,
           ),
-        ),
-        child: Column(
-          children: [
-            // Header
-            Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [Color(0xFF0D1B4C), Color(0xFF1A237E), Color(0xFF283593)],
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1A237E).withOpacity(0.05),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.school, size: 14, color: Color(0xFF1A237E)),
+              const SizedBox(width: 6),
+              Text(
+                'Your Level: $_studentLevelName',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF1A237E),
                 ),
               ),
-              child: SafeArea(
-                bottom: false,
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Row(
-                    children: [
-                      const BackButton(color: Colors.white),
-                      const SizedBox(width: 8),
-                      const Expanded(
-                        child: Text(
-                          'Subject Leaderboards',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
+            ],
+          ),
+        ),
+
+      Expanded(
+        child: _isLoading
+            ? const Center(
+                child: CircularProgressIndicator(color: Color(0xFF1A237E)),
+              )
+            : RefreshIndicator(
+                onRefresh: _loadSubjects,
+                color: const Color(0xFF1A237E),
+                child: ListView(
+                  padding: EdgeInsets.zero,
+                  children: [
+                    if (_enrolledSubjects.isNotEmpty) ...[
+                      const Text(
+                        'Enrolled Subjects',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF1A237E),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Compete with classmates from ${_studentLevelName ?? "your level"}',
+                        style: const TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
+                      const SizedBox(height: 12),
+                      ..._enrolledSubjects.map(
+                        (subject) => _buildSubjectCard(subject, isEnrolled: true),
+                      ),
+                      const SizedBox(height: 24),
+                    ],
+                    if (_aiAssistedSubjects.isNotEmpty) ...[
+                      const Text(
+                        'AI Assisted Learning',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF00897B),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Practice exams & flashcards for ${_studentLevelName ?? "your level"} students',
+                        style: const TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
+                      const SizedBox(height: 12),
+                      ..._aiAssistedSubjects.map(
+                        (subject) =>
+                            _buildSubjectCard(subject, isEnrolled: false),
+                      ),
+                    ],
+                    if (_enrolledSubjects.isEmpty &&
+                        _aiAssistedSubjects.isEmpty)
+                      Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(60),
+                          child: Column(
+                            children: [
+                              Icon(
+                                Icons.leaderboard_outlined,
+                                size: 64,
+                                color: Colors.grey.shade300,
+                              ),
+                              const SizedBox(height: 16),
+                              const Text(
+                                'No subjects yet',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              const Text(
+                                'Add subjects to see leaderboards',
+                                style: TextStyle(color: Colors.grey),
+                              ),
+                            ],
                           ),
                         ),
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.refresh, color: Colors.white),
-                        onPressed: _loadSubjects,
-                      ),
-                    ],
-                  ),
+                  ],
                 ),
               ),
+      ),
+    ],
+  );
+
+  if (widget.embedded) {
+    return PanelScaffold(child: content);
+  }
+
+  // Standalone — original gradient header
+  return Scaffold(
+    body: Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFFF5F7FA), Color(0xFFE8ECF1)],
+        ),
+      ),
+      child: Column(
+        children: [
+          Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  Color(0xFF0D1B4C),
+                  Color(0xFF1A237E),
+                  Color(0xFF283593),
+                ],
+              ),
             ),
-            
-            // Show student's level
-            if (_studentLevelName != null)
-              Container(
-                width: double.infinity,
-                margin: const EdgeInsets.all(16),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1A237E).withOpacity(0.05),
-                  borderRadius: BorderRadius.circular(8),
-                ),
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
                 child: Row(
-                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.school, size: 14, color: Color(0xFF1A237E)),
-                    const SizedBox(width: 6),
-                    Text(
-                      'Your Level: $_studentLevelName',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF1A237E),
+                    const BackButton(color: Colors.white),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'Subject Leaderboards',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
                       ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.refresh, color: Colors.white),
+                      onPressed: _loadSubjects,
                     ),
                   ],
                 ),
               ),
-            
-            // Content
-            Expanded(
-              child: _isLoading
-                  ? const Center(child: CircularProgressIndicator(color: Color(0xFF1A237E)))
-                  : RefreshIndicator(
-                      onRefresh: _loadSubjects,
-                      color: const Color(0xFF1A237E),
-                      child: ListView(
-                        padding: const EdgeInsets.all(16),
-                        children: [
-                          // Enrolled Subjects Section
-                          if (_enrolledSubjects.isNotEmpty) ...[
-                            const Text(
-                              'Enrolled Subjects',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFF1A237E),
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'Compete with classmates from ${_studentLevelName ?? "your level"}',
-                              style: const TextStyle(fontSize: 12, color: Colors.grey),
-                            ),
-                            const SizedBox(height: 12),
-                            ..._enrolledSubjects.map((subject) => 
-                              _buildSubjectCard(subject, isEnrolled: true)
-                            ),
-                            const SizedBox(height: 24),
-                          ],
-                          
-                          // AI Assisted Learning Section
-                          if (_aiAssistedSubjects.isNotEmpty) ...[
-                            const Text(
-                              'AI Assisted Learning',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFF00897B),
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'Practice exams & flashcards for ${_studentLevelName ?? "your level"} students',
-                              style: const TextStyle(fontSize: 12, color: Colors.grey),
-                            ),
-                            const SizedBox(height: 12),
-                            ..._aiAssistedSubjects.map((subject) => 
-                              _buildSubjectCard(subject, isEnrolled: false)
-                            ),
-                          ],
-                          
-                          if (_enrolledSubjects.isEmpty && _aiAssistedSubjects.isEmpty)
-                            Center(
-                              child: Padding(
-                                padding: const EdgeInsets.all(60),
-                                child: Column(
-                                  children: [
-                                    Icon(Icons.leaderboard_outlined, size: 64, color: Colors.grey.shade300),
-                                    const SizedBox(height: 16),
-                                    const Text('No subjects yet', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                                    const SizedBox(height: 8),
-                                    const Text('Add subjects to see leaderboards', style: TextStyle(color: Colors.grey)),
-                                  ],
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
             ),
-          ],
-        ),
+          ),
+          Expanded(child: content),
+        ],
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildSubjectCard(Map<String, dynamic> subject, {required bool isEnrolled}) {
     final color = _getSubjectColor(subject['color_hex'] as String?);

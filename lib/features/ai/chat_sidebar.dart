@@ -304,6 +304,7 @@ class ChatSidebarContent extends StatefulWidget {
   final VoidCallback onNewChat;
   final VoidCallback? onClose;
   final Widget? sidebarToggle;
+  final double headerTopPadding;
 
   const ChatSidebarContent({
     super.key,
@@ -312,7 +313,8 @@ class ChatSidebarContent extends StatefulWidget {
     required this.onSessionSelected,
     required this.onNewChat,
     this.onClose,
-    this.sidebarToggle
+    this.sidebarToggle,
+    this.headerTopPadding = 56
   });
 
   @override
@@ -426,7 +428,7 @@ void _subscribeToSessionUpdates() {
         children: [
           // Header
           Container(
-            padding: const EdgeInsets.fromLTRB(16, 56, 16, 16),
+            padding: EdgeInsets.fromLTRB(16, widget.headerTopPadding, 16, 16),
             decoration: const BoxDecoration(color: Color(0xFFEEEEEE)),
             child: Row(
               children: [

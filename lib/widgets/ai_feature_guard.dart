@@ -7,10 +7,15 @@ class AIFeatureGuard extends StatefulWidget {
   final Widget child;
   final String featureName;
 
+  /// When true, renders loading and paywall states without their
+  /// own Scaffold so they slot into the shell's panel viewport.
+  final bool embedded;
+
   const AIFeatureGuard({
     super.key,
     required this.child,
     required this.featureName,
+    this.embedded = false,
   });
 
   @override
@@ -37,43 +42,36 @@ class _AIFeatureGuardState extends State<AIFeatureGuard> {
     }
   }
 
-  // inside _AIFeatureGuardState
-
-Future<void> _handleSubscription() async {
-  final subscribed = await Navigator.push<bool>(
-    context,
-    MaterialPageRoute(
-      builder: (_) => const AISubscriptionScreen(),
-    ),
-  );
-  
-  if (subscribed == true && mounted) {
-    // 1. Force await the access checker to finish network validation
-    await _checkAccess();
-    
-    // 2. State has now changed inside _checkAccess via setState(), 
-    // widget.build() will automatically swap AIPaywallScreen with widget.child!
+  Future<void> _handleSubscription() async {
+    final subscribed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => const AISubscriptionScreen()),
+    );
+    if (subscribed == true && mounted) {
+      await _checkAccess();
+    }
   }
-}
-
 
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator(color: Color(0xFF1A237E))),
+      const loading = Center(
+        child: CircularProgressIndicator(color: Color(0xFF1A237E)),
       );
+      return widget.embedded
+          ? const Material(color: Color(0xFFF5F7FA), child: loading)
+          : const Scaffold(body: loading);
     }
 
-    // Access granted - show the feature directly
     if (_hasAccess) {
       return widget.child;
     }
 
-    // Access denied - show paywall
+    // Hand off to the paywall — it handles its own embedded state.
     return AIPaywallScreen(
       featureName: widget.featureName,
       onSubscribe: _handleSubscription,
+      embedded: widget.embedded,
     );
   }
 }

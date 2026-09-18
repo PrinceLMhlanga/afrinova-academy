@@ -3,9 +3,14 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/auth_service.dart';
 import 'flashcard_study_screen.dart';
 import 'flashcard_generator_screen.dart';
+import '../../core/shell/panel_scaffold.dart';
 
 class MyFlashcardsScreen extends StatefulWidget {
-  const MyFlashcardsScreen({super.key});
+  /// When true, this screen is hosted inside [AppShell] as a panel.
+  /// Renders without its own AppBar — the shell provides the chrome.
+  final bool embedded;
+
+  const MyFlashcardsScreen({super.key, this.embedded = false});
 
   @override
   State<MyFlashcardsScreen> createState() => _MyFlashcardsScreenState();
@@ -59,6 +64,13 @@ class _MyFlashcardsScreenState extends State<MyFlashcardsScreen> {
     }
   }
 
+    void _openGenerator() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const FlashcardGeneratorScreen()),
+    ).then((_) => _loadFlashcards());
+  }
+
   Future<void> _deleteFlashcard(String id) async {
     await Supabase.instance.client
         .from('ai_flashcards')
@@ -84,8 +96,41 @@ class _MyFlashcardsScreenState extends State<MyFlashcardsScreen> {
     ).then((_) => _loadFlashcards());
   }
 
-  @override
+      @override
   Widget build(BuildContext context) {
+    final Widget body = _isLoading
+        ? const Center(
+            child: CircularProgressIndicator(color: Color(0xFF1A237E)),
+          )
+        : _groupedBySubject.isEmpty
+            ? _buildEmptyState()
+            : RefreshIndicator(
+                onRefresh: _loadFlashcards,
+                child: ListView(
+                  padding: EdgeInsets.zero,
+                  children: _groupedBySubject.entries.map((entry) {
+                    return _buildSubjectGroup(entry.key, entry.value);
+                  }).toList(),
+                ),
+              );
+
+    if (widget.embedded) {
+      return Scaffold(
+        // Transparent so the shell's background shows through.
+        backgroundColor: Colors.transparent,
+        body: PanelScaffold(child: body),
+        // FAB replaces the AppBar's "+" action when embedded.
+        floatingActionButton: FloatingActionButton.extended(
+  heroTag: null,
+  onPressed: _openGenerator,
+  backgroundColor: const Color(0xFF6A1B9A),
+  foregroundColor: Colors.white,
+  icon: const Icon(Icons.add_rounded),
+  label: const Text('Generate'),
+),
+      );
+    }
+
     return Scaffold(
       backgroundColor: const Color(0xFFF5F5F5),
       appBar: AppBar(
@@ -95,29 +140,12 @@ class _MyFlashcardsScreenState extends State<MyFlashcardsScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.add),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const FlashcardGeneratorScreen()),
-              ).then((_) => _loadFlashcards());
-            },
+            onPressed: _openGenerator,
             tooltip: 'Generate New',
           ),
         ],
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFF1A237E)))
-          : _groupedBySubject.isEmpty
-              ? _buildEmptyState()
-              : RefreshIndicator(
-                  onRefresh: _loadFlashcards,
-                  child: ListView(
-                    padding: const EdgeInsets.all(16),
-                    children: _groupedBySubject.entries.map((entry) {
-                      return _buildSubjectGroup(entry.key, entry.value);
-                    }).toList(),
-                  ),
-                ),
+      body: body,
     );
   }
 
@@ -141,10 +169,7 @@ class _MyFlashcardsScreenState extends State<MyFlashcardsScreen> {
           const SizedBox(height: 24),
           ElevatedButton.icon(
             onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const FlashcardGeneratorScreen()),
-              ).then((_) => _loadFlashcards());
+              _openGenerator();
             },
             icon: const Icon(Icons.auto_awesome),
             label: const Text('Generate Flashcards'),

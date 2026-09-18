@@ -8,10 +8,15 @@ class AIPaywallScreen extends StatefulWidget {
   final String featureName;
   final VoidCallback? onSubscribe;
 
+  /// When true, renders without its own [Scaffold] and [AppBar].
+  /// Used when hosted inside [AIFeatureGuard] with `embedded: true`.
+  final bool embedded;
+
   const AIPaywallScreen({
     super.key,
     required this.featureName,
     this.onSubscribe,
+    this.embedded = false,
   });
 
   @override
@@ -40,14 +45,16 @@ Future<void> _handleSubscription() async {
     context,
     MaterialPageRoute(builder: (_) => const AISubscriptionScreen()),
   );
-  
   if (subscribed == true && mounted) {
-    // Notify AIFeatureGuard first
     if (widget.onSubscribe != null) {
       widget.onSubscribe!();
     }
-    // Then bubble back up past the paywall layer
-    Navigator.pop(context, true);
+    // Only pop if we're a pushed route. Embedded mode is inside
+    // the shell — the guard handles state via the onSubscribe
+    // callback, no pop needed.
+    if (!widget.embedded) {
+      Navigator.pop(context, true);
+    }
   }
 }
 
@@ -55,45 +62,37 @@ Future<void> _handleTrialStart() async {
   await AIAccessChecker.startTrial();
   if (mounted) {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('🎉 Trial started!'), backgroundColor: Color(0xFF4CAF50)),
+      const SnackBar(
+        content: Text('🎉 Trial started!'),
+        backgroundColor: Color(0xFF4CAF50),
+      ),
     );
-    
     if (widget.onSubscribe != null) {
       widget.onSubscribe!();
     }
-    
-    Navigator.pop(context, true);
+    if (!widget.embedded) {
+      Navigator.pop(context, true);
+    }
   }
 }
 
-
   @override
-  Widget build(BuildContext context) {
-    final type = _status['type'] as String? ?? 'none';
-    final message = _status['message'] as String? ?? '';
-    final showTrialButton = type == 'no_trial';
-    final showSubscribeButton = type == 'trial_expired' || type == 'expired';
+Widget build(BuildContext context) {
+  final type = _status['type'] as String? ?? 'none';
+  final message = _status['message'] as String? ?? '';
+  final showTrialButton = type == 'no_trial';
+  final showSubscribeButton = type == 'trial_expired' || type == 'expired';
 
-    return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.black87),
-          onPressed: () => Navigator.pop(context),
-        ),
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : SafeArea(
-              child: SingleChildScrollView(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const SizedBox(height: 20),
+  final content = _isLoading
+      ? const Center(child: CircularProgressIndicator())
+      : SafeArea(
+          child: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const SizedBox(height: 20),
                       
                       Container(
                         width: 100, height: 100,
@@ -212,13 +211,35 @@ Future<void> _handleTrialStart() async {
                       ),
                       
                       const SizedBox(height: 20),
-                    ],
-                  ),
-                ),
+                ],
               ),
             ),
+          ),
+        );
+
+  if (widget.embedded) {
+    // Hosted in the shell — no Scaffold, no AppBar, no back button.
+    // The shell's topbar already shows where the user is; the
+    // paywall just occupies the panel area.
+    return Container(
+      color: Colors.white,
+      child: content,
     );
   }
+
+  return Scaffold(
+    backgroundColor: Colors.white,
+    appBar: AppBar(
+      backgroundColor: Colors.white,
+      elevation: 0,
+      leading: IconButton(
+        icon: const Icon(Icons.arrow_back, color: Colors.black87),
+        onPressed: () => Navigator.pop(context),
+      ),
+    ),
+    body: content,
+  );
+}
 }
 
 class _PremiumFeature extends StatelessWidget {
