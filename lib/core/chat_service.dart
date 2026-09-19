@@ -4,17 +4,26 @@ class ChatService {
   final SupabaseClient _client = Supabase.instance.client;
 
   // Create a new chat session — starts untitled
-  Future<String?> createSession({
+  Future<String> createSession({
   required String studentId,
-  String? subject, // ✅ Nullable, no default
+  required String subject,
+  String? title,
 }) async {
-  final response = await _client.from('chat_sessions').insert({
-    'student_id': studentId,
-    'subject': subject, // Will be null if not provided
-    'title': 'New Chat',
-  }).select('id').single();
+  final trimmed = title != null && title.length > 40
+      ? '${title.substring(0, 40)}...'
+      : title;
 
-  return response['id'] as String?;
+  final result = await _client
+      .from('chat_sessions')
+      .insert({
+        'student_id': studentId,
+        'subject': subject,
+        'title': trimmed ?? 'New Chat',
+      })
+      .select('id')
+      .single();
+
+  return result['id'] as String;   // ← ensure this casts to non-null String
 }
 
   // Save a message

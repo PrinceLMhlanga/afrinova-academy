@@ -183,27 +183,53 @@ class _Chart extends StatelessWidget {
             ),
           ),
           bottomTitles: AxisTitles(
-            sideTitles: SideTitles(
-              showTitles: true,
-              reservedSize: 30,
-              interval: 1,
-              getTitlesWidget: (value, meta) {
-                final i = value.toInt();
-                if (i < 0 || i >= points.length) {
-                  return const SizedBox.shrink();
-                }
-                return Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text(
-                    _dayLabel(points[i].day),
-                    style: AppTextStyles.captionXs.copyWith(
-                      color: AppColors.textTertiary,
-                    ),
-                  ),
-                );
-              },
-            ),
+  sideTitles: SideTitles(
+    showTitles: true,
+    reservedSize: 30,
+    interval: 1,
+    getTitlesWidget: (value, meta) {
+      final i = value.toInt();
+      if (i < 0 || i >= points.length) {
+        return const SizedBox.shrink();
+      }
+
+      // Adaptive label density: on narrow screens, only show the
+      // first, last, and every Nth day in between. Tooltips still
+      // reveal the full date on hover/tap.
+      final width = MediaQuery.sizeOf(context).width;
+      final total = points.length;
+      final int step;
+      if (width < 400) {
+        // Phone — show ~3 labels
+        step = (total / 3).ceil().clamp(1, total);
+      } else if (width < 700) {
+        // Tablet — show ~5 labels
+        step = (total / 5).ceil().clamp(1, total);
+      } else {
+        // Desktop — show all
+        step = 1;
+      }
+
+      final isFirst = i == 0;
+      final isLast = i == total - 1;
+      final isStep = (total - 1 - i) % step == 0;
+
+      if (!isFirst && !isLast && !isStep) {
+        return const SizedBox.shrink();
+      }
+
+      return Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Text(
+          _dayLabel(points[i].day),
+          style: AppTextStyles.captionXs.copyWith(
+            color: AppColors.textTertiary,
           ),
+        ),
+      );
+    },
+  ),
+),
         ),
         lineTouchData: LineTouchData(
           enabled: true,

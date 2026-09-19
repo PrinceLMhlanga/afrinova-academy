@@ -32,6 +32,7 @@ class AppTheme {
         onSecondary: AppColors.textInverse,
         surface: AppColors.surface,
         onSurface: AppColors.textPrimary,
+        surfaceContainerHighest: AppColors.divider,
         error: AppColors.danger,
         onError: AppColors.textInverse,
         outline: AppColors.border,

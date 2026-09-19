@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/ai_service.dart';
@@ -13,23 +12,15 @@ import 'package:flutter_highlighter/themes/atom-one-dark.dart';
 import 'package:flutter/services.dart';
 import '../../core/trial_usage_service.dart';
 import '../../widgets/trial_limit_dialog.dart';
+import '../../core/theme/app_colors.dart';
 import '../../widgets/ai_markdown.dart';
-import '../../core/shell/panel_scaffold.dart';
+import 'dart:async';
 
 class AITutorScreen extends StatefulWidget {
   final String? subjectName;
   final String? sessionId;
 
-  /// When true, this screen is hosted inside [AppShell] as a panel.
-  /// Renders without its own AppBar or drawer.
-  final bool embedded;
-
-  const AITutorScreen({
-    super.key,
-    this.subjectName,
-    this.sessionId,
-    this.embedded = false,
-  });
+  const AITutorScreen({super.key, this.subjectName, this.sessionId});
 
   @override
   State<AITutorScreen> createState() => _AITutorScreenState();
@@ -55,6 +46,8 @@ class _AITutorScreenState extends State<AITutorScreen>
 
   bool _sidebarOpen = true;
 
+  bool _loadingMessages = false;   // session swap in progress
+
 
   // Animation controllers for welcome screen
   late AnimationController _welcomeAnimationController;
@@ -65,7 +58,7 @@ class _AITutorScreenState extends State<AITutorScreen>
   void initState() {
     super.initState();
     _initChat();
-    _sidebarOpen = !widget.embedded;
+    
     _welcomeAnimationController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 800),
@@ -110,32 +103,31 @@ class _AITutorScreenState extends State<AITutorScreen>
   }
 
   Future<void> _initChat() async {
-    final userId = _authService.currentUserId;
-    if (userId == null) return;
+  final userId = _authService.currentUserId;
+  if (userId == null) return;
 
-    if (widget.sessionId != null) {
-      _sessionId = widget.sessionId;
-      final history = await _chatService.getMessages(_sessionId!);
-      if (history.isNotEmpty) {
-        for (final msg in history) {
-          _messages.add(_ChatMessage(
-            text: msg['message'] as String,
-            isUser: msg['sender'] == 'student',
-          ));
-        }
-      } else {
-        _addWelcomeMessage();
+  if (widget.sessionId != null) {
+    // Existing session — load it
+    _sessionId = widget.sessionId;
+    final history = await _chatService.getMessages(_sessionId!);
+    if (history.isNotEmpty) {
+      for (final msg in history) {
+        _messages.add(_ChatMessage(
+          text: msg['message'] as String,
+          isUser: msg['sender'] == 'student',
+        ));
       }
     } else {
-      _sessionId = await _chatService.createSession(
-        studentId: userId,
-        subject: widget.subjectName ?? 'General',
-      );
       _addWelcomeMessage();
     }
-
-    if (mounted) setState(() => _isInitializing = false);
+  } else {
+    // No session yet — just show the welcome. Session is created
+    // lazily on first message.
+    _addWelcomeMessage();
   }
+
+  if (mounted) setState(() => _isInitializing = false);
+}
 
   void _addWelcomeMessage() {
   _messages.add(_ChatMessage(
@@ -146,65 +138,87 @@ class _AITutorScreenState extends State<AITutorScreen>
   ));
 }
 
-Future<void> _loadSession(String sessionId) async {
+Future<void> _loadSession(String sessionId, String? subject) async {
   setState(() {
-    _isInitializing = true;
+    _loadingMessages = true;
     _messages.clear();
     _sessionId = sessionId;
   });
 
-  final history = await _chatService.getMessages(sessionId);
-  if (!mounted) return;
+  try {
+    final history = await _chatService.getMessages(sessionId);
+    if (!mounted) return;
 
-  setState(() {
-    if (history.isEmpty) {
-      _addWelcomeMessage();
-    } else {
-      for (final msg in history) {
-        _messages.add(_ChatMessage(
-          text: msg['message'] as String,
-          isUser: msg['sender'] == 'student',
-        ));
+    setState(() {
+      if (history.isEmpty) {
+        _addWelcomeMessage();
+      } else {
+        for (final msg in history) {
+          _messages.add(_ChatMessage(
+            text: msg['message'] as String,
+            isUser: msg['sender'] == 'student',
+          ));
+        }
       }
-    }
-    _isInitializing = false;
-  });
+      _loadingMessages = false;
+    });
+
+    _scrollToBottom();
+  } catch (e) {
+    debugPrint('Error loading session: $e');
+    if (mounted) setState(() => _loadingMessages = false);
+  }
 }
 
 Future<void> _sendMessage() async {
   final text = _inputController.text.trim();
   if (text.isEmpty || _isLoading) return;
 
-  // ✅ CHECK TRIAL LIMIT BEFORE PROCESSING
-  final trialCheck = await TrialUsageService().canUseFeature('general_tutor_messages');
+  // ── Trial limit check ────────────────────────────────────────
+  final trialCheck =
+      await TrialUsageService().canUseFeature('general_tutor_messages');
   if (!trialCheck.allowed) {
     if (mounted) {
       final subscribed = await TrialLimitDialog.show(
-  context,
-  featureName: 'AI Tutor',
-  customMessage: trialCheck.message,
-);
-
-if (subscribed == true && mounted) {
-  // Optional: show confirmation snackbar
-  ScaffoldMessenger.of(context).showSnackBar(
-    const SnackBar(content: Text('✅ Unlimited access activated!')),
-  );
-}
-return;
+        context,
+        featureName: 'AI Tutor',
+        customMessage: trialCheck.message,
+      );
+      if (subscribed == true && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('✅ Unlimited access activated!')),
+        );
+      }
     }
     return;
   }
 
+  // ── Lazy session creation ────────────────────────────────────
+  // If there's no session yet, create it NOW — right before the
+  // first message is saved. This avoids orphan "New Chat" rows in
+  // the sidebar when the user opens a new chat and types nothing.
+  final userId = _authService.currentUserId;
+  if (userId == null) return;
+
+  if (_sessionId == null) {
+  final newSessionId = await _chatService.createSession(
+    studentId: userId,
+    subject: widget.subjectName ?? 'General',
+    title: text,                                    // ← title set at creation
+  );
+  if (!mounted) return;
+  setState(() => _sessionId = newSessionId);
+}
+
+  // ── Add user message + streaming placeholder locally ─────────
   _inputController.clear();
-  
+
   final streamController = ChatStreamController();
-  
   int? streamingIndex;
 
   setState(() {
     _messages.add(_ChatMessage(text: text, isUser: true));
-    
+
     final placeholder = _ChatMessage(
       text: 'Thinking...',
       isUser: false,
@@ -217,26 +231,29 @@ return;
   });
   _scrollToBottom();
 
-  // Save user message to database
+  // ── Persist the user's message ───────────────────────────────
+  // Note: autoName already ran above if this was the first message,
+  // so we don't need the old studentMessages == 1 check here.
   if (_sessionId != null) {
-    final studentMessages = _messages.where((m) => m.isUser).length;
-    if (studentMessages == 1) {
-      await _chatService.autoNameSession(_sessionId!, text);
-    }
-    await _chatService.saveMessage(sessionId: _sessionId!, sender: 'student', message: text);
+    await _chatService.saveMessage(
+      sessionId: _sessionId!,
+      sender: 'student',
+      message: text,
+    );
     await _chatService.updateSessionTimestamp(_sessionId!);
   }
 
-  // Build clean non-streaming conversational history context
+  // ── Build trimmed history for the AI context ─────────────────
   final history = _messages
       .where((m) => !m.isStreaming)
       .map((m) => {'sender': m.isUser ? 'student' : 'ai', 'message': m.text})
       .toList();
 
-  final trimmedHistory = history.length > 10 
-      ? history.sublist(history.length - 10) 
+  final trimmedHistory = history.length > 10
+      ? history.sublist(history.length - 10)
       : history;
 
+  // ── Stream the AI response ───────────────────────────────────
   try {
     final stream = _aiService.chatStream(
       message: text,
@@ -247,21 +264,22 @@ return;
     await for (final chunk in stream) {
       streamController.addChunk(chunk);
       if (mounted) {
-        _scrollToBottom(); 
+        _scrollToBottom();
       }
     }
   } catch (e) {
-    streamController.addChunk('\n\n*Error generating response. Please try again.*');
+    streamController
+        .addChunk('\n\n*Error generating response. Please try again.*');
   } finally {
     if (mounted) {
       setState(() => _isLoading = false);
     }
-    
-    final finalAiText = streamController.fullText.isNotEmpty 
-        ? streamController.fullText 
+
+    final finalAiText = streamController.fullText.isNotEmpty
+        ? streamController.fullText
         : 'No response received from tutor.';
 
-    // Save complete response string to database
+    // Save the complete AI response
     if (_sessionId != null && streamController.fullText.isNotEmpty) {
       await _chatService.saveMessage(
         sessionId: _sessionId!,
@@ -269,11 +287,12 @@ return;
         message: finalAiText,
       );
     }
-    
+
     streamController.closeStream();
-    
+
     if (mounted) {
-      final targetIndex = _messages.indexWhere((m) => m.streamController == streamController);
+      final targetIndex = _messages
+          .indexWhere((m) => m.streamController == streamController);
       if (targetIndex != -1) {
         setState(() {
           _messages[targetIndex] = _ChatMessage(
@@ -287,33 +306,13 @@ return;
       _scrollToBottom();
     }
 
-    // ✅ INCREMENT TRIAL USAGE AFTER SUCCESSFUL RESPONSE
-    // Only increment if we got a real response (not an error)
-    if (streamController.fullText.isNotEmpty && 
+    // Increment trial usage only after a real response
+    if (streamController.fullText.isNotEmpty &&
         !finalAiText.contains('Error generating response')) {
       await TrialUsageService().incrementUsage('general_tutor_messages');
       debugPrint('✅ Trial usage incremented for general_tutor_messages');
     }
   }
-}
-
-Future<void> _startNewChat() async {
-  if (widget.embedded) {
-    setState(() {
-      _messages.clear();
-      _sessionId = null;
-      _streamingText = '';
-      _isInitializing = true;
-    });
-    await _initChat();
-    return;
-  }
-  Navigator.pushReplacement(
-    context,
-    MaterialPageRoute(
-      builder: (_) => AITutorScreen(subjectName: widget.subjectName),
-    ),
-  );
 }
 
   
@@ -330,12 +329,43 @@ Future<void> _startNewChat() async {
     });
   }
 
-  
+ Future<void> _startNewChat() async {
+  setState(() {
+    _loadingMessages = true;
+    _messages.clear();
+    _sessionId = null;    // no DB row yet — sessionId is null
+    _loadingMessages = false;
+  });
+  _addWelcomeMessage();
+}
 
  @override
 Widget build(BuildContext context) {
-    if (_isInitializing) {
-    final body = const Center(
+  if (_isInitializing) {
+  return Scaffold(
+    backgroundColor: Colors.white,
+    appBar: AppBar(
+      toolbarHeight: 68,
+      leadingWidth: 56,
+      leading: IconButton(
+        icon: const Icon(Icons.arrow_back_rounded, size: 22),
+        onPressed: () => Navigator.of(context).maybePop(),
+        tooltip: 'Back',
+      ),
+      titleSpacing: 0,
+      title: const Text('AI Tutor'),
+      centerTitle: false,
+      backgroundColor: Colors.transparent,
+      foregroundColor: Colors.white,
+      elevation: 0,
+      scrolledUnderElevation: 0,
+      flexibleSpace: Container(
+  decoration: const BoxDecoration(
+    gradient: AppColors.topbarGradient,
+  ),
+),
+    ),
+    body: const Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
@@ -344,30 +374,9 @@ Widget build(BuildContext context) {
           Text('Loading your AI tutor...', style: TextStyle(color: Colors.grey)),
         ],
       ),
-    );
-
-    if (widget.embedded) {
-      return PanelScaffold(child: body);
-    }
-
-    return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        title: const Text(
-          'AI Tutor',
-          style: TextStyle(
-            color: Colors.black87,
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        centerTitle: true,
-      ),
-      body: body,
-    );
-  }
+    ),
+  );
+}
 
   final isWideScreen = MediaQuery.of(context).size.width > 768;
 
@@ -375,114 +384,145 @@ Widget build(BuildContext context) {
  
 
 
-if (isWideScreen || widget.embedded) {
-  // When embedded, always use the "wide" layout — but the shell
-  // already provides the outer chrome, so we don't add another
-  // Scaffold.
-  final layout = Stack(
-    children: [
-      Row(
-        children: [
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            width: _sidebarOpen ? 280 : 0,
-            child: _sidebarOpen
-                ? ClipRect(
-                    child: ChatSidebarContent(
-                      currentSessionId: _sessionId,
-                      currentSubject: widget.subjectName,
-                      onSessionSelected: (sessionId, subject) {
-  if (sessionId == null) return;
-  if (widget.embedded) {
-    _loadSession(sessionId);
-    return;
-  }
-  Navigator.pushReplacement(
-    context,
-    MaterialPageRoute(
-      builder: (_) => AITutorScreen(
-        sessionId: sessionId,
-        subjectName: subject,
-        embedded: widget.embedded,
-      ),
-    ),
-  );
-},
-                      onNewChat: _startNewChat,
-                      sidebarToggle: SidebarToggleButton(
-                        icon: Icons.chevron_left,
-                        onPressed: () => setState(() => _sidebarOpen = false),
-                      ),
-                    ),
-                  )
-                : null,
-          ),
-          if (!_sidebarOpen) const SizedBox(width: 48),
-          Expanded(child: _buildChatContent()),
-        ],
-      ),
-      if (!_sidebarOpen)
-        Positioned(
-          top: 8,
-          left: 8,
-          child: SidebarToggleButton(
-            icon: Icons.chevron_right,
-            onPressed: () => setState(() => _sidebarOpen = true),
-          ),
-        ),
-    ],
-  );
-
-    if (widget.embedded) {
-    // Chat is edge-to-edge. No PanelScaffold, no outer padding.
-    return Material(
-      color: const Color(0xFFFAFAFA),
-      child: layout,
-    );
-  }
-
+if (isWideScreen) {
   return Scaffold(
     backgroundColor: const Color(0xFFFAFAFA),
-    body: layout,
+   appBar: AppBar(
+  toolbarHeight: 68,
+  leadingWidth: 56,
+  leading: IconButton(
+    icon: const Icon(Icons.arrow_back_rounded, color: Colors.white, size: 22),
+    onPressed: () => Navigator.of(context).maybePop(),
+    tooltip: 'Back',
+  ),
+  titleSpacing: 0,
+  title: Text(
+    widget.subjectName != null
+        ? '${widget.subjectName} Tutor'
+        : 'AI Tutor',
+    style: const TextStyle(
+      color: Colors.white,
+      fontSize: 22,
+      fontWeight: FontWeight.w800,
+      letterSpacing: -0.5,
+    ),
+  ),
+  centerTitle: false,
+  backgroundColor: Colors.transparent,
+  surfaceTintColor: Colors.transparent,   // ← the fix; keep it
+  foregroundColor: Colors.white,
+  elevation: 0,
+  scrolledUnderElevation: 0,
+  flexibleSpace: Container(
+  decoration: const BoxDecoration(
+    gradient: AppColors.topbarGradient,
+  ),
+),
+  actions: [
+    IconButton(
+      icon: const Icon(Icons.edit_outlined, color: Colors.white, size: 20),
+      onPressed: _startNewChat,
+      tooltip: 'New Chat',
+    ),
+    const SizedBox(width: 8),
+  ],
+),
+    body: Stack(
+      children: [
+        Row(
+          children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              width: _sidebarOpen ? 280 : 0,
+              child: _sidebarOpen
+                  ? ClipRect(
+                      child: ChatSidebarContent(
+                        currentSessionId: _sessionId,
+                        currentSubject: widget.subjectName,
+                       onSessionSelected: (sessionId, subject) {
+    if (sessionId == null) return;
+    _loadSession(sessionId, subject);
+  },
+                        onNewChat: _startNewChat,
+                        // ✅ Pass the toggle button to the sidebar header
+                        sidebarToggle: SidebarToggleButton(
+                          icon: Icons.chevron_left,
+                          onPressed: () => setState(() => _sidebarOpen = false),
+                        ),
+                      ),
+                    )
+                  : null,
+            ),
+            if (!_sidebarOpen)
+              const SizedBox(width: 48), // Space for toggle button
+            Expanded(child: _buildChatContent()),
+          ],
+        ),
+        // ✅ When sidebar is closed, show toggle at top left of screen
+        if (!_sidebarOpen)
+          Positioned(
+            top: 8,
+            left: 8,
+            child: SidebarToggleButton(
+              icon: Icons.chevron_right,
+              onPressed: () => setState(() => _sidebarOpen = true),
+            ),
+          ),
+      ],
+    ),
   );
 }
+
   // ✅ Narrow screen - drawer (your original working code)
   return Scaffold(
     backgroundColor: const Color(0xFFFAFAFA),
     appBar: AppBar(
-      leading: Builder(
-        builder: (ctx) => IconButton(
-          icon: const Icon(Icons.menu, color: Colors.black87),
-          onPressed: () => Scaffold.of(ctx).openDrawer(),
-        ),
+  leading: Builder(
+    builder: (ctx) => IconButton(
+      icon: const Icon(
+        Icons.menu,
+        color: Colors.white,
+        size: 22,
       ),
-      title: Text(
-  widget.subjectName != null ? '${widget.subjectName} Tutor' : 'AfriNova AI Tutor',
-  style: const TextStyle(color: Colors.black87, fontSize: 16, fontWeight: FontWeight.w600),
-),
-      centerTitle: true,
-      backgroundColor: Colors.white,
-      elevation: 0,
-      actions: [
-        IconButton(
-          icon: const Icon(Icons.edit_outlined, color: Colors.black54),
-          onPressed: _startNewChat,
-          tooltip: 'New Chat',
-        ),
-      ],
+      onPressed: () => Scaffold.of(ctx).openDrawer(),
+      tooltip: 'Chats',
     ),
+  ),
+  title: Text(
+    widget.subjectName != null
+        ? '${widget.subjectName} Tutor'
+        : 'AfriNova AI Tutor',
+  ),
+  centerTitle: false,
+  backgroundColor: Colors.transparent,
+  foregroundColor: Colors.white,
+  elevation: 0,
+  scrolledUnderElevation: 0,
+  flexibleSpace: Container(
+  decoration: const BoxDecoration(
+    gradient: AppColors.topbarGradient,
+  ),
+),
+  actions: [
+    IconButton(
+      icon: const Icon(
+        Icons.edit_outlined,
+        color: Colors.white,
+        size: 20,
+      ),
+      onPressed: _startNewChat,
+      tooltip: 'New Chat',
+    ),
+  ],
+),
     drawer: ChatSidebar(
       currentSessionId: _sessionId,
       currentSubject: widget.subjectName,
       onSessionSelected: (sessionId, subject) {
-        Navigator.pop(context);
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => AITutorScreen(sessionId: sessionId, subjectName: subject),
-          ),
-        );
-      },
+    Navigator.pop(context);   // close the drawer — keep this
+    if (sessionId == null) return;
+    _loadSession(sessionId, subject);
+  },
       onNewChat: () {
         Navigator.pop(context);
         _startNewChat();
@@ -497,8 +537,14 @@ Widget _buildChatContent() {
   return Column(
     children: [
       Expanded(
-        child: _messages.isEmpty
-            ? _buildWelcomeScreen()
+        child: _loadingMessages
+            ? const Center(
+                child: CircularProgressIndicator(
+                  color: Color(0xFF1A237E),
+                ),
+              )
+            : _messages.isEmpty
+                ? _buildWelcomeScreen()
             : Stack(
                 children: [
                   ListView.builder(
@@ -788,50 +834,59 @@ Widget _buildChatContent() {
   }
 
   Widget _buildInputBar() {
-    final hasText = _inputController.text.trim().isNotEmpty;
+  final hasText = _inputController.text.trim().isNotEmpty;
 
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border(top: BorderSide(color: Colors.grey.shade100)),
-      ),
-      child: SafeArea(
+  return Container(
+    padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      border: Border(top: BorderSide(color: Colors.grey.shade100)),
+    ),
+    child: SafeArea(
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.grey.shade100,
+          borderRadius: BorderRadius.circular(28),
+          border: Border.all(color: Colors.grey.shade200),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            // Attachment button (like ChatGPT)
-            IconButton(
-              icon: Icon(
-                Icons.attach_file_rounded,
-                color: Colors.grey[500],
-                size: 22,
+            // Plus button
+            MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: IconButton(
+                onPressed: null, // AI Tutor has no attachment flow yet
+                icon: const Icon(
+                  Icons.add_rounded,
+                  color: Colors.black87,
+                  size: 24,
+                ),
+                splashRadius: 20,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(
+                  minWidth: 40,
+                  minHeight: 40,
+                ),
+                tooltip: 'Attach',
               ),
-              onPressed: () {},
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(),
             ),
-            const SizedBox(width: 8),
+
+            // Text input — opted out of the app-wide input theme.
             Expanded(
-              child: Container(
-                constraints: const BoxConstraints(maxHeight: 120),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade50,
-                  borderRadius: BorderRadius.circular(28),
-                  border: Border.all(
-                    color: _focusNode.hasFocus
-                        ? const Color(0xFF1A237E).withOpacity(0.4)
-                        : Colors.grey.shade200,
+              child: Theme(
+                data: Theme.of(context).copyWith(
+                  inputDecorationTheme: const InputDecorationTheme(
+                    filled: false,
+                    border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    errorBorder: InputBorder.none,
+                    disabledBorder: InputBorder.none,
+                    contentPadding: EdgeInsets.symmetric(vertical: 12),
+                    isDense: true,
                   ),
-                  boxShadow: _focusNode.hasFocus
-                      ? [
-                          BoxShadow(
-                            color: const Color(0xFF1A237E).withOpacity(0.08),
-                            blurRadius: 12,
-                            offset: const Offset(0, 2),
-                          ),
-                        ]
-                      : [],
                 ),
                 child: TextField(
                   controller: _inputController,
@@ -841,8 +896,7 @@ Widget _buildChatContent() {
                   textInputAction: TextInputAction.newline,
                   style: const TextStyle(
                     fontSize: 15,
-                    color: Color(0xFF1E1E1E),
-                    height: 1.4,
+                    color: Colors.black87,
                   ),
                   decoration: const InputDecoration(
                     hintText: 'Ask AfriNova AI...',
@@ -851,55 +905,40 @@ Widget _buildChatContent() {
                       fontSize: 15,
                     ),
                     border: InputBorder.none,
-                    contentPadding: EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 14,
-                    ),
+                    contentPadding: EdgeInsets.symmetric(vertical: 12),
+                    isDense: true,
                   ),
                   onChanged: (_) => setState(() {}),
                   onSubmitted: (_) => _sendMessage(),
                 ),
               ),
             ),
-            const SizedBox(width: 10),
+
             // Send button
             AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              width: 46,
-              height: 46,
+              duration: const Duration(milliseconds: 150),
+              width: 40,
+              height: 40,
               decoration: BoxDecoration(
-                gradient: hasText
-                    ? const LinearGradient(
-                        colors: [Color(0xFF1A237E), Color(0xFF283593)],
-                      )
-                    : null,
-                color: hasText ? null : Colors.grey.shade300,
+                color: hasText ? const Color(0xFF1A237E) : Colors.grey.shade300,
                 shape: BoxShape.circle,
-                boxShadow: hasText
-                    ? [
-                        BoxShadow(
-                          color: const Color(0xFF1A237E).withOpacity(0.3),
-                          blurRadius: 12,
-                          offset: const Offset(0, 4),
-                        ),
-                      ]
-                    : [],
               ),
               child: IconButton(
                 onPressed: hasText ? _sendMessage : null,
-                icon: Icon(
-                  hasText ? Icons.arrow_upward_rounded : Icons.arrow_upward_rounded,
-                  color: hasText ? Colors.white : Colors.grey,
-                  size: 22,
-                ),
                 padding: EdgeInsets.zero,
+                icon: Icon(
+                  Icons.arrow_upward_rounded,
+                  color: hasText ? Colors.white : Colors.grey.shade500,
+                  size: 20,
+                ),
               ),
             ),
           ],
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 }
 
 // ===== CHAT MESSAGE MODEL =====

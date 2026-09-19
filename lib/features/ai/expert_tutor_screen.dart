@@ -11,6 +11,7 @@ import '../../core/trial_usage_service.dart';
 import '../../widgets/trial_limit_dialog.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../widgets/ai_markdown.dart';
+import '../../core/theme/app_colors.dart';
 
 class ExpertTutorScreen extends StatefulWidget {
   final String? topicId;
@@ -1457,31 +1458,64 @@ Widget build(BuildContext context) {
   return Scaffold(
     backgroundColor: const Color(0xFFFAFAFA),
     appBar: AppBar(
-      title: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(widget.topicName ?? 'Expert Tutor', style: const TextStyle(fontSize: 16)),
-          Text(
-            _isTeachingMode
-                ? 'Teaching Mode • ${_formatTeachingTime()}'
-                : '${_objectives.where((o) => o['is_mastered'] == true).length}/${_objectives.length} mastered',
-            style: const TextStyle(fontSize: 11, color: Colors.grey),
-          ),
-        ],
-      ),
-      backgroundColor: Colors.white,
-      foregroundColor: Colors.black87,
-      elevation: 0,
-      actions: [
-        IconButton(
-          icon: Icon(
-            _showSyllabus ? Icons.checklist : Icons.checklist_outlined,
-            color: _showSyllabus ? const Color(0xFF1A237E) : Colors.grey,
-          ),
-          onPressed: () => setState(() => _showSyllabus = !_showSyllabus),
+  toolbarHeight: 68,
+  leadingWidth: 56,
+  leading: IconButton(
+    icon: const Icon(Icons.arrow_back_rounded, size: 22),
+    onPressed: () => Navigator.of(context).maybePop(),
+    tooltip: 'Back',
+  ),
+  titleSpacing: 0,
+  title: Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Text(
+        widget.topicName ?? 'Expert Tutor',
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(
+          fontSize: 18,
+          fontWeight: FontWeight.w700,
+          letterSpacing: -0.3,
+          color: Colors.white,
         ),
-      ],
+      ),
+      const SizedBox(height: 2),
+      Text(
+        _isTeachingMode
+            ? 'Teaching Mode • ${_formatTeachingTime()}'
+            : '${_objectives.where((o) => o['is_mastered'] == true).length}/${_objectives.length} mastered',
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w500,
+          color: Colors.white.withOpacity(0.7),
+        ),
+      ),
+    ],
+  ),
+  centerTitle: false,
+  backgroundColor: Colors.transparent,
+  foregroundColor: Colors.white,
+  elevation: 0,
+  scrolledUnderElevation: 0,
+ flexibleSpace: Container(
+  decoration: const BoxDecoration(
+    gradient: AppColors.topbarGradient,
+  ),
+),
+  actions: [
+    IconButton(
+      icon: Icon(
+        _showSyllabus ? Icons.checklist : Icons.checklist_outlined,
+        color: Colors.white,
+        size: 20,
+      ),
+      onPressed: () => setState(() => _showSyllabus = !_showSyllabus),
+      tooltip: 'Toggle syllabus',
     ),
+    const SizedBox(width: 8),
+  ],
+),
     body: _isLoading
         ? const Center(child: CircularProgressIndicator())
         : Column(
@@ -1610,13 +1644,13 @@ Widget _buildInputBar() {
   if (_isTeachingMode) {
     return const SizedBox.shrink();
   }
-  
+
   final hasText = _inputController.text.trim().isNotEmpty;
   final hasImage = _pendingImageUrl != null || _pendingImageLocalPath != null;
-  final canSend = (hasText || hasImage) 
-      && !_isSending 
-      && !_isSubmitting 
-      && !_pendingImageUploading;
+  final canSend = (hasText || hasImage) &&
+      !_isSending &&
+      !_isSubmitting &&
+      !_pendingImageUploading;
 
   return Container(
     padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
@@ -1628,9 +1662,9 @@ Widget _buildInputBar() {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // ✅ Image preview ABOVE the input bar
+          // Image preview ABOVE the input bar
           if (hasImage) _buildImagePreview(),
-          
+
           // The pill-shaped input bar
           Container(
             decoration: BoxDecoration(
@@ -1646,58 +1680,89 @@ Widget _buildInputBar() {
                 MouseRegion(
                   cursor: SystemMouseCursors.click,
                   child: IconButton(
-                    onPressed: (_isSending || _isSubmitting || _pendingImageUploading) 
-                        ? null 
+                    onPressed: (_isSending ||
+                            _isSubmitting ||
+                            _pendingImageUploading)
+                        ? null
                         : _showAttachmentSheet,
                     icon: Icon(
                       Icons.add_rounded,
-                      color: (_isSending || _isSubmitting || _pendingImageUploading) 
-                          ? Colors.grey.shade400 
+                      color: (_isSending ||
+                              _isSubmitting ||
+                              _pendingImageUploading)
+                          ? Colors.grey.shade400
                           : Colors.black87,
                       size: 24,
                     ),
                     splashRadius: 20,
                     padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                    constraints: const BoxConstraints(
+                      minWidth: 40,
+                      minHeight: 40,
+                    ),
                     tooltip: 'Attach',
                   ),
                 ),
-                
-                // Text input
+
+                // Text input — opted out of the app-wide input theme.
+                // The outer Container already paints the pill; the
+                // TextField just renders text with no border, no fill,
+                // no focus ring, and no extra padding.
                 Expanded(
-                  child: TextField(
-                    controller: _inputController,
-                    maxLines: 5,
-                    minLines: 1,
-                    enabled: !_isSending && !_isSubmitting,
-                    style: const TextStyle(fontSize: 15, color: Colors.black87),
-                    decoration: const InputDecoration(
-                      hintText: 'Ask anything',
-                      hintStyle: TextStyle(color: Colors.grey, fontSize: 15),
-                      border: InputBorder.none,
-                      contentPadding: EdgeInsets.symmetric(vertical: 12),
-                      isDense: true,
+                  child: Theme(
+                    data: Theme.of(context).copyWith(
+                      inputDecorationTheme: const InputDecorationTheme(
+                        filled: false,
+                        border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        errorBorder: InputBorder.none,
+                        disabledBorder: InputBorder.none,
+                        contentPadding: EdgeInsets.symmetric(vertical: 12),
+                        isDense: true,
+                      ),
                     ),
-                    onChanged: (_) => setState(() {}),
+                    child: TextField(
+                      controller: _inputController,
+                      maxLines: 5,
+                      minLines: 1,
+                      enabled: !_isSending && !_isSubmitting,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        color: Colors.black87,
+                      ),
+                      decoration: const InputDecoration(
+                        hintText: 'Ask anything',
+                        hintStyle: TextStyle(
+                          color: Colors.grey,
+                          fontSize: 15,
+                        ),
+                        border: InputBorder.none,
+                        contentPadding: EdgeInsets.symmetric(vertical: 12),
+                        isDense: true,
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
                   ),
                 ),
-                
+
                 // Send button with loading state
                 AnimatedContainer(
                   duration: const Duration(milliseconds: 150),
                   width: 40,
                   height: 40,
                   decoration: BoxDecoration(
-                    color: canSend ? const Color(0xFF1A237E) : Colors.grey.shade300,
+                    color: canSend
+                        ? const Color(0xFF1A237E)
+                        : Colors.grey.shade300,
                     shape: BoxShape.circle,
                   ),
                   child: _isSubmitting || _isSending
-                      // ✅ Loading spinner during send
-                      ? Padding(
-                          padding: const EdgeInsets.all(10),
+                      ? const Padding(
+                          padding: EdgeInsets.all(10),
                           child: CircularProgressIndicator(
                             strokeWidth: 2.5,
-                            valueColor: const AlwaysStoppedAnimation(Colors.white),
+                            valueColor: AlwaysStoppedAnimation(Colors.white),
                           ),
                         )
                       : IconButton(
@@ -1705,7 +1770,9 @@ Widget _buildInputBar() {
                           padding: EdgeInsets.zero,
                           icon: Icon(
                             Icons.arrow_upward_rounded,
-                            color: canSend ? Colors.white : Colors.grey.shade500,
+                            color: canSend
+                                ? Colors.white
+                                : Colors.grey.shade500,
                             size: 20,
                           ),
                         ),

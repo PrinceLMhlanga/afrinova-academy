@@ -279,6 +279,9 @@ class _NavTile extends StatelessWidget {
         ),
       ),
       // Premium marker: purple diamond, CapCut-style.
+            // Premium marker: purple diamond (CapCut-style). When a push
+      // item is also premium, we show only the diamond — the arrow
+      // and diamond together read as cluttered.
       if (item.isPremium)
         const Padding(
           padding: EdgeInsets.only(left: 6),
@@ -287,9 +290,8 @@ class _NavTile extends StatelessWidget {
             size: 14,
             color: Color(0xFF8B5CF6),
           ),
-        ),
-      // Push indicator (open-in-new arrow).
-      if (item.behavior == NavBehavior.push)
+        )
+      else if (item.behavior == NavBehavior.push)
         const Padding(
           padding: EdgeInsets.only(left: 4),
           child: Icon(

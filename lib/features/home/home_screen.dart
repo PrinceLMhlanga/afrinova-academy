@@ -224,14 +224,7 @@ class _StudentShellState extends State<_StudentShell> {
   );
 
   // Premium panels — guarded
-  NavRegistry.registerPanel(
-    'ai_tutor',
-    (context) => const AIFeatureGuard(
-      featureName: 'AI Tutor',
-      embedded: true,
-      child: AITutorScreen(embedded: true),
-    ),
-  );
+ 
   NavRegistry.registerPanel(
     'expert_tutor',
     (context) => const AIFeatureGuard(
@@ -279,6 +272,12 @@ class _StudentShellState extends State<_StudentShell> {
   void _pushRoute(BuildContext context, String key) {
   Widget? target;
   switch (key) {
+    case 'ai_tutor':
+  target = AIFeatureGuard(
+    featureName: 'AI Tutor',
+    child: const AITutorScreen(),
+  );
+  break;
     case 'my_subjects':
       target = const MySubjectsScreen();
       break;

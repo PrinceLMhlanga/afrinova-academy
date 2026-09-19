@@ -304,7 +304,6 @@ class ChatSidebarContent extends StatefulWidget {
   final VoidCallback onNewChat;
   final VoidCallback? onClose;
   final Widget? sidebarToggle;
-  final double headerTopPadding;
 
   const ChatSidebarContent({
     super.key,
@@ -313,8 +312,7 @@ class ChatSidebarContent extends StatefulWidget {
     required this.onSessionSelected,
     required this.onNewChat,
     this.onClose,
-    this.sidebarToggle,
-    this.headerTopPadding = 56
+    this.sidebarToggle
   });
 
   @override
@@ -348,6 +346,16 @@ class _ChatSidebarContentState extends State<ChatSidebarContent> {
     }
   } catch (e) {
     if (mounted) setState(() => _isLoading = false);
+  }
+}
+
+@override
+void didUpdateWidget(covariant ChatSidebarContent oldWidget) {
+  super.didUpdateWidget(oldWidget);
+  // When the parent switches sessions, refresh the list so the new
+  // one is highlighted and the recently-touched one moves to the top.
+  if (oldWidget.currentSessionId != widget.currentSessionId) {
+    _loadSessions();
   }
 }
 
@@ -427,27 +435,22 @@ void _subscribeToSessionUpdates() {
       child: Column(
         children: [
           // Header
-          Container(
-            padding: EdgeInsets.fromLTRB(16, widget.headerTopPadding, 16, 16),
-            decoration: const BoxDecoration(color: Color(0xFFEEEEEE)),
-            child: Row(
-              children: [
-                Container(
-                  width: 36, height: 36,
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(colors: [Color(0xFF1A237E), Color(0xFFFF9800)]),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(Icons.auto_awesome, color: Colors.white, size: 18),
-                ),
-                const SizedBox(width: 10),
-                const Expanded(child: Text('AfriNova AI', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
-                if (widget.sidebarToggle != null)
-        widget.sidebarToggle!,  
-
-              ],
-            ),
-          ),
+          // Slim header — just the collapse/close toggle. The AppBar already
+// says where we are, so no brand text is needed here.
+Container(
+  padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+  decoration: const BoxDecoration(
+    color: Color(0xFFEEEEEE),
+    border: Border(
+      bottom: BorderSide(color: Color(0xFFE0E0E0)),
+    ),
+  ),
+  child: Row(
+    children: [
+      if (widget.sidebarToggle != null) widget.sidebarToggle!,
+    ],
+  ),
+),
           
           // New Chat button
           Padding(

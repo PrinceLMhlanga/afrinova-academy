@@ -110,15 +110,7 @@ class NavRegistry {
           section: sectionAchievements,
         ),
         // ── AI TOOLS ───────────────────────────────────────────
-        NavItem(
-  key: 'ai_tutor',
-  label: 'AI Tutor',
-  icon: Icons.auto_awesome_outlined,
-  selectedIcon: Icons.auto_awesome_rounded,
-  behavior: NavBehavior.panel,
-  section: sectionAi,
-  isPremium: true,
-),
+        
 NavItem(
   key: 'expert_tutor',
   label: 'Expert Tutor',
@@ -239,6 +231,16 @@ NavItem(
           section: sectionLearning,
           onPush: (ctx) => onPush(ctx, 'live_lessons'),
         ),
+        NavItem(
+  key: 'ai_tutor',
+  label: 'AI Tutor',
+  icon: Icons.auto_awesome_outlined,
+  selectedIcon: Icons.auto_awesome_rounded,
+  behavior: NavBehavior.push,
+  section: sectionAi,
+  isPremium: true,
+  onPush: (ctx) => onPush(ctx, 'ai_tutor'),
+),
       ];
 
   /// Full nav list in render order: panels first (grouped), then pushes.

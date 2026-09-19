@@ -210,7 +210,7 @@ class _DrawerTile extends StatelessWidget {
         style: AppTextStyles.labelMd.copyWith(color: fg),
       ),
     ),
-    if (item.isPremium)
+        if (item.isPremium)
       const Padding(
         padding: EdgeInsets.only(left: 6),
         child: Icon(
@@ -218,8 +218,8 @@ class _DrawerTile extends StatelessWidget {
           size: 14,
           color: Color(0xFF8B5CF6),
         ),
-      ),
-    if (item.behavior == NavBehavior.push)
+      )
+    else if (item.behavior == NavBehavior.push)
       const Padding(
         padding: EdgeInsets.only(left: 4),
         child: Icon(
