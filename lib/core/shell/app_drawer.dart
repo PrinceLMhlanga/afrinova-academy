@@ -46,28 +46,33 @@ class AppDrawer extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             // Brand block
-                       // Brand block
+                        // Brand block — matches the sidebar's white treatment.
             Container(
-              padding: const EdgeInsets.all(AppSpacing.lg),
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.lg,
+                AppSpacing.lg,
+                AppSpacing.lg,
+                AppSpacing.md,
+              ),
               decoration: const BoxDecoration(
-                gradient: AppColors.brandGradient,
-                borderRadius: BorderRadius.only(
-                  bottomRight: Radius.circular(AppSpacing.radiusSheet),
+                color: AppColors.surface,
+                border: Border(
+                  bottom: BorderSide(color: AppColors.divider, width: 1),
                 ),
               ),
               child: Row(
                 children: [
                   Image.asset(
                     'assets/images/logo.png',
-                    width: 44,
-                    height: 44,
+                    width: 40,
+                    height: 40,
                     fit: BoxFit.contain,
                     errorBuilder: (_, __, ___) => Container(
-                      width: 44,
-                      height: 44,
+                      width: 40,
+                      height: 40,
                       decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(10),
+                        gradient: AppColors.brandGradient,
+                        borderRadius: BorderRadius.circular(11),
                       ),
                       child: const Icon(
                         Icons.auto_awesome,
@@ -77,31 +82,30 @@ class AppDrawer extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: AppSpacing.md),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Text(
-                        'AfriNova',
-                        style: TextStyle(
-                          color: AppColors.textInverse,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w300,
-                          height: 1.0,
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'AfriNova',
+                          style: AppTextStyles.wordmarkLight.copyWith(
+                            fontSize: 18,
+                            height: 1.0,
+                            color: AppColors.textPrimary,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Academy',
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(0.9),
-                          fontSize: 18,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: -0.4,
-                          height: 1.0,
+                        const SizedBox(height: 2),
+                        Text(
+                          'Academy',
+                          style: AppTextStyles.wordmarkBold.copyWith(
+                            fontSize: 18,
+                            height: 1.0,
+                            color: AppColors.primary,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ],
               ),
