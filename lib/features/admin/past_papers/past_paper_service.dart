@@ -39,170 +39,160 @@ class PastPaperService {
       'q$qNum.part.$partLabel.sub.$subLabel.$i';
 
   Future<String> savePaper({
-    required PastPaperDraft paper,
+  required PastPaperDraft paper,
 
-    // Resolved metadata
-    required String subjectId,
-    required String levelId,
-    required String title,
-    required String paperType,
-    required int year,
-    required String session,
-    required String source,
-    required int durationMinutes,
-    String? instructions,
+  // Resolved metadata
+  required String subjectId,
+  required String levelId,
+  required String title,
+  required String paperType,
+  required int year,
+  required String session,
+  required String source,
+  required int durationMinutes,
+  String? instructions,
 
-    // question number → topic id
-    required Map<int, String> topicByQuestion,
+  // question number → topic id
+  required Map<int, String> topicByQuestion,
 
-    // figure locator → bytes
-    Map<String, Uint8List> figureBytes = const {},
+  // figure locator → bytes
+  Map<String, Uint8List> figureBytes = const {},
 
-    // Original DeepSeek text, for audit
-    String? rawTranscript,
+  // Original DeepSeek text, for audit
+  String? rawTranscript,
 
-    bool publish = false,
-  }) async {
-    final userId = _client.auth.currentUser?.id;
+  bool publish = false,
+}) async {
+  final userId = _client.auth.currentUser?.id;
 
-    // ── 1. Upload all figures first, collect url map ──
-    // We do this before inserting the paper so every node's jsonb
-    // already carries its figure urls.
-    final uploadedUrls = <String, String>{}; // locator → storage path
-    for (final entry in figureBytes.entries) {
-      final locator = entry.key;
-      final bytes = entry.value;
-      if (bytes.isEmpty) continue;
+  // ── 1. Create the paper FIRST ──
+  // We create the paper before uploading figures so every figure can
+  // be stored under `<paper_id>/...`, which guarantees uniqueness
+  // across papers (two papers can't have the same paper_id).
+  final paperInsert = await _client
+      .from('past_papers')
+      .insert({
+        'title': title,
+        'subject_id': subjectId,
+        'level_id': levelId,
+        'paper_type': paperType,
+        'year': year,
+        'session': session,
+        'source': source,
+        'duration_minutes': durationMinutes,
+        'instructions': instructions,
+        'section_notes': paper.sectionNotes,
+        'raw_transcript': rawTranscript,
+        'is_published': publish,
+        'created_by': userId,
+      })
+      .select('id')
+      .single();
 
-      // Sanitize locator for use in a storage path.
-      final safeLocator = locator.replaceAll('.', '_');
-      final path = 'pending/$safeLocator.png';
+  final paperId = paperInsert['id'] as String;
 
-      try {
-        await _client.storage.from('past-paper-figures').uploadBinary(
-              path,
-              bytes,
-              fileOptions: const FileOptions(
-                contentType: 'image/png',
-                upsert: true,
-              ),
-            );
-        uploadedUrls[locator] = path;
-      } catch (e) {
-        debugPrint('[PastPaperService] upload failed for $locator: $e');
-      }
+  // ── 2. Upload figures, scoped to the paper ──
+  // Storage path = `<paper_id>/<locator_with_underscores>.png`.
+  // The DB will store this full path, not just the filename, so
+  // readers can resolve figures without ambiguity.
+  final uploadedUrls = <String, String>{}; // locator → full storage path
+  for (final entry in figureBytes.entries) {
+    final locator = entry.key;
+    final bytes = entry.value;
+    if (bytes.isEmpty) continue;
+
+    final safeLocator = locator.replaceAll('.', '_');
+    final path = '$paperId/$safeLocator.png';
+
+    try {
+      await _client.storage.from('past-paper-figures').uploadBinary(
+            path,
+            bytes,
+            fileOptions: const FileOptions(
+              contentType: 'image/png',
+              upsert: true,
+            ),
+          );
+      uploadedUrls[locator] = path;
+    } catch (e) {
+      debugPrint('[PastPaperService] upload failed for $locator: $e');
     }
-
-    // ── 2. Create the paper ──
-    final paperInsert = await _client
-        .from('past_papers')
-        .insert({
-          'title': title,
-          'subject_id': subjectId,
-          'level_id': levelId,
-          'paper_type': paperType,
-          'year': year,
-          'session': session,
-          'source': source,
-          'duration_minutes': durationMinutes,
-          'instructions': instructions,
-          'section_notes': paper.sectionNotes,
-          'raw_transcript': rawTranscript,
-          'is_published': publish,
-          'created_by': userId,
-        })
-        .select('id')
-        .single();
-
-    final paperId = paperInsert['id'] as String;
-
-    // ── 3. Insert questions ──
-    for (final q in paper.questions) {
-      final topicId = topicByQuestion[q.number];
-
-      // 3a. Serialize the question's own figures
-      final stemFigures = <Map<String, dynamic>>[];
-      for (var i = 0; i < q.figures.length; i++) {
-        final loc = locatorStem(q.number, i);
-        stemFigures.add({
-          'url': uploadedUrls[loc],
-          'caption': q.figures[i].caption,
-          'alt': null,
-        });
-      }
-
-      // 3b. Serialize parts (recursively, with figure urls)
-      final partsJson = _serializeParts(q.number, q.parts, uploadedUrls);
-
-      await _client.from('past_questions').insert({
-        'paper_id': paperId,
-        'question_number': q.number,
-        'display_order': q.number,
-        'stem': q.stem,
-        'marks': q.marks,
-        'parts': partsJson,
-        'figures': stemFigures,
-        'topic_id': topicId,
-        'section': q.section,
-      });
-    }
-
-    // ── 4. Move uploaded files into their final paper folder ──
-    // Not implemented here. Storage paths are fine under `pending/`
-    // for now; a nightly job or admin action can organize later.
-    // If you want immediate reorganization, loop and use the storage
-    // move API — skipping for simplicity.
-
-    return paperId;
   }
 
-  List<Map<String, dynamic>> _serializeParts(
-    int qNum,
-    List<PastPartDraft> parts,
-    Map<String, String> uploadedUrls,
-  ) {
-    return parts.map((p) {
-      // Part figures
-      final partFigures = <Map<String, dynamic>>[];
-      for (var i = 0; i < p.figures.length; i++) {
-        final loc = locatorPart(qNum, p.label, i);
-        partFigures.add({
-          'url': uploadedUrls[loc],
-          'caption': p.figures[i].caption,
-          'alt': null,
-        });
-      }
+  // ── 3. Insert questions with figure URLs ──
+  for (final q in paper.questions) {
+    final topicId = topicByQuestion[q.number];
 
-      // Sub-parts
-      final subJson = p.subs.map((s) {
-        final subFigures = <Map<String, dynamic>>[];
-        for (var i = 0; i < s.figures.length; i++) {
-          final loc = locatorSub(qNum, p.label, s.label, i);
-          subFigures.add({
-            'url': uploadedUrls[loc],
-            'caption': s.figures[i].caption,
-            'alt': null,
-          });
-        }
+    // 3a. Stem figures — keyed by each figure's own locator
+    final stemFigures = q.figures.map((fig) {
+      return {
+        'url': uploadedUrls[fig.locator],
+        'caption': fig.caption,
+        'alt': null,
+      };
+    }).toList();
 
+    // 3b. Parts (recursive) — also keyed by each figure's own locator
+    final partsJson = _serializeParts(q.parts, uploadedUrls);
+
+    await _client.from('past_questions').insert({
+      'paper_id': paperId,
+      'question_number': q.number,
+      'display_order': q.number,
+      'stem': q.stem,
+      'marks': q.marks,
+      'parts': partsJson,
+      'figures': stemFigures,
+      'topic_id': topicId,
+      'section': q.section,
+    });
+  }
+
+  return paperId;
+}
+
+ List<Map<String, dynamic>> _serializeParts(
+  List<PastPartDraft> parts,
+  Map<String, String> uploadedUrls,
+) {
+  return parts.map((p) {
+    // Part figures — each figure's own locator is the key.
+    final partFigures = p.figures.map((fig) {
+      return {
+        'url': uploadedUrls[fig.locator],
+        'caption': fig.caption,
+        'alt': null,
+      };
+    }).toList();
+
+    // Sub-parts (recursive one level only — no deeper nesting in the
+    // data model).
+    final subJson = p.subs.map((s) {
+      final subFigures = s.figures.map((fig) {
         return {
-          'label': s.label,
-          'marks': s.marks,
-          'text': s.text,
-          'figures': subFigures,
+          'url': uploadedUrls[fig.locator],
+          'caption': fig.caption,
+          'alt': null,
         };
       }).toList();
 
       return {
-        'label': p.label,
-        'marks': p.marks,
-        'text': p.text,
-        'figures': partFigures,
-        'subparts': subJson,
+        'label': s.label,
+        'marks': s.marks,
+        'text': s.text,
+        'figures': subFigures,
       };
     }).toList();
-  }
 
+    return {
+      'label': p.label,
+      'marks': p.marks,
+      'text': p.text,
+      'figures': partFigures,
+      'subparts': subJson,
+    };
+  }).toList();
+}
   /// Fetch topics for a given subject + level, ordered for display.
   Future<List<Map<String, dynamic>>> getTopicsFor({
     required String subjectId,

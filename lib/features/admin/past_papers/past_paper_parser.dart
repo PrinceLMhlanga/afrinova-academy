@@ -166,25 +166,49 @@ class PastPaperParser {
         continue;
       }
 
-      // ── Figure marker: "[See diagram]" or "[See diagram: Fig 1.1]" ──
-      // ── Figure marker: "[See diagram]" or "[See diagram: Fig 1.1]" ──
+// ── Figure marker: "[See diagram]" or "[See diagram: Fig 1.1]" ──
+// The leading word is broadened to tolerate DeepSeek emitting
+// "table", "graph", "figure", etc. We only use the caption.
 final diagramMatch = RegExp(
-  r'^\[See\s+diagram(?::\s*(.+?))?\]$',
+  r'^\[See\s+(?:diagram|figure|fig|table|graph|chart|image|photo)(?::\s*(.+?))?\]$',
   caseSensitive: false,
 ).firstMatch(trimmed);
+
 if (diagramMatch != null) {
   final caption = diagramMatch.group(1)?.trim();
 
-  String? locator;
-  if (contentTarget == 'sub' && currentSub != null && currentQ != null && currentPart != null) {
-    locator = 'q${currentQ.number}.part.${currentPart.label}.sub.${currentSub.label}.${currentSub.figures.length}';
-    currentSub.figures.add(_WorkingFigure(caption: caption, locator: locator));
-  } else if (contentTarget == 'part' && currentPart != null && currentQ != null) {
-    locator = 'q${currentQ.number}.part.${currentPart.label}.${currentPart.figures.length}';
-    currentPart.figures.add(_WorkingFigure(caption: caption, locator: locator));
+  if (contentTarget == 'sub' &&
+      currentSub != null &&
+      currentQ != null &&
+      currentPart != null) {
+    final idx = currentSub.figures.length;
+    final locator =
+        'q${currentQ.number}.part.${currentPart.label}.sub.${currentSub.label}.$idx';
+    currentSub.figures.add(
+      _WorkingFigure(caption: caption, locator: locator),
+    );
+    // Insert a marker into the text at this exact position.
+    _appendLine(paper, currentQ, currentPart, currentSub, 'sub',
+        '{{fig:$idx}}');
+  } else if (contentTarget == 'part' &&
+      currentPart != null &&
+      currentQ != null) {
+    final idx = currentPart.figures.length;
+    final locator =
+        'q${currentQ.number}.part.${currentPart.label}.$idx';
+    currentPart.figures.add(
+      _WorkingFigure(caption: caption, locator: locator),
+    );
+    _appendLine(paper, currentQ, currentPart, currentSub, 'part',
+        '{{fig:$idx}}');
   } else if (contentTarget == 'stem' && currentQ != null) {
-    locator = 'q${currentQ.number}.stem.${currentQ.figures.length}';
-    currentQ.figures.add(_WorkingFigure(caption: caption, locator: locator));
+    final idx = currentQ.figures.length;
+    final locator = 'q${currentQ.number}.stem.$idx';
+    currentQ.figures.add(
+      _WorkingFigure(caption: caption, locator: locator),
+    );
+    _appendLine(paper, currentQ, currentPart, currentSub, 'stem',
+        '{{fig:$idx}}');
   }
   continue;
 }

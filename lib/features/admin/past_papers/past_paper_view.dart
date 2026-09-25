@@ -59,15 +59,14 @@ class PaperQuestionView extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (question.stem.isNotEmpty)
-                      _MarkdownBlock(text: question.stem),
-                    // Stem figures
-                    for (final fig in question.figures)
-                      _FigureBlock(
-                        figure: fig,
-                        url: figureUrlResolver?.call(fig),
-                        bytes: figureBytesResolver?.call(fig),
-                      ),
+                    // NEW
+if (question.stem.isNotEmpty || question.figures.isNotEmpty)
+  _RichBlock(
+    text: question.stem,
+    figures: question.figures,
+    figureUrlResolver: figureUrlResolver,
+    figureBytesResolver: figureBytesResolver,
+  ),
                   ],
                 ),
               ),
@@ -131,14 +130,14 @@ class _PartBlock extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (part.text.isNotEmpty)
-                      _MarkdownBlock(text: part.text),
-                    for (final fig in part.figures)
-                      _FigureBlock(
-                        figure: fig,
-                        url: figureUrlResolver?.call(fig),
-                        bytes: figureBytesResolver?.call(fig),
-                      ),
+                    // NEW
+if (part.text.isNotEmpty || part.figures.isNotEmpty)
+  _RichBlock(
+    text: part.text,
+    figures: part.figures,
+    figureUrlResolver: figureUrlResolver,
+    figureBytesResolver: figureBytesResolver,
+  ),
                   ],
                 ),
               ),
@@ -214,13 +213,14 @@ class _SubBlock extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (sub.text.isNotEmpty)
-                      _MarkdownBlock(text: sub.text),
-                    for (final fig in sub.figures)
-                      _FigureBlock(
-                        figure: fig,
-                        url: figureUrlResolver?.call(fig),
-                      ),
+                    // NEW
+if (sub.text.isNotEmpty || sub.figures.isNotEmpty)
+  _RichBlock(
+    text: sub.text,
+    figures: sub.figures,
+    figureUrlResolver: figureUrlResolver,
+    figureBytesResolver: figureBytesResolver,
+  ),
                   ],
                 ),
               ),
@@ -270,6 +270,112 @@ class _MarkdownBlock extends StatelessWidget {
         height: 1.6,
         color: AppColors.textPrimary,
       ),
+    );
+  }
+}
+
+class _RichBlock extends StatelessWidget {
+  final String text;
+  final List<PastFigureDraft> figures;
+  final String? Function(PastFigureDraft fig)? figureUrlResolver;
+  final Uint8List? Function(PastFigureDraft fig)? figureBytesResolver;
+
+  const _RichBlock({
+    required this.text,
+    required this.figures,
+    this.figureUrlResolver,
+    this.figureBytesResolver,
+  });
+
+  static final _markerPattern = RegExp(r'\{\{fig:(\d+)\}\}');
+
+  @override
+  Widget build(BuildContext context) {
+    final matches = _markerPattern.allMatches(text).toList();
+
+    // Fast path — no figure markers. Either there are no figures, or
+    // this is an old paper saved before positional markers existed.
+    if (matches.isEmpty) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (text.isNotEmpty)
+            AiMarkdown(
+              text: text,
+              style: AppTextStyles.bodyMd.copyWith(
+                fontSize: 16,
+                height: 1.6,
+                color: AppColors.textPrimary,
+              ),
+            ),
+          // Fallback for legacy papers: append figures at the end.
+          for (final fig in figures)
+            _FigureBlock(
+              figure: fig,
+              url: figureUrlResolver?.call(fig),
+              bytes: figureBytesResolver?.call(fig),
+            ),
+        ],
+      );
+    }
+
+    final children = <Widget>[];
+    var cursor = 0;
+
+    for (final m in matches) {
+      // Text segment before this marker
+      if (m.start > cursor) {
+        final segment = text.substring(cursor, m.start).trim();
+        if (segment.isNotEmpty) {
+          children.add(
+            AiMarkdown(
+              text: segment,
+              style: AppTextStyles.bodyMd.copyWith(
+                fontSize: 16,
+                height: 1.6,
+                color: AppColors.textPrimary,
+              ),
+            ),
+          );
+        }
+      }
+
+      // Figure at this marker
+      final idx = int.tryParse(m.group(1)!);
+      if (idx != null && idx >= 0 && idx < figures.length) {
+        final fig = figures[idx];
+        children.add(
+          _FigureBlock(
+            figure: fig,
+            url: figureUrlResolver?.call(fig),
+            bytes: figureBytesResolver?.call(fig),
+          ),
+        );
+      }
+
+      cursor = m.end;
+    }
+
+    // Text after the last marker
+    if (cursor < text.length) {
+      final segment = text.substring(cursor).trim();
+      if (segment.isNotEmpty) {
+        children.add(
+          AiMarkdown(
+            text: segment,
+            style: AppTextStyles.bodyMd.copyWith(
+              fontSize: 16,
+              height: 1.6,
+              color: AppColors.textPrimary,
+            ),
+          ),
+        );
+      }
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: children,
     );
   }
 }

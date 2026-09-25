@@ -1192,18 +1192,16 @@ class _SubView extends StatelessWidget {
             const SizedBox(height: 2),
             Text(sub.text, style: AppTextStyles.bodySm),
           ],
-          for (var i = 0; i < sub.figures.length; i++)
-            Padding(
-              padding: const EdgeInsets.only(top: AppSpacing.sm),
-              child: _FigureSlot(
-                locator: PastPaperService.locatorSub(
-                    qNum, partLabel, sub.label, i),
-                caption: sub.figures[i].caption,
-                bytes: figureBytes[
-                    PastPaperService.locatorSub(qNum, partLabel, sub.label, i)],
-                onChanged: onFigureChanged,
-              ),
-            ),
+          for (final fig in sub.figures)
+  Padding(
+    padding: const EdgeInsets.only(top: AppSpacing.sm),
+    child: _FigureSlot(
+      locator: fig.locator,
+      caption: fig.caption,
+      bytes: figureBytes[fig.locator],
+      onChanged: onFigureChanged,
+    ),
+  ),
         ],
       ),
     );

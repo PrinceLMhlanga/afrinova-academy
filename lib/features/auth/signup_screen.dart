@@ -6,6 +6,7 @@ import 'teacher_application_screen.dart';
 import '../home/home_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'complete_student_profile_screen.dart';
+import '../parent/parent_onboarding_screen.dart';
 
 class SignupScreen extends StatefulWidget {
   const SignupScreen({super.key});
@@ -90,26 +91,24 @@ Future<void> _loadLevels() async {
     await NotificationService.instance.registerDeviceToken();
 
     if (mounted) {
-      if (_selectedRole == 'teacher') {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => TeacherApplicationScreen(
-              userId: response.user?.id ?? '',
-              userEmail: _emailController.text.trim(),
-              userName: _nameController.text.trim(),
-            ),
-          ),
-        );
-      } else {
-        // Navigate to CompleteStudentProfileScreen
-        Navigator.pushAndRemoveUntil(
-          context,
-          MaterialPageRoute(builder: (_) => const CompleteStudentProfileScreen()),
-          (route) => false,
-        );
-      }
-    }
+  Widget destination;
+  if (_selectedRole == 'teacher') {
+    destination = TeacherApplicationScreen(
+      userId: response.user?.id ?? '',
+      userEmail: _emailController.text.trim(),
+      userName: _nameController.text.trim(),
+    );
+  } else if (_selectedRole == 'parent') {
+    destination = const ParentOnboardingScreen();
+  } else {
+    destination = const CompleteStudentProfileScreen();
+  }
+  Navigator.pushAndRemoveUntil(
+    context,
+    MaterialPageRoute(builder: (_) => destination),
+    (route) => false,
+  );
+}
   } catch (e) {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -252,6 +251,14 @@ Future<void> _loadLevels() async {
                         onTap: () => setState(() => _selectedRole = 'teacher'),
                       ),
                     ),
+                     const SizedBox(width: 12),
+                    Expanded(child: _RoleCard(
+      icon: Icons.family_restroom,
+      label: 'Parent',
+      subtitle: 'Track progress',
+      isSelected: _selectedRole == 'parent',
+      onTap: () => setState(() => _selectedRole = 'parent'),
+    )),
                   ],
                 ),
 
