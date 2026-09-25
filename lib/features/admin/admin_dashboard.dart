@@ -11,6 +11,7 @@ import 'approve_teachers_screen.dart';
 import 'syllabus_management_screen.dart';
 import 'teacher_activity_screen.dart';
 import 'platform_wallet_screen.dart';
+import 'past_papers/past_paper_import_screen.dart';
 
 class AdminDashboard extends StatelessWidget {
   final String userName;
@@ -140,6 +141,16 @@ class AdminDashboard extends StatelessWidget {
           onTap: () => Navigator.push(
             context,
             MaterialPageRoute(builder: (_) => const QuestionBankOverviewScreen()),
+          ),
+        ),
+        AdminActionData(
+          icon: Icons.quiz_rounded,
+          title: 'Past Paper Import',
+          subtitle: 'Add questions from exam papers',
+          color: const Color(0xFFFF9800),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const PastPaperImportScreen()),
           ),
         ),
       ],

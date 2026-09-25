@@ -13,6 +13,7 @@ class _SubjectsScreenState extends State<SubjectsScreen> {
   final TeacherService _teacherService = TeacherService();
   List<Map<String, dynamic>> _subjects = [];
   bool _isLoading = true;
+  
 
   @override
   void initState() {

@@ -32,6 +32,6 @@ void main() async {
       await NotificationService.instance.registerDeviceToken();
     }
   });
-
+  
   runApp(const AfriNovaApp());
 }

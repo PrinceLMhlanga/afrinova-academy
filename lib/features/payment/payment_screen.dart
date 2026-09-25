@@ -416,7 +416,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           const Text('PayNow processing fee', style: TextStyle(fontSize: 13, color: Colors.grey)),
-          const Text('Paid by customer', style: TextStyle(fontSize: 13, color: Colors.grey)),
+          const Text('2.5%', style: TextStyle(fontSize: 13, color: Colors.grey)),
         ],
       ),
       const Divider(height: 16),
