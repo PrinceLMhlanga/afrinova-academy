@@ -129,24 +129,42 @@ class PastPaperParser {
 
       // ── PART header: "PART a [6]" (marks optional) ──
       final partMatch =
-          RegExp(r'^PART\s+([a-z])\s*(?:\[(\d+)\])?\s*$',
-                  caseSensitive: false)
-              .firstMatch(trimmed);
-      if (partMatch != null) {
-        if (currentQ == null) {
-          errors.add('Line ${i + 1}: PART before any Q — ignored.');
-          continue;
-        }
-        final label = partMatch.group(1)!.toLowerCase();
-        final marks =
-            partMatch.group(2) != null ? int.tryParse(partMatch.group(2)!) : null;
-        currentPart = _WorkingPart(label: label, marks: marks);
-        currentQ.parts.add(currentPart);
-        currentSub = null;
-        contentTarget = 'part';
-        continue;
-      }
+    RegExp(r'^PART\s+([a-z])\s*(?:\[(\d+)\])?\s*(?:\[\s*(?:TOPIC:\s*)?([^\]]+?)\s*\])?\s*$',
+            caseSensitive: false)
+        .firstMatch(trimmed);
+if (partMatch != null) {
+  if (currentQ == null) {
+    errors.add('Line ${i + 1}: PART before any Q — ignored.');
+    continue;
+  }
+  final label = partMatch.group(1)!.toLowerCase();
+  final marks =
+      partMatch.group(2) != null ? int.tryParse(partMatch.group(2)!) : null;
 
+  // Topic on the PART line — either a number or a name.
+  int? topicIndex;
+  String? topicName;
+  final topicRaw = partMatch.group(3)?.trim();
+  if (topicRaw != null && topicRaw.isNotEmpty) {
+    final asInt = int.tryParse(topicRaw);
+    if (asInt != null) {
+      topicIndex = asInt;
+    } else {
+      topicName = topicRaw;
+    }
+  }
+
+  currentPart = _WorkingPart(
+    label: label,
+    marks: marks,
+    topicIndex: topicIndex,
+    topicName: topicName,
+  );
+  currentQ.parts.add(currentPart);
+  currentSub = null;
+  contentTarget = 'part';
+  continue;
+}
       // ── SUB header: "SUB i [2]" (marks optional) ──
       final subMatch =
           RegExp(r'^SUB\s+([ivxl]+)\s*(?:\[(\d+)\])?\s*$',
@@ -231,6 +249,16 @@ if (diagramMatch != null) {
           s.text = StringBuffer(s.text.toString().trim());
         }
       }
+
+      // Propagate question-level topic to parts that don't have one.
+for (final q in paper.questions) {
+  if (q.topicIndex == null && q.topicName == null) continue;
+  for (final p in q.parts) {
+    if (p.topicIndex != null || p.topicName != null) continue;
+    p.topicIndex = q.topicIndex;
+    p.topicName = q.topicName;
+  }
+}
 
       // Duplicated part-text rescue: if a part's own text just repeats
       // its first sub-part's text, drop it. This happens when DeepSeek
@@ -433,12 +461,19 @@ class PastPartDraft {
   List<PastFigureDraft> figures;
   List<PastSubDraft> subs;
 
+  // NEW — topic for this part, resolved against the admin's topic
+  // list. Null if not set.
+  int? topicIndex;         // 1-based index from DeepSeek's [TOPIC: n]
+  String? topicName;       // or the name from [Topic Name]
+
   PastPartDraft({
     required this.label,
     this.marks,
     required this.text,
     required this.figures,
     required this.subs,
+    this.topicIndex,
+    this.topicName,
   });
 }
 
@@ -553,16 +588,25 @@ class _WorkingPart {
   StringBuffer text = StringBuffer();
   final List<_WorkingFigure> figures = [];
   final List<_WorkingSub> subs = [];
+  int? topicIndex;
+  String? topicName;
 
-  _WorkingPart({required this.label, this.marks});
+  _WorkingPart({
+    required this.label,
+    this.marks,
+    this.topicIndex,
+    this.topicName,
+  });
 
-  PastPartDraft toImmutable() => PastPartDraft(
-        label: label,
-        marks: marks,
-        text: text.toString(),
-        figures: figures.map((f) => f.toImmutable()).toList(),
-        subs: subs.map((s) => s.toImmutable()).toList(),
-      );
+ PastPartDraft toImmutable() => PastPartDraft(
+      label: label,
+      marks: marks,
+      text: text.toString(),
+      figures: figures.map((f) => f.toImmutable()).toList(),
+      subs: subs.map((s) => s.toImmutable()).toList(),
+      topicIndex: topicIndex,
+      topicName: topicName,
+    );
 }
 
 class _WorkingSub {

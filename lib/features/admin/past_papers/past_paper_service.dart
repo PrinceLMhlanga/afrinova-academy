@@ -38,6 +38,34 @@ class PastPaperService {
   ) =>
       'q$qNum.part.$partLabel.sub.$subLabel.$i';
 
+
+  // Compute total marks from the question tree.
+int computeTotalMarks(List<PastQuestionDraft> questions) {
+  int total = 0;
+  for (final q in questions) {
+    // Question marks are already computed by the parser (sum of parts
+    // or subs). If missing, recompute from parts.
+    if (q.marks != null) {
+      total += q.marks!;
+      continue;
+    }
+    // Fallback: sum part marks, or sub marks if parts have none.
+    final partSum = q.parts
+        .where((p) => p.marks != null)
+        .fold<int>(0, (a, b) => a + (b.marks ?? 0));
+    if (partSum > 0) {
+      total += partSum;
+      continue;
+    }
+    final subSum = q.parts
+        .expand((p) => p.subs)
+        .where((s) => s.marks != null)
+        .fold<int>(0, (a, b) => a + (b.marks ?? 0));
+    total += subSum;
+  }
+  return total;
+}    
+
   Future<String> savePaper({
   required PastPaperDraft paper,
 
@@ -52,8 +80,10 @@ class PastPaperService {
   required int durationMinutes,
   String? instructions,
 
-  // question number → topic id
-  required Map<int, String> topicByQuestion,
+  // Per-part topic resolution.
+  // Key format: "q<num>.<partLabel>" → topic_id
+  // Sub-parts inherit their part's topic.
+  required Map<String, String> topicByPart,
 
   // figure locator → bytes
   Map<String, Uint8List> figureBytes = const {},
@@ -80,6 +110,7 @@ class PastPaperService {
         'session': session,
         'source': source,
         'duration_minutes': durationMinutes,
+        'total_marks': computeTotalMarks(paper.questions),
         'instructions': instructions,
         'section_notes': paper.sectionNotes,
         'raw_transcript': rawTranscript,
@@ -120,40 +151,55 @@ class PastPaperService {
   }
 
   // ── 3. Insert questions with figure URLs ──
-  for (final q in paper.questions) {
-    final topicId = topicByQuestion[q.number];
+  // ── 3. Insert questions with figure URLs ──
+for (final q in paper.questions) {
+  // 3a. Stem figures — keyed by each figure's own locator
+  final stemFigures = q.figures.map((fig) {
+    return {
+      'url': uploadedUrls[fig.locator],
+      'caption': fig.caption,
+      'alt': null,
+    };
+  }).toList();
 
-    // 3a. Stem figures — keyed by each figure's own locator
-    final stemFigures = q.figures.map((fig) {
-      return {
-        'url': uploadedUrls[fig.locator],
-        'caption': fig.caption,
-        'alt': null,
-      };
-    }).toList();
+  // 3b. Parts (recursive) — also keyed by each figure's own locator,
+  // and each part carries its own topic_id.
+  final partsJson = _serializeParts(
+    q.number,
+    q.parts,
+    uploadedUrls,
+    topicByPart,
+  );
 
-    // 3b. Parts (recursive) — also keyed by each figure's own locator
-    final partsJson = _serializeParts(q.parts, uploadedUrls);
+  // 3c. Question-level topic_id is now derived — take the first
+  // part's topic if it exists. It's only used for filtering and
+  // sorting; per-part topics are the real source of truth.
+  final derivedQuestionTopicId = q.parts.isNotEmpty
+      ? topicByPart['q${q.number}.${q.parts.first.label}']
+      : null;
 
-    await _client.from('past_questions').insert({
-      'paper_id': paperId,
-      'question_number': q.number,
-      'display_order': q.number,
-      'stem': q.stem,
-      'marks': q.marks,
-      'parts': partsJson,
-      'figures': stemFigures,
-      'topic_id': topicId,
-      'section': q.section,
-    });
+  await _client.from('past_questions').insert({
+    'paper_id': paperId,
+    'question_number': q.number,
+    'display_order': q.number,
+    'stem': q.stem,
+    'marks': q.marks,
+    'parts': partsJson,
+    'figures': stemFigures,
+    'topic_id': derivedQuestionTopicId,   // ← derived, may be null
+    'section': q.section,
+  });
+
   }
 
   return paperId;
 }
 
  List<Map<String, dynamic>> _serializeParts(
+  int qNum,
   List<PastPartDraft> parts,
   Map<String, String> uploadedUrls,
+  Map<String, String> topicByPart,
 ) {
   return parts.map((p) {
     // Part figures — each figure's own locator is the key.
@@ -165,8 +211,7 @@ class PastPaperService {
       };
     }).toList();
 
-    // Sub-parts (recursive one level only — no deeper nesting in the
-    // data model).
+    // Sub-parts — no per-sub topic; they inherit the part's topic.
     final subJson = p.subs.map((s) {
       final subFigures = s.figures.map((fig) {
         return {
@@ -184,10 +229,14 @@ class PastPaperService {
       };
     }).toList();
 
+    // Topic for this part — looked up by "q<num>.<partLabel>".
+    final topicId = topicByPart['q$qNum.${p.label}'];
+
     return {
       'label': p.label,
       'marks': p.marks,
       'text': p.text,
+      'topic_id': topicId,   // ← new
       'figures': partFigures,
       'subparts': subJson,
     };

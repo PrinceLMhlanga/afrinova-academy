@@ -47,8 +47,10 @@ class _PastPaperImportScreenState extends State<PastPaperImportScreen> {
   // Warnings from parse + resolution steps
   final List<String> _parseWarnings = [];
 
-  // Per-question topic selection: question number → topic id
-  final Map<int, String?> _topicByQuestion = {};
+  
+  // Map from "q<num>.<partLabel>" → topic_id
+final Map<String, String?> _topicByPart = {};
+String _partKey(int qNum, String partLabel) => 'q$qNum.$partLabel';
 
   
   // Figure locator → bytes. Locator format: "q1.stem.0", "q1.part.a.0",
@@ -104,25 +106,27 @@ final Map<String, Uint8List> _figureBytes = {};
     setState(() => _topics = res);
   }
 
-    /// After topics are loaded, walk the parsed questions and resolve
-  /// each one's topicIndex or topicName to an actual topic id.
-  /// Emits warnings for unresolved names.
-  void _resolveQuestionTopics() {
-    final questions = _parsed?.paper.questions ?? const [];
-    final warnings = <String>[];
+   /// Resolve each part's topic (by index or name) against the loaded
+/// topic list. Emits warnings for unresolved names.
+void _resolveQuestionTopics() {
+  final questions = _parsed?.paper.questions ?? const [];
+  final warnings = <String>[];
 
-    for (final q in questions) {
+  for (final q in questions) {
+    for (final p in q.parts) {
+      final key = _partKey(q.number, p.label);
+
       // Priority 1 — numeric index into the loaded topic list
-      if (q.topicIndex != null &&
-          q.topicIndex! > 0 &&
-          q.topicIndex! <= _topics.length) {
-        _topicByQuestion[q.number] = _topics[q.topicIndex! - 1]['id'] as String;
+      if (p.topicIndex != null &&
+          p.topicIndex! > 0 &&
+          p.topicIndex! <= _topics.length) {
+        _topicByPart[key] = _topics[p.topicIndex! - 1]['id'] as String;
         continue;
       }
 
       // Priority 2 — exact case-insensitive name match
-      if (q.topicName != null && q.topicName!.trim().isNotEmpty) {
-        final wanted = q.topicName!.toLowerCase().trim();
+      if (p.topicName != null && p.topicName!.trim().isNotEmpty) {
+        final wanted = p.topicName!.toLowerCase().trim();
         Map<String, dynamic> match = {};
         for (final t in _topics) {
           if ((t['name'] as String).toLowerCase().trim() == wanted) {
@@ -131,19 +135,21 @@ final Map<String, Uint8List> _figureBytes = {};
           }
         }
         if (match.isNotEmpty) {
-          _topicByQuestion[q.number] = match['id'] as String;
+          _topicByPart[key] = match['id'] as String;
         } else {
           warnings.add(
-            'Q${q.number}: topic "${q.topicName}" not found in the topic list.',
+            'Q${q.number}(${p.label}): topic "${p.topicName}" '
+            'not found in the topic list.',
           );
         }
       }
     }
-
-    if (mounted) {
-      setState(() => _parseWarnings.addAll(warnings));
-    }
   }
+
+  if (mounted) {
+    setState(() => _parseWarnings.addAll(warnings));
+  }
+}
 
   
 
@@ -154,8 +160,9 @@ final Map<String, Uint8List> _figureBytes = {};
     final result = _parser.parse(raw);
 
     // Reset any previous resolution warnings.
-    _parseWarnings.clear();
-    _topicByQuestion.clear();
+    // Reset any previous resolution warnings.
+_parseWarnings.clear();
+_topicByPart.clear();
 
     // ── Resolve subject name → subject_id ──
     String? resolvedSubjectId = _subjectId;
@@ -282,30 +289,6 @@ int? _computeQuestionMarks(PastQuestionDraft q) {
   return null;
 }
 
-void _updatePartMarks(int qNum, String partLabel, int? marks) {
-  final parsed = _parsed;
-  if (parsed == null) return;
-  final q = parsed.paper.questions.firstWhere(
-    (x) => x.number == qNum,
-    orElse: () => parsed.paper.questions.first,
-  );
-  final p = q.parts.firstWhere(
-    (x) => x.label == partLabel,
-    orElse: () => q.parts.first,
-  );
-  setState(() {
-    p.marks = marks;
-    // If we now have a part-level mark, clear sub marks so we
-    // don't end up with a mixed pattern.
-    if (marks != null) {
-      for (final s in p.subs) {
-        s.marks = null;
-      }
-    }
-    q.marks = _computeQuestionMarks(q);
-  });
-}
-
 void _updateSubMarks(
   int qNum,
   String partLabel,
@@ -326,36 +309,217 @@ void _updateSubMarks(
     (x) => x.label == subLabel,
     orElse: () => p.subs.first,
   );
+
   setState(() {
     s.marks = marks;
-    if (marks != null) {
-      // Setting a sub mark implies the part should have no mark.
+
+    // Recompute part mark as sum of its subs.
+    final anySubMarked = p.subs.any((x) => x.marks != null);
+    if (anySubMarked) {
+      p.marks = p.subs
+          .where((x) => x.marks != null)
+          .fold<int>(0, (a, b) => a + (b.marks ?? 0));
+    } else {
       p.marks = null;
+    }
+
+    q.marks = _computeQuestionMarks(q);
+  });
+}
+
+void _updatePartMarks(int qNum, String partLabel, int? marks) {
+  final parsed = _parsed;
+  if (parsed == null) return;
+  final q = parsed.paper.questions.firstWhere(
+    (x) => x.number == qNum,
+    orElse: () => parsed.paper.questions.first,
+  );
+  final p = q.parts.firstWhere(
+    (x) => x.label == partLabel,
+    orElse: () => q.parts.first,
+  );
+
+  // Conflict: subs already carry marks. Admin must clear them first.
+  final anySubMarked = p.subs.any((x) => x.marks != null);
+  if (anySubMarked && marks != null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'This part has marks on its sub-parts. Clear those first '
+          'to set a part-level mark.',
+        ),
+      ),
+    );
+    return;
+  }
+
+  setState(() {
+    p.marks = marks;
+    if (marks != null) {
+      for (final s in p.subs) {
+        s.marks = null;
+      }
     }
     q.marks = _computeQuestionMarks(q);
   });
 }
 
+List<String> _collectValidationIssues() {
+  final issues = <String>[];
+  final paper = _parsed!.paper;
+
+  for (final q in paper.questions) {
+    // Question stem figures
+    for (final fig in q.figures) {
+      if (_figureBytes[fig.locator] == null) {
+        final label = fig.caption != null
+            ? 'diagram "${fig.caption}"'
+            : 'diagram';
+        issues.add('Q${q.number} stem: $label has no image attached');
+      }
+    }
+
+    for (final p in q.parts) {
+      final key = _partKey(q.number, p.label);
+
+      // ── Marks ──
+      if (p.marks == null && p.subs.every((s) => s.marks == null)) {
+        issues.add('Q${q.number}(${p.label}): no marks set');
+      }
+
+      // ── Topic ──
+      if (_topicByPart[key] == null) {
+        issues.add('Q${q.number}(${p.label}): no topic selected');
+      }
+
+      // ── Part-level figures ──
+      for (final fig in p.figures) {
+        if (_figureBytes[fig.locator] == null) {
+          final label = fig.caption != null
+              ? 'diagram "${fig.caption}"'
+              : 'diagram';
+          issues.add(
+              'Q${q.number}(${p.label}): $label has no image attached');
+        }
+      }
+
+      // ── Sub-part figures ──
+      for (final s in p.subs) {
+        for (final fig in s.figures) {
+          if (_figureBytes[fig.locator] == null) {
+            final label = fig.caption != null
+                ? 'diagram "${fig.caption}"'
+                : 'diagram';
+            issues.add(
+                'Q${q.number}(${p.label})(${s.label}): '
+                '$label has no image attached');
+          }
+        }
+      }
+    }
+  }
+
+  return issues;
+}
+
+Future<bool?> _showValidationDialog({
+  required String title,
+  required List<String> issues,
+  required String primaryLabel,
+  String? secondaryLabel,
+}) {
+  // Cap the displayed list so the dialog doesn't blow up with 40 issues.
+  final shown = issues.take(12).toList();
+  final extra = issues.length - shown.length;
+
+  return showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(title),
+      content: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '${issues.length} ${issues.length == 1 ? "issue" : "issues"} found:',
+              style: AppTextStyles.bodySm,
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            for (final i in shown)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text('• $i', style: AppTextStyles.captionXs),
+              ),
+            if (extra > 0) ...[
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                '… and $extra more',
+                style: AppTextStyles.captionXs.copyWith(
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        if (secondaryLabel != null)
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text(secondaryLabel),
+          ),
+        FilledButton(
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: Text(primaryLabel),
+        ),
+      ],
+    ),
+  );
+}
+
   Future<void> _save({required bool publish}) async {
-    if (_parsed == null) return;
-    if (_subjectId == null || _levelId == null) {
-      _showSnack('Pick a subject and level first.');
+  if (_parsed == null) return;
+  if (_subjectId == null || _levelId == null) {
+    _showSnack('Pick a subject and level first.');
+    return;
+  }
+  if (_titleController.text.trim().isEmpty) {
+    _showSnack('Give the paper a title.');
+    return;
+  }
+
+  // ── Validation ──
+  final issues = _collectValidationIssues();
+  if (issues.isNotEmpty) {
+    if (publish) {
+      // Publishing requires everything filled in.
+      await _showValidationDialog(
+        title: "Can't publish yet",
+        issues: issues,
+        primaryLabel: 'OK',
+      );
       return;
     }
-    if (_titleController.text.trim().isEmpty) {
-      _showSnack('Give the paper a title.');
-      return;
-    }
+    // Saving as draft: warn but let them proceed.
+    final proceed = await _showValidationDialog(
+      title: 'Save as draft?',
+      issues: issues,
+      primaryLabel: 'Save anyway',
+      secondaryLabel: 'Keep editing',
+    );
+    if (proceed != true) return;
+  }
 
     setState(() => _saving = true);
 
     try {
-      final topicMap = <int, String>{};
-      _topicByQuestion.forEach((q, t) {
-        if (t != null) topicMap[q] = t;
-      });
+      final topicMap = <String, String>{};
+_topicByPart.forEach((key, t) {
+  if (t != null) topicMap[key] = t;
+});
 
-     final paperId = await _service.savePaper(
+final paperId = await _service.savePaper(
   paper: _parsed!.paper,
   subjectId: _subjectId!,
   levelId: _levelId!,
@@ -368,8 +532,8 @@ void _updateSubMarks(
   instructions: _instructionsController.text.trim().isEmpty
       ? null
       : _instructionsController.text.trim(),
-  topicByQuestion: topicMap,
-  figureBytes: _figureBytes,   // ← renamed
+  topicByPart: topicMap,     // ← renamed
+  figureBytes: _figureBytes,
   rawTranscript: _rawController.text,
   publish: publish,
 );
@@ -738,15 +902,15 @@ Widget build(BuildContext context) {
               ),
               const SizedBox(width: AppSpacing.sm),
                             if (_parsed != null)
-                TextButton(
-                  onPressed: () => setState(() {
-                    _parsed = null;
-                    _parseWarnings.clear();
-                    _topicByQuestion.clear();
-                    _figureBytes.clear();
-                  }),
-                  child: const Text('Clear preview'),
-                ),
+  TextButton(
+    onPressed: () => setState(() {
+      _parsed = null;
+      _parseWarnings.clear();
+      _topicByPart.clear();
+      _figureBytes.clear();
+    }),
+    child: const Text('Clear preview'),
+  ),
             ],
           ),
                     if (_parsed != null &&
@@ -788,9 +952,11 @@ Widget build(BuildContext context) {
     question: paper.questions[i],
     questionIndex: i,
     topics: _topics,
-    selectedTopicId: _topicByQuestion[paper.questions[i].number],
-    onTopicChanged: (id) => setState(
-        () => _topicByQuestion[paper.questions[i].number] = id),
+    // Per-part topic state — passed as a lookup the card can use
+    // for each of its parts.
+    topicByPart: _topicByPart,
+    onPartTopicChanged: (partLabel, id) => setState(
+        () => _topicByPart[_partKey(paper.questions[i].number, partLabel)] = id),
     figureBytes: _figureBytes,
     onFigureChanged: (locator, bytes) => setState(() {
       if (bytes == null) {
@@ -952,12 +1118,11 @@ class _QuestionPreviewCard extends StatelessWidget {
   final PastQuestionDraft question;
   final int questionIndex;
   final List<Map<String, dynamic>> topics;
-  final String? selectedTopicId;
-  final ValueChanged<String?> onTopicChanged;
+  final Map<String, String?> topicByPart;
+  final void Function(String partLabel, String? topicId) onPartTopicChanged;
   final Map<String, Uint8List> figureBytes;
   final void Function(String locator, Uint8List? bytes) onFigureChanged;
 
-  // Mark editing callbacks
   final void Function(int qNum, int? marks) onQuestionMarksChanged;
   final void Function(int qNum, String partLabel, int? marks)
       onPartMarksChanged;
@@ -968,14 +1133,16 @@ class _QuestionPreviewCard extends StatelessWidget {
     required this.question,
     required this.questionIndex,
     required this.topics,
-    required this.selectedTopicId,
-    required this.onTopicChanged,
+    required this.topicByPart,
+    required this.onPartTopicChanged,
     required this.figureBytes,
     required this.onFigureChanged,
     required this.onQuestionMarksChanged,
     required this.onPartMarksChanged,
     required this.onSubMarksChanged,
   });
+
+  String _keyFor(String partLabel) => 'q${question.number}.$partLabel';
 
   @override
   Widget build(BuildContext context) {
@@ -989,69 +1156,200 @@ class _QuestionPreviewCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Question header
           Row(
-  children: [
-    Text('Q${question.number}', style: AppTextStyles.headingSm),
-    if (question.marks != null) ...[
-      const SizedBox(width: AppSpacing.sm),
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-        decoration: BoxDecoration(
-          color: AppColors.primary.withOpacity(0.06),
-          borderRadius: BorderRadius.circular(AppSpacing.radiusChip),
-          border: Border.all(
-            color: AppColors.primary.withOpacity(0.15),
+            children: [
+              Text('Q${question.number}', style: AppTextStyles.headingSm),
+              if (question.marks != null) ...[
+                const SizedBox(width: AppSpacing.sm),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withOpacity(0.06),
+                    borderRadius: BorderRadius.circular(AppSpacing.radiusChip),
+                    border: Border.all(
+                      color: AppColors.primary.withOpacity(0.15),
+                    ),
+                  ),
+                  child: Text(
+                    '[${question.marks}]',
+                    style: AppTextStyles.caption.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                ),
+              ],
+              if (question.section != null) ...[
+                const SizedBox(width: AppSpacing.sm),
+                _Pill(text: question.section!),
+              ],
+            ],
           ),
-        ),
-        child: Text(
-          '[${question.marks}]',
-          style: AppTextStyles.caption.copyWith(
-            fontWeight: FontWeight.w700,
-            color: AppColors.primary,
-          ),
-        ),
-      ),
-    ],
-    if (question.section != null) ...[
-      const SizedBox(width: AppSpacing.sm),
-      _Pill(text: question.section!),
-    ],
-  ],
-),
           const SizedBox(height: AppSpacing.sm),
 
           if (question.stem.isNotEmpty)
             Text(question.stem, style: AppTextStyles.bodySm),
 
-          // In _QuestionPreviewCard:
-for (final fig in question.figures)
-  Padding(
-    padding: const EdgeInsets.only(top: AppSpacing.md),
-    child: _FigureSlot(
-      locator: fig.locator,          // ← use fig.locator
-      caption: fig.caption,
-      bytes: figureBytes[fig.locator],
-      onChanged: onFigureChanged,
-    ),
-  ),
+          // Stem figures
+          for (final fig in question.figures)
+            Padding(
+              padding: const EdgeInsets.only(top: AppSpacing.md),
+              child: _FigureSlot(
+                locator: fig.locator,
+                caption: fig.caption,
+                bytes: figureBytes[fig.locator],
+                onChanged: onFigureChanged,
+              ),
+            ),
 
+          // Parts — each with its own topic dropdown
           for (final part in question.parts)
             Padding(
               padding: const EdgeInsets.only(top: AppSpacing.md),
               child: _PartView(
-                qNum: question.number,
-                part: part,
-                figureBytes: figureBytes,
-                onFigureChanged: onFigureChanged,
-                onPartMarksChanged: (marks) =>
-                    onPartMarksChanged(question.number, part.label, marks),
-                onSubMarksChanged: (subLabel, marks) => onSubMarksChanged(
-                    question.number, part.label, subLabel, marks),
+  qNum: question.number,
+  part: part,
+  topics: topics,
+  selectedTopicId: topicByPart['q${question.number}.${part.label}'],
+  onTopicChanged: (id) =>
+      onPartTopicChanged(part.label, id),
+  figureBytes: figureBytes,
+  onFigureChanged: onFigureChanged,
+  onPartMarksChanged: (marks) =>
+      onPartMarksChanged(question.number, part.label, marks),
+  onSubMarksChanged: (subLabel, marks) =>
+      onSubMarksChanged(question.number, part.label, subLabel, marks),
+)
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PartView extends StatelessWidget {
+  final int qNum;
+  final PastPartDraft part;
+  final List<Map<String, dynamic>> topics;
+  final String? selectedTopicId;
+  final ValueChanged<String?> onTopicChanged;
+  final Map<String, Uint8List> figureBytes;
+  final void Function(String locator, Uint8List? bytes) onFigureChanged;
+  final ValueChanged<int?> onPartMarksChanged;
+  final void Function(String subLabel, int? marks) onSubMarksChanged;
+
+  const _PartView({
+    required this.qNum,
+    required this.part,
+    required this.topics,
+    required this.selectedTopicId,
+    required this.onTopicChanged,
+    required this.figureBytes,
+    required this.onFigureChanged,
+    required this.onPartMarksChanged,
+    required this.onSubMarksChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // A part is in "sub-level mode" when at least one of its sub-parts
+    // carries a mark. In that mode, the part badge is a read-only
+    // rollup of sub marks, and sub badges are editable.
+    //
+    // Otherwise the part is in "part-level mode" (or undecided): the
+    // part badge is editable, and sub badges are hidden.
+    final isSubLevelMode = part.subs.any((s) => s.marks != null);
+final isPartLevelMode = !isSubLevelMode && part.marks != null;
+
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.sm),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppSpacing.radiusChip),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Part header — label + mark badge ──
+          Row(
+            children: [
+              Text('PART ${part.label}', style: AppTextStyles.labelMd),
+              const SizedBox(width: AppSpacing.sm),
+              if (isSubLevelMode)
+                // Sub marks are the source of truth — show a read-only
+                // rollup badge here.
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withOpacity(0.06),
+                    borderRadius:
+                        BorderRadius.circular(AppSpacing.radiusChip),
+                    border: Border.all(
+                      color: AppColors.primary.withOpacity(0.15),
+                    ),
+                  ),
+                  child: Text(
+                    part.marks != null ? '[${part.marks}]' : '[?]',
+                    style: AppTextStyles.caption.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                )
+              else
+                // Part-level mode (or undecided) — editable badge.
+                _EditableMarkBadge(
+                  marks: part.marks,
+                  onChanged: onPartMarksChanged,
+                ),
+            ],
+          ),
+
+          if (part.text.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(part.text, style: AppTextStyles.bodySm),
+          ],
+
+          // ── Part figures ──
+          for (final fig in part.figures)
+            Padding(
+              padding: const EdgeInsets.only(top: AppSpacing.sm),
+              child: _FigureSlot(
+                locator: fig.locator,
+                caption: fig.caption,
+                bytes: figureBytes[fig.locator],
+                onChanged: onFigureChanged,
               ),
             ),
 
-          const SizedBox(height: AppSpacing.md),
+          // ── Sub-parts ──
+          for (final sub in part.subs)
+            Padding(
+              padding: const EdgeInsets.only(top: AppSpacing.sm),
+              child: _SubView(
+                qNum: qNum,
+                partLabel: part.label,
+                sub: sub,
+                // Sub badges are editable only when the part has no
+                // mark of its own (which allows sub-level mode).
+                subMarksEditable: !isPartLevelMode,
+                figureBytes: figureBytes,
+                onFigureChanged: onFigureChanged,
+                onSubMarksChanged: (marks) =>
+                    onSubMarksChanged(sub.label, marks),
+              ),
+            ),
 
+          // ── Topic dropdown — per part ──
+          const SizedBox(height: AppSpacing.md),
           DropdownButtonFormField<String>(
             value: selectedTopicId,
             decoration: const InputDecoration(
@@ -1072,87 +1370,11 @@ for (final fig in question.figures)
   }
 }
 
-class _PartView extends StatelessWidget {
-  final int qNum;
-  final PastPartDraft part;
-  final Map<String, Uint8List> figureBytes;
-  final void Function(String locator, Uint8List? bytes) onFigureChanged;
-  final ValueChanged<int?> onPartMarksChanged;
-  final void Function(String subLabel, int? marks) onSubMarksChanged;
-
-  const _PartView({
-    required this.qNum,
-    required this.part,
-    required this.figureBytes,
-    required this.onFigureChanged,
-    required this.onPartMarksChanged,
-    required this.onSubMarksChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(AppSpacing.sm),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(AppSpacing.radiusChip),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Text('PART ${part.label}',
-                  style: AppTextStyles.labelMd),
-              const SizedBox(width: AppSpacing.sm),
-              _EditableMarkBadge(
-                marks: part.marks,
-                onChanged: onPartMarksChanged,
-              ),
-            ],
-          ),
-          if (part.text.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(part.text, style: AppTextStyles.bodySm),
-          ],
-
-          // In _QuestionPreviewCard:
-for (final fig in part.figures)
-  Padding(
-    padding: const EdgeInsets.only(top: AppSpacing.md),
-    child: _FigureSlot(
-      locator: fig.locator,          // ← use fig.locator
-      caption: fig.caption,
-      bytes: figureBytes[fig.locator],
-      onChanged: onFigureChanged,
-    ),
-  ),
-
-          for (final sub in part.subs)
-  Padding(
-    padding: const EdgeInsets.only(top: AppSpacing.sm),
-    child: _SubView(
-      qNum: qNum,
-      partLabel: part.label,
-      sub: sub,
-      partHasMarks: part.marks != null,   // ← new
-      figureBytes: figureBytes,
-      onFigureChanged: onFigureChanged,
-      onSubMarksChanged: (marks) => onSubMarksChanged(sub.label, marks),
-    ),
-  ),
-        ],
-      ),
-    );
-  }
-}
-
 class _SubView extends StatelessWidget {
   final int qNum;
   final String partLabel;
   final PastSubDraft sub;
-  final bool partHasMarks;   // ← new
+  final bool subMarksEditable;
   final Map<String, Uint8List> figureBytes;
   final void Function(String locator, Uint8List? bytes) onFigureChanged;
   final ValueChanged<int?> onSubMarksChanged;
@@ -1161,7 +1383,7 @@ class _SubView extends StatelessWidget {
     required this.qNum,
     required this.partLabel,
     required this.sub,
-    required this.partHasMarks,
+    required this.subMarksEditable,
     required this.figureBytes,
     required this.onFigureChanged,
     required this.onSubMarksChanged,
@@ -1177,8 +1399,9 @@ class _SubView extends StatelessWidget {
           Row(
             children: [
               Text('(${sub.label})', style: AppTextStyles.labelSm),
-              // Only show the sub mark when the part has no mark.
-              if (!partHasMarks) ...[
+              // Only render the mark badge when this sub is in
+              // sub-level mode.
+              if (subMarksEditable) ...[
                 const SizedBox(width: 6),
                 _EditableMarkBadge(
                   marks: sub.marks,
@@ -1188,20 +1411,22 @@ class _SubView extends StatelessWidget {
               ],
             ],
           ),
+
           if (sub.text.isNotEmpty) ...[
             const SizedBox(height: 2),
             Text(sub.text, style: AppTextStyles.bodySm),
           ],
+
           for (final fig in sub.figures)
-  Padding(
-    padding: const EdgeInsets.only(top: AppSpacing.sm),
-    child: _FigureSlot(
-      locator: fig.locator,
-      caption: fig.caption,
-      bytes: figureBytes[fig.locator],
-      onChanged: onFigureChanged,
-    ),
-  ),
+            Padding(
+              padding: const EdgeInsets.only(top: AppSpacing.sm),
+              child: _FigureSlot(
+                locator: fig.locator,
+                caption: fig.caption,
+                bytes: figureBytes[fig.locator],
+                onChanged: onFigureChanged,
+              ),
+            ),
         ],
       ),
     );

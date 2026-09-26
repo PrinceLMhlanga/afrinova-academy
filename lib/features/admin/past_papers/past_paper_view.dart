@@ -107,13 +107,23 @@ class _PartBlock extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const labelWidth = 40.0;
-    final marksOnThisPart = part.marks != null && part.subs.isEmpty;
+
+    // Mode detection: same rule as the editor.
+    final isSubLevelMode = part.subs.any((s) => s.marks != null);
+    final isPartLevelMode = !isSubLevelMode && part.marks != null;
+
+    // In part-level mode with subs, we render the mark at the END of
+    // the part's content (below all sub-parts), right-aligned.
+    // In part-level mode with no subs, we render it right after the
+    // part text.
+    final showPartMark = isPartLevelMode;
 
     return Padding(
       padding: const EdgeInsets.only(left: 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // ── Part label + text + figures ──
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -130,38 +140,41 @@ class _PartBlock extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // NEW
-if (part.text.isNotEmpty || part.figures.isNotEmpty)
-  _RichBlock(
-    text: part.text,
-    figures: part.figures,
-    figureUrlResolver: figureUrlResolver,
-    figureBytesResolver: figureBytesResolver,
-  ),
+                    if (part.text.isNotEmpty || part.figures.isNotEmpty)
+                      _RichBlock(
+                        text: part.text,
+                        figures: part.figures,
+                        figureUrlResolver: figureUrlResolver,
+                        figureBytesResolver: figureBytesResolver,
+                      ),
                   ],
                 ),
               ),
             ],
           ),
 
-          for (var i = 0; i < part.subs.length; i++)
+          // ── Sub-parts ──
+          // Each sub renders its own content via _RichBlock, so
+          // figures appear at their exact positions.
+          for (final sub in part.subs)
             Padding(
               padding: const EdgeInsets.only(top: AppSpacing.sm),
               child: _SubBlock(
-                sub: part.subs[i],
-                marks: (i == part.subs.length - 1 && part.marks != null)
-                    ? part.marks
-                    : null,
+                sub: sub,
+                // Pass the sub's own mark — only used in sub-level mode.
+                // In part-level mode, sub.marks is null anyway.
+                marks: sub.marks,
                 figureUrlResolver: figureUrlResolver,
                 figureBytesResolver: figureBytesResolver,
               ),
             ),
 
-          if (marksOnThisPart)
+          // ── Part mark — after ALL content, right-aligned ──
+          if (showPartMark)
             Align(
               alignment: Alignment.centerRight,
               child: Padding(
-                padding: const EdgeInsets.only(top: 4),
+                padding: const EdgeInsets.only(top: AppSpacing.sm),
                 child: _MarksText(value: part.marks!),
               ),
             ),
@@ -170,9 +183,6 @@ if (part.text.isNotEmpty || part.figures.isNotEmpty)
     );
   }
 }
-// ─────────────────────────────────────────────────────────────
-// Sub-part
-// ─────────────────────────────────────────────────────────────
 
 class _SubBlock extends StatelessWidget {
   final PastSubDraft sub;
@@ -213,18 +223,21 @@ class _SubBlock extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // NEW
-if (sub.text.isNotEmpty || sub.figures.isNotEmpty)
-  _RichBlock(
-    text: sub.text,
-    figures: sub.figures,
-    figureUrlResolver: figureUrlResolver,
-    figureBytesResolver: figureBytesResolver,
-  ),
+                    // _RichBlock handles text + figures at their
+                    // marker positions in the text.
+                    if (sub.text.isNotEmpty || sub.figures.isNotEmpty)
+                      _RichBlock(
+                        text: sub.text,
+                        figures: sub.figures,
+                        figureUrlResolver: figureUrlResolver,
+                        figureBytesResolver: figureBytesResolver,
+                      ),
                   ],
                 ),
               ),
-              // Marks right-aligned on the first line, if present.
+              // Sub mark, inline with the sub's first line. Only
+              // rendered when the sub carries its own mark — i.e.
+              // in sub-level mode.
               if (marks != null)
                 Padding(
                   padding: const EdgeInsets.only(left: AppSpacing.sm),
@@ -237,7 +250,6 @@ if (sub.text.isNotEmpty || sub.figures.isNotEmpty)
     );
   }
 }
-
 // ─────────────────────────────────────────────────────────────
 // Shared bits
 // ─────────────────────────────────────────────────────────────
