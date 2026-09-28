@@ -109,15 +109,15 @@ const sendFcmMessage = async (token: string, title: string, body: string, data: 
     }
   }
 
-  // Inject title and body parameters explicitly into your target data map payload
+  // Explicit parameters for your custom service worker data listener
   cleanData['push_title'] = title;
   cleanData['push_body'] = body;
 
   if (FCM_SERVICE_ACCOUNT && FCM_PROJECT_ID) {
     const accessToken = await getGoogleAccessToken();
     const response = await fetch(
-  `https://fcm.googleapis.com/v1/projects/${FCM_PROJECT_ID}/messages:send`,
-  {
+      `https://fcm.googleapis.com/v1/projects/${FCM_PROJECT_ID}/messages:send`,
+      {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -126,8 +126,23 @@ const sendFcmMessage = async (token: string, title: string, body: string, data: 
         body: JSON.stringify({
           message: {
             token,
-            data: cleanData, // 🚀 Keep only the data payload map
-            // ❌ COMPLETELY REMOVE standard notification and webpush objects here
+            data: cleanData, // Serves your background worker loop listeners
+            webpush: {
+              notification: {
+                title,
+                body,
+                icon: '/favicon_new.png?v=2',
+                badge: '/favicon_new.png?v=2',
+                requireInteraction: true,
+              },
+              fcmOptions: {
+                link: cleanData.type === 'live_lesson' 
+                  ? `/lesson/${cleanData.lesson_id || cleanData.id || ''}` 
+                  : cleanData.type === 'chat_message' 
+                    ? `/chat/${cleanData.session_id || ''}` 
+                    : '/?screen=notifications'
+              }
+            }
           },
         }),
       }
@@ -135,8 +150,8 @@ const sendFcmMessage = async (token: string, title: string, body: string, data: 
     return response;
   }
   
-  // Update your fallback FCM legacy configuration block symmetrically
-   return await fetch('https://fcm.googleapis.com/fcm/send', {
+  // Legacy Fallback
+  return await fetch('https://fcm.googleapis.com/fcm/send', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -144,10 +159,11 @@ const sendFcmMessage = async (token: string, title: string, body: string, data: 
     },
     body: JSON.stringify({
       to: token,
-      data: cleanData, // 🚀 Pure Data Payload Map
+      data: cleanData,
     }),
   });
 };
+
 
 
 serve(async (req) => {

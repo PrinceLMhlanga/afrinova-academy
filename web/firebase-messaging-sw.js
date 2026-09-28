@@ -15,22 +15,16 @@ const messaging = firebase.messaging();
 
 // Cleanly handle notification presentation when app is closed/in background
 // Cleanly handle notification presentation when app is closed/in background
+// Cleanly handle background arrivals without creating duplicates
 messaging.onBackgroundMessage((payload) => {
   console.log('[firebase-messaging-sw.js] Received background message', payload);
   
-  // Extract custom text keys injected from notify-dispatch data layout
-  const targetData = payload.data || {};
-  const notificationTitle = targetData.push_title || 'AfriNova Academy';
-  
-  const notificationOptions = {
-    body: targetData.push_body || 'You have a new update',
-    icon: '/favicon_new.png?v=2',
-    badge: '/favicon_new.png?v=2',
-    data: targetData, // Pass the whole object block down so clicks route smoothly
-  };
-
-  return self.registration.showNotification(notificationTitle, notificationOptions);
+  // 🚀 DO NOT call self.registration.showNotification here!
+  // The webpush payload from your Edge Function handles the UI render natively.
+  // Returning a resolved promise tells the browser we acknowledged the message.
+  return Promise.resolve();
 });
+
 
 
 // Handle custom deep-linking when a student clicks on the web notification banner
