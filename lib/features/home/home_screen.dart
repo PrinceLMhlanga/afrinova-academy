@@ -34,6 +34,7 @@ import '../parent/parent_onboarding_screen.dart';
 import '../auth/complete_student_profile_screen.dart';
 import '../notifications/notifications_screen.dart';
 import 'package:flutter/foundation.dart';
+import '../../core/navigation.dart';
 
 
 class HomeScreen extends StatefulWidget {
@@ -248,17 +249,27 @@ class _StudentShellState extends State<_StudentShell> {
   void initState() {
     super.initState();
     _registerPanels();
-  if (kIsWeb) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        final uri = Uri.base;
-        if (uri.queryParameters['screen'] == 'notifications') {
-          // Push the notifications screen cleanly over the active shell navigator stack
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const NotificationsScreen()),
-          );
-        }
-      });
-    }
+
+    // Process deep linking safely for authenticated users
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final session = Supabase.instance.client.auth.currentSession;
+      if (session?.accessToken == null) return; // Halt here if logged out
+
+      final uri = Uri.base;
+      
+      // Scenario A: User was already logged in, tab focused, or page refreshed directly
+      if (uri.queryParameters['screen'] == 'notifications' || 
+          (pendingNotificationTap != null && pendingNotificationTap!['screen'] == 'notifications')) {
+        
+        // Reset the mobile/web stash pointer
+        pendingNotificationTap = null;
+        
+        // Push the screen safely
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const NotificationsScreen()),
+        );
+      }
+    });
   }
 
   /// Registers all panel builders. Called once at startup — idempotent

@@ -98,7 +98,6 @@ const getGoogleAccessToken = async () => {
 };
 
 const sendFcmMessage = async (token: string, title: string, body: string, data: unknown) => {
-  // Clean data for FCM (flat key-value pairs of strings only)
   const cleanData: Record<string, string> = {};
   if (data && typeof data === 'object') {
     for (const [key, value] of Object.entries(data)) {
@@ -110,51 +109,34 @@ const sendFcmMessage = async (token: string, title: string, body: string, data: 
     }
   }
 
+  // Inject title and body parameters explicitly into your target data map payload
+  cleanData['push_title'] = title;
+  cleanData['push_body'] = body;
+
   if (FCM_SERVICE_ACCOUNT && FCM_PROJECT_ID) {
     const accessToken = await getGoogleAccessToken();
     const response = await fetch(
   `https://fcm.googleapis.com/v1/projects/${FCM_PROJECT_ID}/messages:send`,
   {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({
-  message: {
-    token,
-    // ❌ REMOVE the top-level notification object to prevent the automatic double render
-    // notification: { title, body }, 
-    
-    data: cleanData,
-    webpush: {
-      notification: {
-        title: title, // Move title here
-        body: body,   // Move body here
-        icon: '/icons/Icon-192.png',
-        badge: '/icons/Icon-96.png',
-        requireInteraction: true,
-      },
-      fcmOptions: {
-        link: cleanData.type === 'live_lesson' 
-          ? `/lesson/${cleanData.lesson_id || cleanData.id || ''}` 
-          : cleanData.type === 'chat_message' 
-            ? `/chat/${cleanData.session_id || ''}` 
-            : '/?screen=notifications' // 🚀 Redirect key payload change (explained below)
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          message: {
+            token,
+            data: cleanData, // 🚀 Keep only the data payload map
+            // ❌ COMPLETELY REMOVE standard notification and webpush objects here
+          },
+        }),
       }
-    }
-  },
-}),
-
-    });
+    );
     return response;
   }
-
-  if (!FCM_SERVER_KEY) {
-    throw new Error('No push credentials configured');
-  }
-
-  return await fetch('https://fcm.googleapis.com/fcm/send', {
+  
+  // Update your fallback FCM legacy configuration block symmetrically
+   return await fetch('https://fcm.googleapis.com/fcm/send', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -162,11 +144,11 @@ const sendFcmMessage = async (token: string, title: string, body: string, data: 
     },
     body: JSON.stringify({
       to: token,
-      notification: { title, body },
-      data: cleanData,
+      data: cleanData, // 🚀 Pure Data Payload Map
     }),
   });
 };
+
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });

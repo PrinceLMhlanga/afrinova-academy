@@ -81,11 +81,12 @@ void _handleWebNotificationRouteFromUrl() {
 
   final screen = Uri.base.queryParameters['screen'];
   if (screen == 'notifications') {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _openNotificationsScreen();
-    });
+    debugPrint('[push-web] Detected unauthenticated web query path. Stashing payload.');
+    // Stash it inside the global hook variable you already use for mobile routing
+    pendingNotificationTap = {'screen': 'notifications'};
   }
 }
+
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();

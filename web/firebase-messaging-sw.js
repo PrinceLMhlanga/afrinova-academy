@@ -14,20 +14,24 @@ firebase.initializeApp({
 const messaging = firebase.messaging();
 
 // Cleanly handle notification presentation when app is closed/in background
+// Cleanly handle notification presentation when app is closed/in background
 messaging.onBackgroundMessage((payload) => {
   console.log('[firebase-messaging-sw.js] Received background message', payload);
   
-  // Extract content directly from the Firebase validated payload layout
-  const notificationTitle = payload.notification?.title || 'AfriNova Academy';
+  // Extract custom text keys injected from notify-dispatch data layout
+  const targetData = payload.data || {};
+  const notificationTitle = targetData.push_title || 'AfriNova Academy';
+  
   const notificationOptions = {
-    body: payload.notification?.body || 'You have a new update',
+    body: targetData.push_body || 'You have a new update',
     icon: '/favicon_new.png?v=2',
     badge: '/favicon_new.png?v=2',
-    data: payload.data || {},
+    data: targetData, // Pass the whole object block down so clicks route smoothly
   };
 
   return self.registration.showNotification(notificationTitle, notificationOptions);
 });
+
 
 // Handle custom deep-linking when a student clicks on the web notification banner
 self.addEventListener('notificationclick', (event) => {
