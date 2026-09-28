@@ -62,17 +62,11 @@ class NotificationService {
 
     await _getOrCreateDeviceId();
 
-    // Setup message handlers
+    // Setup foreground message handling only here.
+    // Notification tap handling is centralized in main.dart to avoid duplicate
+    // processing when the app opens from a notification or cold start.
     _foregroundSubscription = FirebaseMessaging.onMessage.listen(_handleForegroundMessage);
-    _openedAppSubscription = FirebaseMessaging.onMessageOpenedApp.listen(_handleMessageOpenedApp);
-    
-    // Check if app was opened from terminated state
-    final RemoteMessage? initialMessage = 
-        await FirebaseMessaging.instance.getInitialMessage();
-    if (initialMessage != null) {
-      _handleMessageOpenedApp(initialMessage);
-    }
-    
+
     _initialized = true;
   }
 
@@ -99,7 +93,7 @@ class NotificationService {
 
     if (settings.authorizationStatus != AuthorizationStatus.authorized &&
         settings.authorizationStatus != AuthorizationStatus.provisional) {
-      print('Notification permission not granted');
+      debugPrint('Notification permission not granted');
       return;
     }
 
@@ -147,7 +141,7 @@ class NotificationService {
         'last_seen_at': DateTime.now().toUtc().toIso8601String(),
       }, onConflict: 'device_id');
     } catch (e) {
-      print('Error registering token with backend: $e');
+      debugPrint('Error registering token with backend: $e');
     }
   }
 
@@ -162,7 +156,7 @@ class NotificationService {
         'last_seen_at': DateTime.now().toUtc().toIso8601String(),
       }, onConflict: 'device_id');
     } catch (e) {
-      print('Error registering anonymous token: $e');
+      debugPrint('Error registering anonymous token: $e');
     }
   }
 
@@ -183,15 +177,10 @@ class NotificationService {
   }
 
   void _handleForegroundMessage(RemoteMessage message) {
-    print('Foreground message: ${message.data}');
+    debugPrint('Foreground message: ${message.data}');
     if (message.notification != null) {
       _showLocalNotification(message);
     }
-  }
-
-  void _handleMessageOpenedApp(RemoteMessage message) {
-    print('Message opened app: ${message.data}');
-    _navigateBasedOnNotification(message.data);
   }
 
   Future<void> _showLocalNotification(RemoteMessage message) async {
@@ -218,27 +207,6 @@ class NotificationService {
       payload: message.data.toString(),
     );
   }
-
-  void _navigateBasedOnNotification(Map<String, dynamic> data) {
-    // Implement navigation based on notification type
-    final type = data['type'];
-    print('Navigate based on type: $type');
-    
-    // Example routing:
-    // switch (type) {
-    //   case 'live_lesson':
-    //     // Navigate to lesson
-    //     break;
-    //   case 'chat_message':
-    //     // Navigate to chat
-    //     break;
-    //   case 'payment':
-    //     // Navigate to payment
-    //     break;
-    // }
-  }
-
-
 
 /// Fetch the current user's notifications, newest first.
 Future<List<Map<String, dynamic>>> fetchMyNotifications({

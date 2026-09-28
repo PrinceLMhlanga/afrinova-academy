@@ -20,42 +20,56 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 // Called when the user taps a push notification. If the user is signed
 // in, we push the notifications screen. If not, we stash the tap and
 // let the auth listener in `main()` consume it once a session exists.
-// Keep track of whether we already consumed the launch notification
-bool _hasConsumedTap = false;
+// Keep a small dedupe set so the same notification payload is not processed
+// multiple times when both the app launch hook and the tap listener fire.
+final Set<String> _handledNotificationIds = <String>{};
 
-void _handleNotificationTap(Map<String, dynamic> data) {
+void _handleNotificationTap(RemoteMessage message) {
+  final data = message.data;
+  final notificationKey =
+      message.messageId ??
+      data['message_id'] ??
+      data['id'] ??
+      data.toString();
+
+  if (_handledNotificationIds.contains(notificationKey)) {
+    debugPrint('[push] duplicate notification tap ignored: $notificationKey');
+    return;
+  }
+  _handledNotificationIds.add(notificationKey);
+
   final session = Supabase.instance.client.auth.currentSession;
 
-  // Stash the payload if there is no session yet
+  // Stash the payload if there is no session yet.
   if (session?.accessToken == null) {
     debugPrint('[push] no session — stashing pending tap');
     pendingNotificationTap = data;
     return;
   }
+
   _openNotificationsScreen();
 }
 
 void _openNotificationsScreen() {
-  // Ensure the navigator widget tree is completely ready
+  // Ensure the navigator widget tree is completely ready.
   WidgetsBinding.instance.addPostFrameCallback((_) {
     final nav = appNavigatorKey.currentState;
     if (nav == null) {
-      // Re-queue safely if the navigator hasn't initialized
+      // Re-queue safely if the navigator hasn't initialized yet.
       Future.delayed(const Duration(milliseconds: 200), _openNotificationsScreen);
       return;
     }
-    
-    // Clear out any existing notification overlays first, preventing duplicates
-    nav.pushAndRemoveUntil(
+
+    // Push the notifications screen without removing the app shell/home route.
+    // This keeps the user on the main app flow while opening the notification center.
+    nav.push(
       MaterialPageRoute(builder: (_) => const NotificationsScreen()),
-      (route) => route.isFirst, // Retains your base underlying app home route
     );
   });
 }
 
 void _consumePendingNotificationTap() {
-  if (pendingNotificationTap == null || _hasConsumedTap) return;
-  _hasConsumedTap = true; // Mark as consumed so token refreshes don't re-trigger it
+  if (pendingNotificationTap == null) return;
   pendingNotificationTap = null;
 
   _openNotificationsScreen();
@@ -86,16 +100,16 @@ void main() async {
 
   // ── Foreground / background tap ──
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-    _handleNotificationTap(message.data);
+    _handleNotificationTap(message);
   });
 
   // ── Cold-start tap ──
   final initialMessage = await FirebaseMessaging.instance.getInitialMessage();
   if (initialMessage != null) {
-    // Instead of risking a hardcoded timer race condition, 
-    // let your main layout frame build loop drive the routing action safely
+    // Instead of risking a hardcoded timer race condition,
+    // let the main layout frame build loop drive the routing action safely.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _handleNotificationTap(initialMessage.data);
+      _handleNotificationTap(initialMessage);
     });
   }
 
