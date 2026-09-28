@@ -218,22 +218,29 @@ serve(async (req) => {
 
       if (devicesError) throw devicesError;
 
-      const tokens = Array.isArray(devices) ? devices.map((d: any) => d.token).filter(Boolean) : [];
-     
+      const tokens = Array.isArray(devices)
+        ? Array.from(
+            new Set(
+              devices
+                .map((d: any) => String(d.token || '').trim())
+                .filter((token: string) => token.length > 0)
+            )
+          )
+        : [];
+
       if (tokens.length > 0) {
         const pushResults: any[] = [];
         for (const token of tokens) {
           try {
-            // FIX: Restored correct positional arguments: token, title, body, data
             const resp = await sendFcmMessage(
-              token, 
-              notification.title, 
-              notification.body || '', 
+              token,
+              notification.title,
+              notification.body || '',
               {
                 ...notification.data,
                 type: notification.type,
-                notification_id: notification.id
-              }
+                notification_id: notification.id,
+              },
             );
 
             // Housekeeping: remove expired tokens from DB dynamically

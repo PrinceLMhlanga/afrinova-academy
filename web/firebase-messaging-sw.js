@@ -35,12 +35,14 @@ self.addEventListener('notificationclick', (event) => {
   
   // Safe deep link extraction based on notify-dispatch's fcmOptions setup
   const targetData = event.notification.data || {};
-  let targetUrl = '/';
-  
+  let targetUrl = '/?screen=notifications';
+
   if (targetData.type === 'live_lesson') {
     targetUrl = `/lesson/${targetData.lesson_id || targetData.id || ''}`;
   } else if (targetData.type === 'chat_message') {
     targetUrl = `/chat/${targetData.session_id || ''}`;
+  } else {
+    targetUrl = '/?screen=notifications';
   }
 
   event.waitUntil(

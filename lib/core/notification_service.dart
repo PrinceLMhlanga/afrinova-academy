@@ -178,6 +178,11 @@ class NotificationService {
 
   void _handleForegroundMessage(RemoteMessage message) {
     debugPrint('Foreground message: ${message.data}');
+
+    // On web, the service worker already renders the browser notification.
+    // Showing a second local notification here duplicates the same push.
+    if (kIsWeb) return;
+
     if (message.notification != null) {
       _showLocalNotification(message);
     }

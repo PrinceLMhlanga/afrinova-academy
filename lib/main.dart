@@ -1,5 +1,6 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -75,6 +76,17 @@ void _consumePendingNotificationTap() {
   _openNotificationsScreen();
 }
 
+void _handleWebNotificationRouteFromUrl() {
+  if (!kIsWeb) return;
+
+  final screen = Uri.base.queryParameters['screen'];
+  if (screen == 'notifications') {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _openNotificationsScreen();
+    });
+  }
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   ReferralTracker.initialize();
@@ -111,6 +123,10 @@ void main() async {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _handleNotificationTap(initialMessage);
     });
+  }
+
+  if (kIsWeb) {
+    _handleWebNotificationRouteFromUrl();
   }
 
   runApp(const AfriNovaApp());
