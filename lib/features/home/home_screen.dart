@@ -32,6 +32,9 @@ import '../parent/parent_dashboard_panel.dart';
 import '../parent/parent_children_panel.dart';
 import '../parent/parent_onboarding_screen.dart';
 import '../auth/complete_student_profile_screen.dart';
+import '../notifications/notifications_screen.dart';
+import 'package:flutter/foundation.dart';
+
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -245,6 +248,17 @@ class _StudentShellState extends State<_StudentShell> {
   void initState() {
     super.initState();
     _registerPanels();
+  if (kIsWeb) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final uri = Uri.base;
+        if (uri.queryParameters['screen'] == 'notifications') {
+          // Push the notifications screen cleanly over the active shell navigator stack
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const NotificationsScreen()),
+          );
+        }
+      });
+    }
   }
 
   /// Registers all panel builders. Called once at startup — idempotent

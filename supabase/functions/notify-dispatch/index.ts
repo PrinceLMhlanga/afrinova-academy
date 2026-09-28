@@ -121,26 +121,31 @@ const sendFcmMessage = async (token: string, title: string, body: string, data: 
         Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({
-        message: {
-          token,
-          notification: { title, body },
-          data: cleanData,
-          webpush: {
-            notification: {
-              icon: '/icons/Icon-192.png',
-              badge: '/icons/Icon-96.png',
-              requireInteraction: true,
-            },
-            fcmOptions: {
-              link: cleanData.type === 'live_lesson' 
-                ? `/lesson/${cleanData.lesson_id || cleanData.id || ''}` 
-                : cleanData.type === 'chat_message' 
-                  ? `/chat/${cleanData.session_id || ''}` 
-                  : '/'
-            }
-          }
-        },
-      }),
+  message: {
+    token,
+    // ❌ REMOVE the top-level notification object to prevent the automatic double render
+    // notification: { title, body }, 
+    
+    data: cleanData,
+    webpush: {
+      notification: {
+        title: title, // Move title here
+        body: body,   // Move body here
+        icon: '/icons/Icon-192.png',
+        badge: '/icons/Icon-96.png',
+        requireInteraction: true,
+      },
+      fcmOptions: {
+        link: cleanData.type === 'live_lesson' 
+          ? `/lesson/${cleanData.lesson_id || cleanData.id || ''}` 
+          : cleanData.type === 'chat_message' 
+            ? `/chat/${cleanData.session_id || ''}` 
+            : '/?screen=notifications' // 🚀 Redirect key payload change (explained below)
+      }
+    }
+  },
+}),
+
     });
     return response;
   }
