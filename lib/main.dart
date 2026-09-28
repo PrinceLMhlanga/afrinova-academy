@@ -20,61 +20,53 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 // Called when the user taps a push notification. If the user is signed
 // in, we push the notifications screen. If not, we stash the tap and
 // let the auth listener in `main()` consume it once a session exists.
+// Keep track of whether we already consumed the launch notification
+bool _hasConsumedTap = false;
+
 void _handleNotificationTap(Map<String, dynamic> data) {
   final session = Supabase.instance.client.auth.currentSession;
 
-  Future.microtask(() {
-    if (session?.accessToken == null) {
-      debugPrint('[push] no session — stashing pending tap');
-      pendingNotificationTap = data;
-      return;
-    }
-    _openNotificationsScreen();
-  });
+  // Stash the payload if there is no session yet
+  if (session?.accessToken == null) {
+    debugPrint('[push] no session — stashing pending tap');
+    pendingNotificationTap = data;
+    return;
+  }
+  _openNotificationsScreen();
 }
 
 void _openNotificationsScreen() {
+  // Ensure the navigator widget tree is completely ready
   WidgetsBinding.instance.addPostFrameCallback((_) {
     final nav = appNavigatorKey.currentState;
     if (nav == null) {
-      // Navigator isn't ready yet — try again on the next frame.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        appNavigatorKey.currentState?.push(
-          MaterialPageRoute(
-            builder: (_) => const NotificationsScreen(),
-          ),
-        );
-      });
+      // Re-queue safely if the navigator hasn't initialized
+      Future.delayed(const Duration(milliseconds: 200), _openNotificationsScreen);
       return;
     }
-    nav.push(
-      MaterialPageRoute(
-        builder: (_) => const NotificationsScreen(),
-      ),
+    
+    // Clear out any existing notification overlays first, preventing duplicates
+    nav.pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const NotificationsScreen()),
+      (route) => route.isFirst, // Retains your base underlying app home route
     );
   });
 }
 
 void _consumePendingNotificationTap() {
-  final pending = pendingNotificationTap;
-  if (pending == null) return;
+  if (pendingNotificationTap == null || _hasConsumedTap) return;
+  _hasConsumedTap = true; // Mark as consumed so token refreshes don't re-trigger it
   pendingNotificationTap = null;
 
-  // Small delay so the app shell finishes mounting after login.
-  Future.delayed(const Duration(milliseconds: 300), () {
-    _openNotificationsScreen();
-  });
+  _openNotificationsScreen();
 }
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
   ReferralTracker.initialize();
-
   await SupabaseConfig.initialize();
 
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-
   await NotificationService.instance.initialize();
   await NotificationService.instance.registerDeviceToken();
 
@@ -86,25 +78,23 @@ void main() async {
       await NotificationService.instance.registerDeviceToken();
     }
 
-    // Consume a pending notification tap once a session is live.
-    if (data.session?.accessToken != null) {
+    // ONLY consume the stashed notification tap during an explicit SIGNED_IN event
+    if (data.event == AuthChangeEvent.signedIn && data.session?.accessToken != null) {
       _consumePendingNotificationTap();
     }
   });
 
   // ── Foreground / background tap ──
-  // Fires when the app is running (foreground or backgrounded) and the
-  // user taps a push.
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
     _handleNotificationTap(message.data);
   });
 
   // ── Cold-start tap ──
-  // Fires when the app was terminated and the user tapped a push to
-  // launch it. Deferred so the app has time to build.
   final initialMessage = await FirebaseMessaging.instance.getInitialMessage();
   if (initialMessage != null) {
-    Future.delayed(const Duration(milliseconds: 500), () {
+    // Instead of risking a hardcoded timer race condition, 
+    // let your main layout frame build loop drive the routing action safely
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       _handleNotificationTap(initialMessage.data);
     });
   }
