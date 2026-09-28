@@ -28,6 +28,10 @@ import '../summaries/my_summaries_screen.dart';
 import '../ai/ai_tutor_screen.dart';
 import '../ai/expert_tutor_selection_screen.dart';
 import '../../widgets/ai_feature_guard.dart';
+import '../parent/parent_dashboard_panel.dart';
+import '../parent/parent_children_panel.dart';
+import '../parent/parent_onboarding_screen.dart';
+import '../auth/complete_student_profile_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -66,20 +70,59 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _loadProfile() async {
-    try {
-      final profile = await _authService.getProfile();
-      if (profile != null && mounted) {
-        setState(() {
-          _userName = profile['full_name'] ?? '';
-          _userDisplayName = profile['display_name'] ?? '';
-          _userRole = profile['role'] ?? 'student';
-          _isLoading = false;
-        });
-      }
-    } catch (e) {
+  try {
+    final profile = await _authService.getProfile();
+    if (profile == null) {
       if (mounted) setState(() => _isLoading = false);
+      return;
     }
+
+    final role = profile['role'] as String? ?? 'student';
+    final onboardingDone = profile['onboarding_completed'] == true;
+
+    // Route users who haven't completed onboarding to the correct screen.
+    if (!onboardingDone) {
+      if (role == 'parent') {
+        if (!mounted) return;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (_) => const ParentOnboardingScreen(),
+            ),
+          );
+        });
+        return;
+      }
+
+      if (role == 'student') {
+        if (!mounted) return;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (_) => const CompleteStudentProfileScreen(),
+            ),
+          );
+        });
+        return;
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _userName = (profile['full_name'] as String?)?.trim().isNotEmpty == true
+            ? profile['full_name'] as String
+            : (profile['display_name'] as String?) ?? '';
+        _userDisplayName = profile['display_name'] as String? ?? '';
+        _userRole = role;
+        _isLoading = false;
+      });
+    }
+  } catch (e) {
+    if (mounted) setState(() => _isLoading = false);
   }
+}
 
   Future<void> _logout() async {
     await _authService.signOut();
@@ -154,6 +197,13 @@ class _HomeScreenState extends State<HomeScreen>
         onLogout: _logout,
       );
     }
+
+    if (_userRole == 'parent') {
+  return _ParentShell(
+    userName: _userName,
+    onLogout: _logout,
+  );
+}
 
     // ─────────────────────────────────────────────────────────────
     // Student: shell-driven navigation
@@ -324,6 +374,60 @@ Widget build(BuildContext context) {
     onAccountTap: () => _pushRoute(context, 'my_account'),   // NEW
   );
 }
+}
+
+// ==================== PARENT SHELL ====================
+class _ParentShell extends StatefulWidget {
+  final String userName;
+  final VoidCallback onLogout;
+
+  const _ParentShell({
+    required this.userName,
+    required this.onLogout,
+  });
+
+  @override
+  State<_ParentShell> createState() => _ParentShellState();
+}
+
+class _ParentShellState extends State<_ParentShell> {
+  final GlobalKey<AppShellState> _shellKey = GlobalKey<AppShellState>();
+
+  @override
+  void initState() {
+    super.initState();
+    _registerPanels();
+  }
+
+  void _registerPanels() {
+  NavRegistry.registerPanel(
+    'parent_dashboard',
+    (context) => ParentDashboardPanel(userName: widget.userName),
+  );
+  NavRegistry.registerPanel(
+    'parent_children',
+    (context) => const ParentChildrenPanel(),
+  );
+}
+
+  void _pushRoute(BuildContext context, String key) {
+    // Parents have no push-routes yet. Leave empty; add later if
+    // needed (e.g. notifications settings, profile edit).
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AppShell(
+      key: _shellKey,
+      userName: widget.userName,
+      userRole: 'parent',
+      onPushRoute: _pushRoute,
+      onNotificationsTap: () {
+        // Notifications screen is already wired in AppShell.
+      },
+      notificationCount: 0,
+    );
+  }
 }
 
 // ==================== PANEL PLACEHOLDER ====================

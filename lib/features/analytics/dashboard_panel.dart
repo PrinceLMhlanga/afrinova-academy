@@ -12,6 +12,8 @@ import 'widgets/trend_chart.dart';
 import 'widgets/subject_allocation_pie.dart';
 import 'widgets/subject_progress_list.dart';
 import 'widgets/quick_actions_row.dart';
+import 'dart:async';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// The dashboard's main content panel.
 ///
@@ -46,14 +48,55 @@ class _DashboardPanelState extends State<DashboardPanel>
   bool _loading = true;
   String? _error;
 
+  final List<StreamSubscription> _activitySubs = [];
+  Timer? _refetchDebounce;
+
   @override
   bool get wantKeepAlive => true;
 
-  @override
-  void initState() {
-    super.initState();
-    _load();
+ @override
+void initState() {
+  super.initState();
+  _bootstrap();
+}
+
+Future<void> _bootstrap() async {
+  // 1. Wait until Supabase has both a user AND an access token.
+  //    `currentUserId` alone is not enough — the realtime client
+  //    needs a valid access token to authorize the WS channel.
+  for (var i = 0; i < 30; i++) {
+    final session = Supabase.instance.client.auth.currentSession;
+    if (session?.accessToken != null && _auth.currentUserId != null) break;
+    await Future.delayed(const Duration(milliseconds: 200));
+    if (!mounted) return;
   }
+
+  if (!mounted) return;
+
+  // 2. Force the client to hand a fresh token to the realtime
+  //    subsystem. Without this, the WS attempt can go out with a
+  //    stale or empty token and the server rejects it with 1006.
+  try {
+    await Supabase.instance.client.auth.refreshSession();
+  } catch (e) {
+    debugPrint('[DashboardPanel] refreshSession failed (non-fatal): $e');
+  }
+
+  if (!mounted) return;
+
+  // 3. Now safe to load data and subscribe.
+  _load();
+  _subscribeToActivity();
+}
+
+@override
+void dispose() {
+  for (final s in _activitySubs) {
+    s.cancel();
+  }
+  _refetchDebounce?.cancel();
+  super.dispose();
+}
 
   Future<void> _load() async {
     setState(() {
@@ -84,6 +127,55 @@ class _DashboardPanelState extends State<DashboardPanel>
       });
     }
   }
+
+  /// Subscribe to the tables the analytics RPCs read. When any row
+/// changes for the current student, schedule a debounced re-fetch.
+///
+/// Debounce matters: a single exam submission inserts many rows
+/// into practice_exam_history within a short window. Without a
+/// debounce we'd refetch the whole dashboard dozens of times.
+void _subscribeToActivity() {
+  if (_activitySubs.isNotEmpty) return;
+  final userId = _auth.currentUserId;
+  if (userId == null) return;
+
+  const tables = [
+    'practice_exam_history',
+    'exam_attempts',
+    'exam_answers',
+  ];
+
+  for (final table in tables) {
+    var firstEventSeen = false;
+    final sub = Supabase.instance.client
+        .from(table)
+        .stream(primaryKey: ['id'])
+        .eq('student_id', userId)
+        .listen(
+      (_) {
+        if (!firstEventSeen) {
+          // Initial snapshot — this is the current state, not a change.
+          firstEventSeen = true;
+          return;
+        }
+        _scheduleRefetch();
+      },
+      onError: (e) => debugPrint('[DashboardPanel] $table stream error: $e'),
+    );
+    _activitySubs.add(sub);
+  }
+}
+
+void _scheduleRefetch() {
+  // Coalesce bursts of changes into one refetch.
+  _refetchDebounce?.cancel();
+  _refetchDebounce = Timer(
+    const Duration(milliseconds: 800),
+    () {
+      if (mounted) _load();
+    },
+  );
+}
 
   @override
   Widget build(BuildContext context) {

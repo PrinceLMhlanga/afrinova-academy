@@ -238,6 +238,183 @@ class NotificationService {
     // }
   }
 
+
+
+/// Fetch the current user's notifications, newest first.
+Future<List<Map<String, dynamic>>> fetchMyNotifications({
+  int limit = 50,
+}) async {
+  final userId = Supabase.instance.client.auth.currentUser?.id;
+  if (userId == null) return const [];
+
+  try {
+    final res = await Supabase.instance.client
+        .from('notifications')
+        .select()
+        .eq('user_id', userId)
+        .order('created_at', ascending: false)
+        .limit(limit);
+
+    return (res as List)
+        .whereType<Map>()
+        .map((m) => Map<String, dynamic>.from(m))
+        .toList(growable: false);
+  } catch (e) {
+    debugPrint('[NotificationService] fetchMyNotifications failed: $e');
+    return const [];
+  }
+}
+
+/// Live stream of the current user's notifications.
+Stream<List<Map<String, dynamic>>> watchMyNotifications() {
+  final userId = Supabase.instance.client.auth.currentUser?.id;
+  if (userId == null) return Stream.value(const []);
+
+  return Supabase.instance.client
+      .from('notifications')
+      .stream(primaryKey: ['id'])
+      .eq('user_id', userId)
+      .order('created_at', ascending: false)
+      .limit(50)
+      .map((rows) => rows.cast<Map<String, dynamic>>());
+}
+
+/// Count unread notifications for the current user.
+Future<int> getUnreadCount() async {
+  final userId = Supabase.instance.client.auth.currentUser?.id;
+  if (userId == null) return 0;
+
+  try {
+    final res = await Supabase.instance.client
+        .from('notifications')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('is_read', false);
+    return (res as List).length;
+  } catch (e) {
+    debugPrint('[NotificationService] getUnreadCount failed: $e');
+    return 0;
+  }
+}
+
+/// Mark a single notification as read.
+Future<void> markRead(String notificationId) async {
+  try {
+    await Supabase.instance.client
+        .from('notifications')
+        .update({'is_read': true})
+        .eq('id', notificationId);
+  } catch (e) {
+    debugPrint('[NotificationService] markRead failed: $e');
+  }
+}
+
+/// Mark every unread notification for the current user as read.
+Future<void> markAllRead() async {
+  final userId = Supabase.instance.client.auth.currentUser?.id;
+  if (userId == null) return;
+
+  try {
+    await Supabase.instance.client
+        .from('notifications')
+        .update({'is_read': true})
+        .eq('user_id', userId)
+        .eq('is_read', false);
+  } catch (e) {
+    debugPrint('[NotificationService] markAllRead failed: $e');
+  }
+}
+
+/// Approve or deny a parent link request.
+/// Updates the link status and marks the notification as read.
+Future<String?> respondToParentLink({
+  required String notificationId,
+  required String linkId,
+  required bool approve,
+}) async {
+  try {
+    // 1. Update the link
+    await Supabase.instance.client
+        .from('parent_student_links')
+        .update({
+          'status': approve ? 'active' : 'denied',
+          'responded_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('id', linkId);
+
+    // 2. Update the notification's data so we know the outcome
+    //    next time the screen loads.
+    final existing = await Supabase.instance.client
+        .from('notifications')
+        .select('data')
+        .eq('id', notificationId)
+        .maybeSingle();
+
+    final existingData =
+        (existing?['data'] as Map?)?.cast<String, dynamic>() ?? {};
+
+    await Supabase.instance.client
+        .from('notifications')
+        .update({
+          'is_read': true,
+          'data': {
+            ...existingData,
+            'resolved': approve ? 'approved' : 'denied',
+            'resolved_at': DateTime.now().toUtc().toIso8601String(),
+          },
+        })
+        .eq('id', notificationId);
+
+    return null;
+  } catch (e) {
+    debugPrint('[NotificationService] respondToParentLink failed: $e');
+    return 'Something went wrong. Please try again.';
+  }
+}
+
+/// Revoke an active parent link. Called from the notifications screen
+/// when the student changes their mind after approving.
+Future<String?> revokeParentLink({
+  required String notificationId,
+  required String linkId,
+}) async {
+  try {
+    await Supabase.instance.client
+        .from('parent_student_links')
+        .update({
+          'status': 'revoked',
+          'responded_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('id', linkId);
+
+    // Update the notification's data to reflect the revoked state.
+    final existing = await Supabase.instance.client
+        .from('notifications')
+        .select('data')
+        .eq('id', notificationId)
+        .maybeSingle();
+
+    final existingData =
+        (existing?['data'] as Map?)?.cast<String, dynamic>() ?? {};
+
+    await Supabase.instance.client
+        .from('notifications')
+        .update({
+          'data': {
+            ...existingData,
+            'resolved': 'revoked',
+            'resolved_at': DateTime.now().toUtc().toIso8601String(),
+          },
+        })
+        .eq('id', notificationId);
+
+    return null;
+  } catch (e) {
+    debugPrint('[NotificationService] revokeParentLink failed: $e');
+    return 'Could not revoke access. Please try again.';
+  }
+}
+
   void dispose() {
     _tokenRefreshSubscription?.cancel();
     _foregroundSubscription?.cancel();

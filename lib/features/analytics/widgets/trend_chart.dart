@@ -268,7 +268,9 @@ class _Chart extends StatelessWidget {
             ),
             tooltipMargin: 12,
             maxContentWidth: 240,
-            getTooltipItems: (touchedSpots) {
+            fitInsideHorizontally: true,
+    fitInsideVertically: true,
+    getTooltipItems: (touchedSpots) {
               // IMPORTANT: return exactly one item per touched spot.
               // The date is shown once on the first item's title; other
               // items show only their series label + value.

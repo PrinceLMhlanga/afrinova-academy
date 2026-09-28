@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/auth_service.dart';
 import '../home/home_screen.dart';
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/app_text_styles.dart';
 
 class CompleteStudentProfileScreen extends StatefulWidget {
   const CompleteStudentProfileScreen({super.key});
@@ -78,6 +80,7 @@ class _CompleteStudentProfileScreenState extends State<CompleteStudentProfileScr
             'phone_number': _phoneNumberController.text.trim(),
             'school_name': _schoolNameController.text.trim(),
             'country': _selectedCountry ?? 'Zimbabwe',
+            'onboarding_completed': true,
             'updated_at': DateTime.now().toIso8601String(),
           })
           .eq('id', userId);
@@ -128,12 +131,19 @@ class _CompleteStudentProfileScreenState extends State<CompleteStudentProfileScr
       child: Scaffold(
         backgroundColor: const Color(0xFFF5F7FA),
         appBar: AppBar(
-          title: const Text('Complete Your Profile'),
-          backgroundColor: Colors.transparent,
-          foregroundColor: const Color(0xFF1A237E),
-          elevation: 0,
-          automaticallyImplyLeading: false, // Remove back button
-        ),
+  title: const Text('Complete Your Profile'),
+  backgroundColor: Colors.transparent,
+  surfaceTintColor: Colors.transparent,
+  elevation: 0,
+  scrolledUnderElevation: 0,
+  foregroundColor: AppColors.primary,
+  iconTheme: const IconThemeData(color: AppColors.primary),
+  titleTextStyle: AppTextStyles.headingMd.copyWith(
+    color: AppColors.primary,
+    fontWeight: FontWeight.w700,
+  ),
+  automaticallyImplyLeading: false,
+),
         body: _isLoadingProfile
             ? const Center(child: CircularProgressIndicator(color: Color(0xFF1A237E)))
             : SafeArea(

@@ -7,6 +7,8 @@ import '../home/home_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'complete_student_profile_screen.dart';
 import '../parent/parent_onboarding_screen.dart';
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/app_text_styles.dart';
 
 class SignupScreen extends StatefulWidget {
   const SignupScreen({super.key});
@@ -133,10 +135,18 @@ Future<void> _loadLevels() async {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Create Account'),
-        backgroundColor: Colors.transparent,
-        foregroundColor: const Color(0xFF1A237E),
-      ),
+  title: const Text('Create Account'),
+  backgroundColor: Colors.transparent,
+  surfaceTintColor: Colors.transparent,
+  elevation: 0,
+  scrolledUnderElevation: 0,
+  foregroundColor: AppColors.primary,
+  iconTheme: const IconThemeData(color: AppColors.primary),
+  titleTextStyle: AppTextStyles.headingMd.copyWith(
+    color: AppColors.primary,
+    fontWeight: FontWeight.w700,
+  ),
+),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(32.0),

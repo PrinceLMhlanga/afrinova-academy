@@ -6,6 +6,11 @@ import 'app_drawer.dart';
 import 'app_sidebar.dart';
 import 'app_topbar.dart';
 import 'nav_registry.dart';
+import '../notification_service.dart';
+import '../../features/notifications/notifications_screen.dart';
+import 'dart:async';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
 
 /// The responsive app shell for student-facing navigation.
 ///
@@ -41,11 +46,82 @@ class AppShell extends StatefulWidget {
   State<AppShell> createState() => AppShellState();
 }
 
-class AppShellState extends State<AppShell> {
+class AppShellState extends State<AppShell> with WidgetsBindingObserver {
   String _activePanelKey = 'dashboard';
   bool _sidebarCollapsed = false;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  int _unreadNotifications = 0;
+  StreamSubscription<List<Map<String, dynamic>>>? _notificationSub;
 
+ @override
+void initState() {
+  super.initState();
+  WidgetsBinding.instance.addObserver(this);   // AppShell only
+  _bootstrap();
+}
+
+Future<void> _bootstrap() async {
+  for (var i = 0; i < 30; i++) {
+    final session = Supabase.instance.client.auth.currentSession;
+    if (session?.accessToken != null) break;
+    await Future.delayed(const Duration(milliseconds: 200));
+    if (!mounted) return;
+  }
+
+  if (!mounted) return;
+
+  try {
+    await Supabase.instance.client.auth.refreshSession();
+  } catch (e) {
+    debugPrint('[AppShell] refreshSession failed (non-fatal): $e');
+  }
+
+  if (!mounted) return;
+
+  _refreshUnreadCount();
+  _subscribeToNotifications();
+}
+
+@override
+void dispose() {
+  _notificationSub?.cancel();
+  WidgetsBinding.instance.removeObserver(this);
+  super.dispose();
+}
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refreshUnreadCount();
+    }
+  }
+
+  void _subscribeToNotifications() {
+    if (_notificationSub != null) return;
+  final userId = Supabase.instance.client.auth.currentUser?.id;
+  if (userId == null) return;
+
+  _notificationSub = Supabase.instance.client
+      .from('notifications')
+      .stream(primaryKey: ['id'])
+      .eq('user_id', userId)
+      .listen(
+    (rows) {
+      final unread = rows.where((r) => r['is_read'] == false).length;
+      if (mounted && unread != _unreadNotifications) {
+        setState(() => _unreadNotifications = unread);
+      }
+    },
+    onError: (e) {
+      debugPrint('[AppShell] notification stream error: $e');
+    },
+  );
+}
+
+  Future<void> _refreshUnreadCount() async {
+    final count = await NotificationService.instance.getUnreadCount();
+    if (mounted) setState(() => _unreadNotifications = count);
+  }
   @override
   Widget build(BuildContext context) {
     final width = MediaQuery.sizeOf(context).width;
@@ -55,7 +131,9 @@ class AppShellState extends State<AppShell> {
 
     final effectiveCollapsed = isTablet ? true : _sidebarCollapsed;
 
-    final items = NavRegistry.all(onPush: widget.onPushRoute);
+    final items = widget.userRole == 'parent'
+    ? NavRegistry.allForParent(onPush: widget.onPushRoute)
+    : NavRegistry.all(onPush: widget.onPushRoute);
     final panelItems =
         items.where((i) => i.behavior == NavBehavior.panel).toList();
 
@@ -81,8 +159,14 @@ class AppShellState extends State<AppShell> {
             onOpenDrawer: () => _scaffoldKey.currentState?.openDrawer(),
             onToggleSidebar: () =>
                 setState(() => _sidebarCollapsed = !_sidebarCollapsed),
-            onNotificationsTap: widget.onNotificationsTap,
-            notificationCount: widget.notificationCount,
+            onNotificationsTap: () async {
+  await Navigator.of(context).push(
+    MaterialPageRoute(builder: (_) => const NotificationsScreen()),
+  );
+  // Refresh count when the user comes back from the screen.
+  _refreshUnreadCount();
+},
+            notificationCount: _unreadNotifications,
           ),
           Expanded(
             child: Row(

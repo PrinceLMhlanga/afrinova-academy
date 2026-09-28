@@ -1,23 +1,32 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../analytics/models/analytics_kpis.dart';
+import '../../analytics/models/subject_progress.dart';
+import '../../analytics/models/trend_point.dart';
+import '../../analytics/services/analytics_service.dart';
+import '../models/child_summary.dart';
+import '../../analytics/models/subject_allocation.dart';
+
 /// Service for parent-side operations.
 ///
 /// Covers:
 ///   • saving parent profile details (address, phone, country)
 ///   • requesting a link to a student by email
 ///   • watching the parent's own links in realtime
-///   • listing active links (for the dashboard, later)
+///   • listing active links (for the dashboard)
+///   • fetching a child's analytics (delegates to AnalyticsService)
 class ParentService {
   ParentService({SupabaseClient? client})
       : _client = client ?? Supabase.instance.client;
 
   final SupabaseClient _client;
+  final AnalyticsService _analytics = AnalyticsService();
 
-  /// Save parent onboarding details and mark onboarding complete.
-  ///
-  /// Pass null for any field to leave it unchanged. `onboardingCompleted`
-  /// defaults to true because this is called at the end of Phase 1.
+  // ─────────────────────────────────────────────────────────────
+  // Profile
+  // ─────────────────────────────────────────────────────────────
+
   Future<void> saveParentDetails({
     required String parentId,
     String? phoneNumber,
@@ -38,13 +47,10 @@ class ParentService {
         .eq('id', parentId);
   }
 
-  /// Request a link to a student by email.
-  ///
-  /// Returns null on success, or a user-facing error string.
-  ///
-  /// The student is looked up by email. If found and role is student,
-  /// a pending link row is created. If not found, we return an error
-  /// string — the caller can choose to show it or ignore it.
+  // ─────────────────────────────────────────────────────────────
+  // Links
+  // ─────────────────────────────────────────────────────────────
+
   Future<String?> requestLinkByEmail({
     required String email,
     required String relationship,
@@ -55,7 +61,6 @@ class ParentService {
     final trimmed = email.trim().toLowerCase();
 
     try {
-      // 1. Find the student by email
       final student = await _client
           .from('profiles')
           .select('id, role, full_name')
@@ -71,7 +76,6 @@ class ParentService {
 
       final studentId = student['id'] as String;
 
-      // 2. Check for an existing link (any status)
       final existing = await _client
           .from('parent_student_links')
           .select('id, status')
@@ -93,7 +97,6 @@ class ParentService {
         }
       }
 
-      // 3. Create a pending request
       await _client.from('parent_student_links').insert({
         'parent_id': parentId,
         'student_id': studentId,
@@ -102,21 +105,15 @@ class ParentService {
         'initiated_by': 'parent',
       });
 
-      return null; // success
+      return null;
     } catch (e) {
       debugPrint('[ParentService] requestLinkByEmail failed: $e');
       return 'Could not send request. Please try again.';
     }
   }
 
-  /// Fetch the parent's own links with student info attached.
-  ///
-  /// Returns rows shaped like:
-  ///   {
-  ///     id, status, relationship, linked_at, requested_at, responded_at,
-  ///     student: { id, full_name, display_name, avatar_url,
-  ///                levels: { name } }
-  ///   }
+  /// Original shape. Returns raw maps so existing callers (the
+  /// onboarding screen, etc.) keep working unchanged.
   Future<List<Map<String, dynamic>>> getMyLinks() async {
     final parentId = _client.auth.currentUser?.id;
     if (parentId == null) return const [];
@@ -152,8 +149,34 @@ class ParentService {
     }
   }
 
-  /// Live stream of the parent's own links. Emits the full list any
-  /// time a row is inserted, updated, or deleted.
+  /// Same as before — active only, raw maps.
+  Future<List<Map<String, dynamic>>> getActiveLinks() async {
+    final all = await getMyLinks();
+    return all
+        .where((l) => l['status'] == 'active')
+        .toList(growable: false);
+  }
+
+  /// NEW convenience: active children as typed [ChildSummary] objects.
+  /// Used by the dashboard for the child selector. Doesn't touch the
+  /// original map-based methods above.
+  Future<List<ChildSummary>> getActiveChildrenTyped() async {
+    final all = await getMyLinks();
+    return all
+        .where((l) => l['status'] == 'active')
+        .map((m) => ChildSummary.fromLinkJson(m))
+        .toList(growable: false);
+  }
+
+  /// NEW convenience: all links as typed [ChildSummary] objects.
+  /// Used by the Children tab.
+  Future<List<ChildSummary>> getAllLinksTyped() async {
+    final all = await getMyLinks();
+    return all
+        .map((m) => ChildSummary.fromLinkJson(m))
+        .toList(growable: false);
+  }
+
   Stream<List<Map<String, dynamic>>> watchMyLinks() {
     final parentId = _client.auth.currentUser?.id;
     if (parentId == null) return Stream.value(const []);
@@ -166,9 +189,39 @@ class ParentService {
         .map((rows) => rows.cast<Map<String, dynamic>>());
   }
 
-  /// Active-linked students only. Used by the parent dashboard.
-  Future<List<Map<String, dynamic>>> getActiveLinks() async {
-    final all = await getMyLinks();
-    return all.where((l) => l['status'] == 'active').toList(growable: false);
+  /// Remove a link. Works for pending or active.
+  Future<void> unlink(String linkId) async {
+    try {
+      await _client
+          .from('parent_student_links')
+          .delete()
+          .eq('id', linkId);
+    } catch (e) {
+      debugPrint('[ParentService] unlink failed: $e');
+    }
   }
+
+  Future<List<SubjectAllocation>> getChildAllocation(
+  String studentId, {
+  int days = 30,
+}) =>
+    _analytics.getAllocation(studentId, days: days);
+
+  // ─────────────────────────────────────────────────────────────
+  // Analytics — delegate to AnalyticsService with the child's id
+  // ─────────────────────────────────────────────────────────────
+
+  Future<AnalyticsKpis> getChildKpis(String studentId) =>
+      _analytics.getKpis(studentId);
+
+  Future<List<TrendPoint>> getChildTrend(
+    String studentId, {
+    int days = 10,
+  }) =>
+      _analytics.getTrend(studentId, days: days);
+
+  Future<List<SubjectProgress>> getChildSubjectProgress(
+    String studentId,
+  ) =>
+      _analytics.getSubjectProgress(studentId);
 }

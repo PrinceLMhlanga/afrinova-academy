@@ -6,6 +6,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:path/path.dart' as path;
 import '../auth/pending_approval_screen.dart';
+import '../../core/shell/shell_app_bar.dart';
+import '../../core/theme/app_spacing.dart';
 
 class TeacherApplicationScreen extends StatefulWidget {
   final String userId;
@@ -291,11 +293,13 @@ String? _selectedSubjectForLevels; // Currently editing subject's levels
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Teacher Application'),
-        backgroundColor: const Color(0xFF1A237E),
-        foregroundColor: Colors.white,
-      ),
+      appBar: PreferredSize(
+  preferredSize: const Size.fromHeight(AppSpacing.topbarHeight),
+  child: ShellAppBar(
+    title: 'Teacher Application',
+    onBack: () => Navigator.of(context).maybePop(),
+  ),
+),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Form(

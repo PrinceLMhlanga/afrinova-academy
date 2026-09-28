@@ -260,4 +260,33 @@ NavItem(
   }
 
   static WidgetBuilder? panelBuilderFor(String key) => _panelBuilders[key];
+
+  // Add a new section constant.
+static const String sectionParent = 'Parent';
+
+/// Panels shown to parents.
+static List<NavItem> parentPanels() => const [
+  NavItem(
+    key: 'parent_dashboard',
+    label: 'Dashboard',
+    icon: Icons.dashboard_outlined,
+    selectedIcon: Icons.dashboard_rounded,
+    behavior: NavBehavior.panel,
+    section: sectionParent,
+  ),
+  NavItem(
+    key: 'parent_children',
+    label: 'Children',
+    icon: Icons.family_restroom_outlined,
+    selectedIcon: Icons.family_restroom_rounded,
+    behavior: NavBehavior.panel,
+    section: sectionParent,
+  ),
+];
+
+/// Full nav list for a parent user.
+static List<NavItem> allForParent({
+  required void Function(BuildContext, String) onPush,
+}) =>
+    parentPanels();
 }
