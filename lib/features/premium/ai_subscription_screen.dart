@@ -169,7 +169,7 @@ bool get _isPayingForChild => widget.targetStudentId != null;
       await _recordPayment(
         studentId: studentId,        // ← the child, not the payer
         payerId: payerId,   
-        amount: 0.01,
+        amount: 5.0,
         gatewayReference: _reference!,
         status: 'pending',
         paymentMethod: 'ecocash',
@@ -177,7 +177,7 @@ bool get _isPayingForChild => widget.targetStudentId != null;
 
       final response = await _payNowService.initiateMobilePayment(
         reference: _reference!,
-        amount: 0.01,
+        amount: 5.0,
         mobileNumber: formattedPhone,
         email: email,
         carrier: 'ecocash',
