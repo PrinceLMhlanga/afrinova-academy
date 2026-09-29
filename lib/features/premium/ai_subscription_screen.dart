@@ -5,9 +5,20 @@ import '../../core/auth_service.dart';
 import '../../core/paynow_service.dart';
 import 'dart:async';
 import '../../core/trial_usage_service.dart';
+import '../../core/navigation.dart';
+
 
 class AISubscriptionScreen extends StatefulWidget {
-  const AISubscriptionScreen({super.key});
+  /// If set, the subscription is bought for this student instead of
+  /// the current user. Used by parents paying for their children.
+  final String? targetStudentId;
+  final String? targetStudentName;
+
+  const AISubscriptionScreen({
+    super.key,
+    this.targetStudentId,
+    this.targetStudentName,
+  });
 
   @override
   State<AISubscriptionScreen> createState() => _AISubscriptionScreenState();
@@ -30,6 +41,12 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
   // ✅ Trial usage summary
   Map<String, dynamic>? _trialUsage;
 
+  String? get _subscriptionStudentId =>
+    widget.targetStudentId ?? _authService.currentUserId;
+
+/// True if a parent is paying on behalf of a child.
+bool get _isPayingForChild => widget.targetStudentId != null;
+
   @override
   void initState() {
     super.initState();
@@ -37,7 +54,9 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
   }
 
   Future<void> _loadStatus() async {
-  final status = await AIAccessChecker.getStatus();
+  final targetId = widget.targetStudentId ?? _authService.currentUserId;
+
+  final status = await AIAccessChecker.getStatus(targetUserId: targetId);
   final usage = await _loadTrialUsage();
   final limits = await TrialUsageService().getTrialLimits();
   if (mounted) {
@@ -51,59 +70,63 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
 
  
 
-  Future<Map<String, dynamic>?> _loadTrialUsage() async {
-    try {
-      final userId = _authService.currentUserId;
-      if (userId == null) return null;
+ Future<Map<String, dynamic>?> _loadTrialUsage() async {
+  try {
+    // The student whose trial we're showing.
+    // If the parent is paying, use the child's id.
+    // Otherwise (student paying for themselves), use the current user.
+    final targetId = widget.targetStudentId ?? _authService.currentUserId;
+    if (targetId == null) return null;
 
-      final response = await Supabase.instance.client
-          .from('trial_usage')
-          .select()
-          .eq('user_id', userId)
-          .maybeSingle();
+    final response = await Supabase.instance.client
+        .from('trial_usage')
+        .select()
+        .eq('user_id', targetId)    // ← now targets the child when applicable
+        .maybeSingle();
 
-      return response;
-    } catch (e) {
-      print('Error loading trial usage: $e');
-      return null;
-    }
+    return response;
+  } catch (e) {
+    debugPrint('Error loading trial usage: $e');
+    return null;
   }
+}
 
   // ✅ NEW: Record payment in payments table
   Future<void> _recordPayment({
-    required String studentId,
-    required double amount,
-    required String gatewayReference,
-    required String status,
-    required String paymentMethod,
-  }) async {
-    try {
-      await Supabase.instance.client.from('payments').insert({
-        'student_id': studentId,
-        'teacher_id': null,
-        'enrollment_id': null,
-        'amount': amount,
-        'currency': 'USD',
-        'gateway': 'paynow',
-        'gateway_reference': gatewayReference,
-        'status': status,
-        'payment_type': 'ai_subscription',
-        'subscription_type': 'ai_premium_monthly',
-        'payment_method': paymentMethod,
-        'metadata': {
-          'payment_category': 'platform_subscription',
-          'feature': 'ai_premium',
-          'duration_days': 30,
-        },
-        'created_at': DateTime.now().toUtc().toIso8601String(),
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      });
-      
-      print('✅ Payment recorded successfully');
-    } catch (e) {
-      print('❌ Error recording payment: $e');
-    }
+  required String studentId,
+  String? payerId,
+  required double amount,
+  required String gatewayReference,
+  required String status,
+  required String paymentMethod,
+}) async {
+  try {
+    await Supabase.instance.client.from('payments').insert({
+      'student_id': studentId,
+      'payer_id': payerId,         // ← null for self-payments, set for parent
+      'teacher_id': null,
+      'enrollment_id': null,
+      'amount': amount,
+      'currency': 'USD',
+      'gateway': 'paynow',
+      'gateway_reference': gatewayReference,
+      'status': status,
+      'payment_type': 'ai_subscription',
+      'subscription_type': 'ai_premium_monthly',
+      'payment_method': paymentMethod,
+      'metadata': {
+        'payment_category': 'platform_subscription',
+        'feature': 'ai_premium',
+        'duration_days': 30,
+        'paid_by_parent': payerId != null,
+      },
+      'created_at': DateTime.now().toUtc().toIso8601String(),
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    });
+  } catch (e) {
+    debugPrint('❌ Error recording payment: $e');
   }
+}
 
   Future<void> _subscribe() async {
     final rawPhone = _phoneController.text.trim();
@@ -136,14 +159,17 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
     setState(() { _isPaying = true; _status = 'processing'; });
 
     try {
-      final userId = _authService.currentUserId;
-      if (userId == null) return;
+      final studentId = _subscriptionStudentId;
+  if (studentId == null) return;
+
+      final payerId = _authService.currentUserId; 
 
       _reference = 'AI-SUB-${DateTime.now().millisecondsSinceEpoch}';
 
       await _recordPayment(
-        studentId: userId,
-        amount: 5.0,
+        studentId: studentId,        // ← the child, not the payer
+        payerId: payerId,   
+        amount: 0.01,
         gatewayReference: _reference!,
         status: 'pending',
         paymentMethod: 'ecocash',
@@ -151,7 +177,7 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
 
       final response = await _payNowService.initiateMobilePayment(
         reference: _reference!,
-        amount: 5.0,
+        amount: 0.01,
         mobileNumber: formattedPhone,
         email: email,
         carrier: 'ecocash',
@@ -216,16 +242,21 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
           
           if (!mounted) return;
 
-          await Supabase.instance.client
-              .from('profiles')
-              .update({
-                'is_subscribed': true,
-                'subscription_plan': 'ai_premium',
-                'subscription_expires_at': DateTime.now().add(const Duration(days: 30)).toIso8601String(),
-              })
-              .eq('id', _authService.currentUserId!);
+          final targetId = widget.targetStudentId ?? _authService.currentUserId!;
 
-          if (mounted) {
+await Supabase.instance.client
+    .from('profiles')
+    .update({
+      'is_subscribed': true,
+      'subscription_plan': 'ai_premium',
+      'subscription_expires_at': DateTime.now()
+          .add(const Duration(days: 30))
+          .toIso8601String(),
+    })
+    .eq('id', targetId);
+
+    // 🚀 Inside _startPolling() successful block:
+if (mounted) {
   setState(() { _status = 'completed'; _isPaying = false; });
   ScaffoldMessenger.of(context).showSnackBar(
     const SnackBar(
@@ -235,9 +266,16 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
     ),
   );
   
-  // ✅ Pop immediately — snackbar will still show briefly
-  Navigator.of(context).pop(true);
+  // ✅ FIX: Pop using the absolute global navigator instance to prevent layout stack dropouts
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    final nav = appNavigatorKey.currentState;
+    if (nav != null && nav.canPop()) {
+      nav.pop(true); // Pops safely back to the feature guard
+    }
+  });
 }
+
+
         } else if (status.status.toLowerCase() == 'cancelled' || 
                    status.status.toLowerCase() == 'declined' ||
                    status.status.toLowerCase() == 'error') {
@@ -266,14 +304,18 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
   @override
   Widget build(BuildContext context) {
     final type = _accessStatus['type'] as String? ?? 'none';
-    final showTrialButton = type == 'no_trial';
+    final showTrialButton = type == 'no_trial' && widget.targetStudentId == null;
     final isSubscribed = _accessStatus['active'] == true && type != 'trial';
     final isTrialActive = type == 'trial_active' || type == 'trial';
 
     return Scaffold(
       backgroundColor: const Color(0xFFF5F5F5),
       appBar: AppBar(
-        title: const Text('AI Premium'),
+  title: Text(
+    widget.targetStudentName != null
+        ? 'Subscribe for ${widget.targetStudentName}'
+        : 'AI Premium',
+  ),
         backgroundColor: const Color(0xFF1A237E),
         foregroundColor: Colors.white,
       ),
@@ -312,10 +354,13 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
           ],
 
           // ✅ Trial button only for brand-new users
-          if (showTrialButton) ...[
-            const SizedBox(height: 16),
-            _buildStartTrialCard(),
-          ],
+          // ✅ Trial button only for brand-new users.
+// Parents paying for a child don't see it — trials are for
+// students starting fresh on their own account.
+if (showTrialButton && widget.targetStudentId == null) ...[
+  const SizedBox(height: 16),
+  _buildStartTrialCard(),
+],
 
           const SizedBox(height: 20),
         ],
@@ -771,14 +816,18 @@ class _AISubscriptionScreenState extends State<AISubscriptionScreen> {
           ),
           ElevatedButton(
             onPressed: () async {
-              await AIAccessChecker.startTrial();
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('🎉 Trial started!'), backgroundColor: Color(0xFF4CAF50)),
-                );
-                await _loadStatus();
-              }
-            },
+  final targetId = widget.targetStudentId ?? _authService.currentUserId;
+  await AIAccessChecker.startTrial(targetUserId: targetId);
+  if (mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('🎉 Trial started!'),
+        backgroundColor: Color(0xFF4CAF50),
+      ),
+    );
+    await _loadStatus();
+  }
+},
             style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
             child: const Text('Start'),
           ),

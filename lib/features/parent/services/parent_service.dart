@@ -120,24 +120,26 @@ class ParentService {
 
     try {
       final res = await _client
-          .from('parent_student_links')
-          .select('''
-            id,
-            status,
-            relationship,
-            linked_at,
-            requested_at,
-            responded_at,
-            student:student_id (
-              id,
-              full_name,
-              display_name,
-              avatar_url,
-              levels ( name )
-            )
-          ''')
-          .eq('parent_id', parentId)
-          .order('requested_at', ascending: false);
+    .from('parent_student_links')
+    .select('''
+      id,
+      status,
+      relationship,
+      linked_at,
+      requested_at,
+      responded_at,
+      student:student_id (
+        id,
+        full_name,
+        display_name,
+        avatar_url,
+        is_subscribed,
+        subscription_expires_at,
+        levels ( name )
+      )
+    ''')
+    .eq('parent_id', parentId)
+    .order('requested_at', ascending: false);
 
       return (res as List)
           .whereType<Map>()

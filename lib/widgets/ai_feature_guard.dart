@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import '../core/ai_access_checker.dart';
 import '../features/ai/ai_paywall_screen.dart';
 import '../features/premium/ai_subscription_screen.dart';
+import '../core/navigation.dart';
+
 
 class AIFeatureGuard extends StatefulWidget {
   final Widget child;
@@ -42,15 +44,21 @@ class _AIFeatureGuardState extends State<AIFeatureGuard> {
     }
   }
 
+  // Inside AIFeatureGuard:
   Future<void> _handleSubscription() async {
-    final subscribed = await Navigator.push<bool>(
-      context,
+    // ✅ FIX: Target the global application stack navigator explicitly instead of generic local contexts
+    final nav = appNavigatorKey.currentState;
+    if (nav == null) return;
+
+    final subscribed = await nav.push<bool>(
       MaterialPageRoute(builder: (_) => const AISubscriptionScreen()),
     );
+    
     if (subscribed == true && mounted) {
       await _checkAccess();
     }
   }
+
 
   @override
   Widget build(BuildContext context) {

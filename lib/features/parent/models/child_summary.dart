@@ -23,6 +23,9 @@ class ChildSummary {
 
   final DateTime linkedAt;
 
+  final bool isSubscribed;
+  final DateTime? subscriptionExpiresAt;
+
   const ChildSummary({
     required this.linkId,
     required this.studentId,
@@ -33,7 +36,16 @@ class ChildSummary {
     required this.relationship,
     required this.status,
     required this.linkedAt,
+    this.isSubscribed = false,
+    this.subscriptionExpiresAt,
   });
+
+  bool get hasActivePremium {
+    if (!isSubscribed) return false;
+    final exp = subscriptionExpiresAt;
+    if (exp == null) return true;   // subscribed with no expiry = lifetime
+    return exp.isAfter(DateTime.now().toUtc());
+  }
 
   /// Best display name — falls back to full name, then 'Student'.
   String get preferredName {
@@ -72,6 +84,11 @@ class ChildSummary {
       status: json['status'] as String? ?? 'pending',
       linkedAt: DateTime.tryParse(json['linked_at'] as String? ?? '') ??
           DateTime.now(),
+      isSubscribed: student['is_subscribed'] == true,
+      subscriptionExpiresAt: student['subscription_expires_at'] != null
+          ? DateTime.tryParse(student['subscription_expires_at'] as String)
+              ?.toUtc()
+          : null,
     );
   }
 }

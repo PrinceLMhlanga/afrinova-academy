@@ -3,8 +3,9 @@ import 'package:flutter/foundation.dart';
 
 class AIAccessChecker {
   /// Check if user has access to ANY AI feature
-  static Future<bool> canAccessAIFeatures() async {
-  final userId = Supabase.instance.client.auth.currentUser?.id;
+  static Future<bool> canAccessAIFeatures({String? targetUserId}) async {
+  final userId =
+    targetUserId ?? Supabase.instance.client.auth.currentUser?.id;
   if (userId == null) return false;
 
   try {
@@ -44,8 +45,9 @@ class AIAccessChecker {
 }
 
   /// Start trial if not already started
-  static Future<void> startTrial() async {
-    final userId = Supabase.instance.client.auth.currentUser?.id;
+  static Future<void> startTrial({String? targetUserId}) async {
+    final userId =
+    targetUserId ?? Supabase.instance.client.auth.currentUser?.id;
     if (userId == null) return;
 
     try {
@@ -73,8 +75,11 @@ class AIAccessChecker {
   }
 
   /// Get detailed status for UI display
-  static Future<Map<String, dynamic>> getStatus() async {
-    final userId = Supabase.instance.client.auth.currentUser?.id;
+  static Future<Map<String, dynamic>> getStatus({
+  String? targetUserId,
+}) async {
+  final userId =
+      targetUserId ?? Supabase.instance.client.auth.currentUser?.id;
     if (userId == null) {
       return {'active': false, 'daysLeft': 0, 'type': 'none', 'message': 'Please log in'};
     }

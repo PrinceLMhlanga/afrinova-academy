@@ -18,6 +18,7 @@ import 'models/child_summary.dart';
 import 'services/parent_service.dart';
 import '../analytics/widgets/subject_allocation_pie.dart';
 import '../analytics/models/subject_allocation.dart';
+import '../premium/ai_subscription_screen.dart';
 
 /// The parent dashboard panel.
 ///
@@ -230,6 +231,21 @@ void _reloadChildrenFromStream(List<Map<String, dynamic>> rows) {
     }
   }
 
+  void _openSubscription(ChildSummary child) async {
+  final result = await Navigator.of(context).push<bool>(
+    MaterialPageRoute(
+      builder: (_) => AISubscriptionScreen(
+        targetStudentId: child.studentId,
+        targetStudentName: child.preferredName,
+      ),
+    ),
+  );
+  if (result == true && mounted) {
+    // Refresh so the header shows the new premium status.
+    await _loadChildren();
+  }
+}
+
   void _cancelActivitySubs() {
     for (final s in _activitySubs) {
       s.cancel();
@@ -310,9 +326,12 @@ void _reloadChildrenFromStream(List<Map<String, dynamic>> rows) {
             onSelect: _selectChild,
           ),
         ] else if (_selected != null) ...[
-          const SizedBox(height: AppSpacing.md),
-          _ChildHeader(child: _selected!),
-        ],
+  const SizedBox(height: AppSpacing.md),
+  _ChildHeader(
+    child: _selected!,
+    onSubscribe: () => _openSubscription(_selected!),
+  ),
+],
 
         const SizedBox(height: AppSpacing.xl),
 
@@ -416,7 +435,12 @@ class _GreetingHeader extends StatelessWidget {
 
 class _ChildHeader extends StatelessWidget {
   final ChildSummary child;
-  const _ChildHeader({required this.child});
+  final VoidCallback onSubscribe;
+
+  const _ChildHeader({
+    required this.child,
+    required this.onSubscribe,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -449,8 +473,72 @@ class _ChildHeader extends StatelessWidget {
             ],
           ),
         ),
+        // Premium status / subscribe action
+        child.hasActivePremium
+            ? _PremiumChip(expiresAt: child.subscriptionExpiresAt)
+            : FilledButton.icon(
+                onPressed: onSubscribe,
+                icon: const Icon(Icons.diamond_rounded, size: 16),
+                label: const Text('Subscribe'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.lg,
+                    vertical: AppSpacing.sm,
+                  ),
+                ),
+              ),
       ],
     );
+  }
+}
+
+class _PremiumChip extends StatelessWidget {
+  final DateTime? expiresAt;
+  const _PremiumChip({this.expiresAt});
+
+  @override
+  Widget build(BuildContext context) {
+    final label = expiresAt == null
+        ? 'Premium'
+        : 'Until ${_formatShortDate(expiresAt!)}';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: 6,
+      ),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFFFFD700), Color(0xFFFFA000)],
+        ),
+        borderRadius: BorderRadius.circular(AppSpacing.radiusPill),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.diamond_rounded, size: 14, color: Colors.white),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: AppTextStyles.captionXs.copyWith(
+              color: Colors.white,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatShortDate(DateTime d) {
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    final local = d.toLocal();
+    return '${local.day} ${months[local.month - 1]}';
   }
 }
 
@@ -515,16 +603,24 @@ class _ChildSelector extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: AppSpacing.sm),
-                  Text(
-                    c.preferredName,
-                    style: AppTextStyles.labelMd.copyWith(
-                      color: selected
-                          ? Colors.white
-                          : AppColors.textPrimary,
-                    ),
-                  ),
-                ],
-              ),
+    Text(
+      c.preferredName,
+      style: AppTextStyles.labelMd.copyWith(
+        color: selected ? Colors.white : AppColors.textPrimary,
+      ),
+    ),
+    if (c.hasActivePremium) ...[
+      const SizedBox(width: 6),
+      Icon(
+        Icons.diamond_rounded,
+        size: 12,
+        color: selected
+            ? Colors.white
+            : const Color(0xFFFFD700),
+      ),
+    ],
+  ],
+),
             ),
           );
         },
